@@ -20,7 +20,9 @@ pub struct TopicMeta {
     can_subscribe: bool,
     // 如果有唯一键，需要到ClientStub去找值
     only_one_key: Option<Atom>,
-    // 对应的应用层回调
+    // 对应的应用层回调 
+    // TODO 改成Arc<QueueHandler>
+    // TODO 回调需要加上一个参数：Arc<ClientStub>
     publish_func: Box<Fn(Result<&[u8]>)>,
 }
 

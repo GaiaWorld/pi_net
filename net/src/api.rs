@@ -13,18 +13,13 @@ pub struct NetManager {
 impl NetManager {
     /// call by logic thread
     pub fn new() -> Self {
-        let (sender, receiver) = mpsc::channel::<Sender<SendClosureFn>>();
+        let (s, r) = mpsc::channel::<SendClosureFn>();
+        let net_sender = s.clone();
 
         // create net thread
         thread::spawn(move || {
-            let (s, r) = mpsc::channel::<SendClosureFn>();
-            sender.send(s.clone()).unwrap();
-
             handle_net(s, r);
         });
-
-        // will block util receive data from net thread
-        let net_sender = receiver.recv().unwrap();
 
         Self { net_sender }
     }
