@@ -1,4 +1,3 @@
-use std::boxed::FnBox;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::{Arc, Mutex, RwLock};
@@ -13,44 +12,49 @@ pub struct ServerNode(Arc<Mutex<ServerNodeImpl>>);
 
 /// 主题元信息
 pub struct TopicMeta {
-    /// 主题名
-    name: Atom,
-    /// 该主题是否可以发布
+    //
+    topic: mqtt3::TopicPath,
+    // 该主题是否可以发布
     can_publish: bool,
-    /// 该主题是否可以订阅
+    // 该主题是否可以订阅
     can_subscribe: bool,
-    /// 如果有唯一键，需要到ClientStub去找值
+    // 如果有唯一键，需要到ClientStub去找值
     only_one_key: Option<Atom>,
-    /// 对应的应用层回调
-    recv_handle: Box<Fn(Result<&[u8]>)>,
+    // 对应的应用层回调
+    publish_func: Box<Fn(Result<&[u8]>)>,
 }
 
-/// 主题
-struct Topic {
-    /// 主题名
-    name: Atom,
-    /// 主题对应的元信息
+/// 订阅的主题
+struct SubTopic {
+    // 主题名，可能是模式
+    path: mqtt3::TopicPath,
+    // 主题对应的元信息
     meta: Arc<TopicMeta>,
-    /// 该主题最近的保留消息
+    // 主题关联的客户端
+    clients: Vec<usize>,
+}
+
+/// 保留的主题
+struct RetainTopic {
+    // 主题路径
+    path: mqtt3::TopicPath,
+    // 该主题最近的保留消息
     retain_msg: Option<Vec<u8>>,
 }
 
 struct ClientStub {
     socket: Socket,
-    stream: Arc<RwLock<Stream>>,
-
-    keep_alive: u16,
-    last_will: Option<mqtt3::LastWill>,
-
-    subs: Vec<mqtt3::TopicPath>,
+    _keep_alive: u16,
+    _last_will: Option<mqtt3::LastWill>,
     attributes: HashMap<Atom, Arc<Vec<u8>>>,
 }
 
 struct ServerNodeImpl {
     clients: HashMap<usize, ClientStub>,
 
-    topics: HashMap<Atom, Topic>,
-    topic_metas: HashMap<Atom, Arc<TopicMeta>>,
+    sub_topics: HashMap<Atom, SubTopic>,
+    retain_topics: HashMap<Atom, RetainTopic>,
+    metas: HashMap<Atom, Arc<TopicMeta>>,
 }
 
 unsafe impl Sync for ServerNodeImpl {}
@@ -60,8 +64,9 @@ impl ServerNode {
     pub fn new() -> ServerNode {
         ServerNode(Arc::new(Mutex::new(ServerNodeImpl {
             clients: HashMap::new(),
-            topics: HashMap::new(),
-            topic_metas: HashMap::new(),
+            sub_topics: HashMap::new(),
+            retain_topics: HashMap::new(),
+            metas: HashMap::new(),
         })))
     }
 }
@@ -78,11 +83,18 @@ impl Server for ServerNode {
         topic: Atom,
         payload: Vec<u8>,
     ) -> Result<()> {
-        return Ok(());
+        if qos != mqtt3::QoS::AtMostOnce {
+            return Err(Error::new(ErrorKind::Other, "server publish: InvalidQos"));
+        }
+        return publish_impl(self.0.clone(), retain, qos, topic, payload);
     }
 
     fn shutdown(&mut self) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
+        node.clients.clear();
+        node.sub_topics.clear();
+        node.retain_topics.clear();
+        node.metas.clear();
         return Ok(());
     }
 
@@ -95,15 +107,22 @@ impl Server for ServerNode {
         handler: Box<Fn(Result<&[u8]>)>,
     ) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
-        let n = name.clone();
-        node.topic_metas.insert(
+        let topic = mqtt3::TopicPath::from_str(&name);
+        if topic.is_err() {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "set_Topic_meta, invalid topic",
+            ));
+        }
+        let topic = topic.unwrap();
+        node.metas.insert(
             name,
             Arc::new(TopicMeta {
-                name: n.clone(),
+                topic,
                 can_publish,
                 can_subscribe,
                 only_one_key,
-                recv_handle: handler,
+                publish_func: handler,
             }),
         );
         return Ok(());
@@ -136,9 +155,9 @@ fn handle_recv(
             Packet::Connect(connect) => recv_connect(n, socket, stream, connect),
             Packet::Subscribe(sub) => recv_sub(n, socket, sub),
             Packet::Unsubscribe(unsub) => recv_unsub(n, socket, unsub),
-            Packet::Publish(publish) => recv_publish(n, socket, publish),
+            Packet::Publish(publish) => recv_publish(n, publish),
             Packet::Pingreq => recv_pingreq(n, socket),
-            Packet::Disconnect => recv_disconnect(n, socket),
+            Packet::Disconnect => recv_disconnect(n, socket.socket),
             _ => panic!("server handle_recv: invalid packet!"),
         }
     }
@@ -159,7 +178,7 @@ fn handle_recv(
 fn recv_connect(
     node: Arc<Mutex<ServerNodeImpl>>,
     socket: &Socket,
-    stream: Arc<RwLock<Stream>>,
+    _stream: Arc<RwLock<Stream>>,
     connect: mqtt3::Connect,
 ) {
     let mut code = mqtt3::ConnectReturnCode::Accepted;
@@ -170,16 +189,12 @@ fn recv_connect(
         // code = mqtt3::ConnectReturnCode::RefusedIdentifierRejected;
         let node = &mut node.lock().unwrap();
         let s = socket.clone();
-        let stream = stream.clone();
         node.clients.insert(
             socket.socket,
             ClientStub {
                 socket: s,
-                stream: stream,
-                keep_alive: connect.keep_alive,
-                last_will: connect.last_will,
-
-                subs: Vec::new(),
+                _keep_alive: connect.keep_alive,
+                _last_will: connect.last_will,
                 attributes: HashMap::new(),
             },
         );
@@ -192,104 +207,233 @@ fn recv_sub(node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket, sub: mqtt3::Subsc
     let node = &mut node.lock().unwrap();
 
     for mqtt3::SubscribeTopic {
+        qos,
         topic_path: path,
-        qos: _,
     } in sub.topics.iter()
     {
-        {
-            // 如果该客户端已有topic信息，返回
-            let client = node.clients.get_mut(&socket.socket);
-            if client.is_none() {
-                println!("server recv_unsub, client is_none!");
-                return;
-            }
-            let client = client.unwrap();
-            if client
-                .subs
-                .iter()
-                .any(|elem| elem.path.as_str() == path.as_str())
-            {
-                codes.push(mqtt3::SubscribeReturnCodes::Success(mqtt3::QoS::AtMostOnce));
-                continue;
-            }
-        }
-
-        // 验证topic合法性
-        let topic = mqtt3::TopicPath::from_str(path);
-        if topic.is_err() {
+        if *qos != mqtt3::QoS::AtMostOnce {
             codes.push(mqtt3::SubscribeReturnCodes::Failure);
             continue;
         }
 
-        let topic = topic.unwrap();
-
+        // str不合法，失败，下一个
         {
-            // 到topics查topic信息
-            let g_topic_meta;
-            let atom = Atom::from(path.as_str());
-            let g_topic = node.topics.get(&atom);
-            if !g_topic.is_none() {
-                g_topic_meta = g_topic.unwrap().meta.clone();
-            } else {
-                let meta = node.topic_metas.get(&atom);
-                if !meta.is_none() {
-                    g_topic_meta = meta.unwrap().clone();
-                } else {
-                    codes.push(mqtt3::SubscribeReturnCodes::Failure);
-                    continue;
-                }
-            }
-            if !g_topic_meta.can_subscribe {
+            let topic = mqtt3::TopicPath::from_str(&path);
+            if topic.is_err() {
                 codes.push(mqtt3::SubscribeReturnCodes::Failure);
                 continue;
             }
-            if g_topic.is_none() {
-                // 创建
-                if g_topic_meta.only_one_key.is_none() {
-                    // 这时，没必要创建主题
-                } else {
-                    // TODO: 这里应该会调整
-
-                }
-            }
-
-            if g_topic.is_none() {
-                
-            }
         }
 
-        // 将topic加到客户端
-        {
-            let client = node.clients.get_mut(&socket.socket).unwrap();
-            client.subs.push(topic);
-        }
-
-        codes.push(mqtt3::SubscribeReturnCodes::Success(mqtt3::QoS::AtMostOnce));
+        codes.push(recv_sub_impl(
+            node,
+            socket.socket,
+            Atom::from(path.as_str()),
+        ));
     }
     util::send_suback(socket, sub.pid, codes);
 }
 
+fn recv_sub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) -> mqtt3::SubscribeReturnCodes {
+    {
+        // 已经有主题的情况
+        let topic = node.sub_topics.get_mut(&name);
+        if topic.is_some() {
+            let topic = topic.unwrap();
+            if topic.clients.iter().all(|e| *e != cid) {
+                topic.clients.push(cid);
+            }
+            return mqtt3::SubscribeReturnCodes::Success(mqtt3::QoS::AtMostOnce);
+        }
+    }
+
+    let topic_atom;
+    {
+        let meta = node.metas.get(&name);
+        if meta.is_none() {
+            return mqtt3::SubscribeReturnCodes::Failure;
+        }
+        let meta = meta.unwrap();
+        if !meta.can_subscribe {
+            return mqtt3::SubscribeReturnCodes::Failure;
+        }
+
+        let mut name = meta.topic.path.clone();
+        if meta.only_one_key.is_some() {
+            if let Ok(t) = mqtt3::TopicPath::from_str(&name) {
+                if t.wildcards {
+                    return mqtt3::SubscribeReturnCodes::Failure;
+                }
+            }
+            
+            let key = meta.only_one_key.as_ref().unwrap();
+            let c = node.clients.get(&cid).unwrap();
+            let attr = c.attributes.get(key).unwrap();
+            
+            use std::str;
+            let attr = str::from_utf8(attr).unwrap();
+            name = name + attr;
+        }
+        topic_atom = Atom::from(name.as_str());
+        node.sub_topics.insert(
+            topic_atom.clone(),
+            SubTopic {
+                meta: meta.clone(),
+                path: mqtt3::TopicPath::from_str(name).unwrap(),
+                clients: vec![cid],
+            },
+        );
+    }
+
+    {
+        let mtopic = mqtt3::TopicPath::from_str(topic_atom).unwrap();
+        // 发布保留主题
+        for (_, curr) in node.retain_topics.iter() {
+            if mtopic.is_match(&curr.path) {
+                // TODO: node???
+                // publish_impl(node, retain, qos, topic, payload)
+            }
+        }
+    }
+    return mqtt3::SubscribeReturnCodes::Success(mqtt3::QoS::AtMostOnce);
+}
+
 fn recv_unsub(node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket, unsub: mqtt3::Unsubscribe) {
     let node = &mut node.lock().unwrap();
-    let client = node.clients.get_mut(&socket.socket);
-    if client.is_none() {
-        println!("server recv_unsub, client is_none!");
-        return;
-    }
-    let client = client.unwrap();
-    for topic in unsub.topics {
-        client.subs.retain(|elem| elem.path != topic);
+
+    for path in unsub.topics.iter() {
+        // str不合法，失败，下一个
+        {
+            let topic = mqtt3::TopicPath::from_str(&path);
+            if topic.is_err() {
+                continue;
+            }
+        }
+
+        recv_unsub_impl(node, socket.socket, Atom::from(path.as_str()));
     }
     util::send_unsuback(socket, unsub.pid);
 }
 
-fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket, publish: mqtt3::Publish) {
-    let node = &mut node.lock().unwrap();
+fn recv_unsub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) {
+    {
+        // 已经有主题的情况
+        let topic = node.sub_topics.get_mut(&name);
+        if topic.is_some() {
+            let topic = topic.unwrap();
+            topic.clients.retain(|e| *e != cid);
+            return;
+        }
+    }
+
+    {
+        let meta = node.metas.get(&name);
+        if meta.is_none() {
+            return;
+        }
+        let meta = meta.unwrap();
+        if !meta.can_subscribe {
+            return;
+        }
+
+        let mut name = meta.topic.path.clone();
+        if meta.only_one_key.is_some() {
+            if let Ok(t) = mqtt3::TopicPath::from_str(&name) {
+                if t.wildcards {
+                    return;
+                }
+            }
+
+            let key = meta.only_one_key.as_ref().unwrap();
+            let c = node.clients.get(&cid).unwrap();
+            let attr = c.attributes.get(key).unwrap();
+            
+            use std::str;
+            let attr = str::from_utf8(attr).unwrap();
+            name = name + attr;
+        }
+        let atom = Atom::from(name.as_str());
+        node.sub_topics.remove(&atom);
+    }
 }
 
-fn recv_pingreq(node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket) {
+fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish) {
+    if publish.qos != mqtt3::QoS::AtMostOnce {
+        return;
+    }
+
+    let topic = mqtt3::TopicPath::from_str(&publish.topic_name);
+    if topic.is_err() {
+        return;
+    }
+    let topic = topic.unwrap();
+    let node = &mut node.lock().unwrap();
+    for (_, meta) in node.metas.iter() {
+        if meta.topic.is_match(&topic) {
+            (meta.publish_func)(Ok(&publish.payload));
+        }
+    }
+}
+
+fn recv_pingreq(_node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket) {
     // TODO
     util::send_pingresp(socket);
 }
 
-fn recv_disconnect(node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket) {}
+fn recv_disconnect(node: Arc<Mutex<ServerNodeImpl>>, cid: usize) {
+    let node = &mut node.lock().unwrap();
+    node.clients.remove(&cid);
+}
+
+fn publish_impl(
+    node: Arc<Mutex<ServerNodeImpl>>,
+    retain: bool,
+    qos: mqtt3::QoS,
+    topic: Atom,
+    payload: Vec<u8>,
+) -> Result<()> {
+    if qos != mqtt3::QoS::AtMostOnce {
+        return Err(Error::new(ErrorKind::Other, "publish impl, invalid qos"));
+    }
+
+    let t = mqtt3::TopicPath::from_str(&topic);
+    if t.is_err() {
+        return Err(Error::new(ErrorKind::Other, "publish impl, invalid topic"));
+    }
+    let t = t.unwrap();
+    let node = &mut node.lock().unwrap();
+
+    if retain {
+        let atom = Atom::from(t.path.as_str());
+        let has_topic = node.retain_topics.contains_key(&atom);
+        if has_topic {
+            let m = node.retain_topics.get_mut(&atom).unwrap();
+            m.retain_msg = Some(payload.clone());
+        } else {
+            node.retain_topics.insert(
+                topic,
+                RetainTopic {
+                    path: t.clone(),
+                    retain_msg: Some(payload.clone()),
+                },
+            );
+        }
+    }
+
+    for (_, top) in node.sub_topics.iter() {
+        if top.meta.can_publish && top.path.is_match(&t) {
+            for cid in top.clients.iter() {
+                let client = node.clients.get(cid).unwrap();
+                util::send_publish(
+                    &client.socket,
+                    retain,
+                    mqtt3::QoS::AtMostOnce,
+                    t.path.as_str(),
+                    payload.clone(),
+                );
+            }
+        }
+    }
+
+    return Ok(());
+}
