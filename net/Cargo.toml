@@ -1,0 +1,12 @@
+[package]
+name = "net"
+version = "0.1.0"
+authors = ["moyy <moyy@yineng.com>"]
+
+[dependencies]
+mio = "0.6.14"
+slab = "0.4.0"
+
+[[test]]
+name = "test"
+path = "test/mod.rs"
