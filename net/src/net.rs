@@ -8,6 +8,7 @@ use std::net::{Shutdown, SocketAddr};
 
 use mio::{Events, Poll, PollOpt, Ready, Token};
 use mio::net::{TcpListener, TcpStream};
+use timer::{NetTimer};
 
 use slab::Slab;
 
@@ -488,14 +489,15 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
             match val {
                 &NetData::TcpStream(ref s, ref _mio) => {
                     let s = &mut s.read().unwrap();
-                    if s.recv_callback.is_none() || s.recv_start_time == None {
+                    if s.recv_callback.is_none() || s.recv_timer.is_none() {
                         continue;
                     }
-                    let last = s.recv_start_time.unwrap();
-                    let timeout = s.recv_timeout.unwrap();
-                    if last.elapsed() >= timeout {
-                        let Token(id) = s.token;
-                        tokens.push(id);
+                    let timer = s.recv_timer.as_ref().unwrap();
+                    match timer.poll() {
+                        Some(Token(id)) => {
+                            tokens.push(id);
+                        },
+                        None => (),
                     }
                 }
                 _ => {}
@@ -536,7 +538,7 @@ impl Stream {
             recv_size: 0,
             temp_recv_buf_offset: 0,
             recv_comings: recv_comings,
-            recv_start_time: None,
+            recv_timer: None,
             temp_recv_buf: None,
 
             recv_callback: None,
@@ -597,10 +599,12 @@ impl Stream {
             self.recv_callback_offset = 0;
             self.recv_buf_offset = len;
         }
-
+        let timeout = self.recv_timeout.unwrap();
+        let timer = NetTimer::new();
+        timer.set_timeout(timeout, self.token);
         self.recv_size = size;
         self.recv_callback = Some(func);
-        self.recv_start_time = Some(Instant::now());
+        self.recv_timer = Some(timer);
         self.recv_comings.write().unwrap().push(self.token);
 
         return None;

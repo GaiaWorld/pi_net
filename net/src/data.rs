@@ -10,6 +10,7 @@ use slab::Slab;
 
 use mio::{Poll, Ready, Token};
 use mio::net::{TcpListener, TcpStream};
+use timer::{NetTimer};
 
 pub type SendClosureFn = Box<FnBox(&mut NetHandler) + Send>;
 
@@ -48,7 +49,7 @@ pub struct Stream {
     pub send_bufs: VecDeque<Arc<Vec<u8>>>,
 
     pub recv_timeout: Option<Duration>,
-    pub recv_start_time: Option<Instant>,
+    pub recv_timer: Option<NetTimer<Token>>,
 
     pub recv_buf: Vec<u8>,
     pub recv_size: usize,
