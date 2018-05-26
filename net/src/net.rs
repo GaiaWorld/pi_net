@@ -8,7 +8,7 @@ use std::net::{Shutdown, SocketAddr};
 
 use mio::{Events, Poll, PollOpt, Ready, Token};
 use mio::net::{TcpListener, TcpStream};
-use timer::{NetTimer};
+use timer::{NetTimer, NetTimers, TimerCallback};
 
 use slab::Slab;
 
@@ -51,7 +51,7 @@ pub fn connect_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
 
         s.set_recv_buffer_size(MAX_RECV_SIZE).unwrap();
 
-        let mut stream = Stream::new(key, handler.recv_comings.clone());
+        let mut stream = Stream::new(key, handler.recv_comings.clone(), handler.net_timers.clone());
         stream.interest.insert(Ready::writable());
 
         println!(
@@ -165,9 +165,9 @@ pub fn handle_close(handler: &mut NetHandler, stream: usize, force: bool) {
     }
 }
 
-fn tcp_event(mio: &mut TcpListener, recv_comings: Arc<RwLock<Vec<Token>>>) -> Option<NetData> {
+fn tcp_event(mio: &mut TcpListener, recv_comings: Arc<RwLock<Vec<Token>>>, net_timers: Arc<RwLock<NetTimers<TimerCallback>>>) -> Option<NetData> {
     let (tcp_stream, _) = mio.accept().unwrap();
-    let s = Stream::new(0, recv_comings);
+    let s = Stream::new(0, recv_comings, net_timers);
     tcp_stream.set_recv_buffer_size(MAX_RECV_SIZE).unwrap();
     Some(NetData::TcpStream(Arc::new(RwLock::new(s)), tcp_stream))
 }
@@ -312,6 +312,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
         slab: Slab::<NetData>::new(),
         poll: Poll::new().unwrap(),
         recv_comings: Arc::new(RwLock::new(Vec::<Token>::new())),
+        net_timers: Arc::new(RwLock::new(NetTimers::new())),
     };
 
     let mut events = Events::with_capacity(1024);
@@ -353,7 +354,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                 match data {
                     &mut NetData::TcpServer(_, ref mut mio) => {
                         if readiness.is_readable() {
-                            net_data = tcp_event(mio, handler.recv_comings.clone());
+                            net_data = tcp_event(mio, handler.recv_comings.clone(), handler.net_timers.clone());
                         } else if readiness.is_writable() {
                             // TODO error callback
                             panic!("TODO tcp_event error callback");
@@ -482,6 +483,9 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
         while let Ok(func) = receiver.try_recv() {
             func.call_box((&mut handler,));
         }
+        
+        //轮询定时器
+        handler.net_timers.write().unwrap().poll();
 
         // handle timeout net
         let mut tokens: Vec<usize> = vec![];
@@ -514,7 +518,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
 }
 
 impl Stream {
-    pub fn new(id: usize, recv_comings: Arc<RwLock<Vec<Token>>>) -> Self {
+    pub fn new(id: usize, recv_comings: Arc<RwLock<Vec<Token>>>, net_timers: Arc<RwLock<NetTimers<TimerCallback>>>) -> Self {
         let mut recv_buf = Vec::with_capacity(MAX_RECV_SIZE);
         unsafe {
             recv_buf.set_len(MAX_RECV_SIZE);
@@ -543,6 +547,8 @@ impl Stream {
 
             recv_callback: None,
             close_callback: None,
+
+            net_timers: net_timers,
         }
     }
 

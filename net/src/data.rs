@@ -10,7 +10,7 @@ use slab::Slab;
 
 use mio::{Poll, Ready, Token};
 use mio::net::{TcpListener, TcpStream};
-use timer::{NetTimer};
+use timer::{NetTimer, NetTimers, TimerCallback};
 
 pub type SendClosureFn = Box<FnBox(&mut NetHandler) + Send>;
 
@@ -63,6 +63,8 @@ pub struct Stream {
 
     pub recv_callback: Option<RecvFn>,
     pub close_callback: Option<CloseFn>,
+
+    pub net_timers: Arc<RwLock<NetTimers<TimerCallback>>>,
 }
 
 pub enum State {
@@ -81,4 +83,5 @@ pub struct NetHandler {
     pub slab: Slab<NetData>,
     pub sender: Sender<SendClosureFn>,
     pub recv_comings: Arc<RwLock<Vec<Token>>>,
+    pub net_timers: Arc<RwLock<NetTimers<TimerCallback>>>,
 }
