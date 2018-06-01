@@ -3,7 +3,7 @@ use std::boxed::FnBox;
 use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::time::{Duration};
 use std::collections::VecDeque;
 
 use slab::Slab;

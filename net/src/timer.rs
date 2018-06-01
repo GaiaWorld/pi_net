@@ -1,4 +1,4 @@
-use mio_extras::timer::{self, Timeout, Timer};
+use mio_extras::timer::{Timeout, Timer};
 
 use std::cell::RefCell;
 use std::sync::{Arc};

@@ -1,7 +1,7 @@
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
 use std::io::{Error, ErrorKind, Read, Result, Write};
-use std::time::{Duration, Instant};
+use std::time::{Duration};
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
 use std::net::{Shutdown, SocketAddr};
@@ -100,7 +100,7 @@ fn send_tcp(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream, v8: Arc<V
                 if stream.send_remain_size == 0 {
                     stream.interest.insert(Ready::writable());
                     println!(
-                        "stream {:?}: reregister, interest = {:?}",
+                        "send_tcp stream {:?}: reregister, interest = {:?}",
                         stream.token, stream.interest
                     );
                     poll.reregister(mio, stream.token, stream.interest, PollOpt::level())
@@ -363,7 +363,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                     &mut NetData::TcpStream(ref s, ref mut mio) => {
                         if readiness.is_readable() {
                             let mut is_close = false;
-
+                            
                             let recv_r = stream_recv(&mut s.write().unwrap(), mio);
 
                             if let Some(r) = recv_r {
@@ -574,7 +574,7 @@ impl Stream {
                 "Recive callback can't set twice",
             ))));
         }
-
+        
         self.temp_recv_buf = None;
         self.temp_recv_buf_offset = 0;
 
