@@ -44,7 +44,7 @@ struct RetainTopic {
     retain_msg: Option<Vec<u8>>,
 }
 
-struct ClientStub {
+pub struct ClientStub {
     socket: Socket,
     _keep_alive: u16,
     _last_will: Option<mqtt3::LastWill>,
