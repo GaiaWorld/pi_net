@@ -38,8 +38,8 @@ pub fn uncompress(src: &[u8], dst: &mut Vec<u8>) -> Result<()> {
             .and_then(|mut decoder| {
                 loop {
                     match decoder.read_to_end(dst) {
-                        Ok(n) => {
-                            dst.truncate(n);
+                        Ok(_) => {
+                            ()
                         },
                         Err(ref e) if e.kind() == ErrorKind::Interrupted => {
                             //重复读
