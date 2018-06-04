@@ -1,12 +1,13 @@
-use std::collections::HashMap;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::SystemTime;
 
 use data::Server;
 use mqtt3::{self, Packet};
 use net::{Socket, Stream};
 use string_cache::DefaultAtom as Atom;
 use util;
+use fnv::FnvHashMap;
 
 pub struct ServerNode(Arc<Mutex<ServerNodeImpl>>);
 
@@ -23,7 +24,7 @@ pub struct TopicMeta {
     // 对应的应用层回调 
     // TODO 改成Arc<QueueHandler>
     // TODO 回调修改参数：(Arc<ClientStub>, Result<Arc<[u8]>>)
-    publish_func: Box<Fn(Result<&[u8]>)>,
+    publish_func: Box<Fn(Arc<ClientStub>, Result<Arc<[u8]>>)>,
 }
 
 /// 订阅的主题
@@ -44,19 +45,19 @@ struct RetainTopic {
     retain_msg: Option<Vec<u8>>,
 }
 
-struct ClientStub {
+pub struct ClientStub {
     socket: Socket,
     _keep_alive: u16,
     _last_will: Option<mqtt3::LastWill>,
-    attributes: HashMap<Atom, Arc<Vec<u8>>>,
+    attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>, //TODO Arc<RwLock<<FnvHashMap<Atom, Arc<Vec<u8>>>>
 }
 
 struct ServerNodeImpl {
-    clients: HashMap<usize, ClientStub>,
+    clients: FnvHashMap<usize, Arc<ClientStub>>,
 
-    sub_topics: HashMap<Atom, SubTopic>,
-    retain_topics: HashMap<Atom, RetainTopic>,
-    metas: HashMap<Atom, Arc<TopicMeta>>,
+    sub_topics: FnvHashMap<Atom, SubTopic>,
+    retain_topics: FnvHashMap<Atom, RetainTopic>,
+    metas: FnvHashMap<Atom, Arc<TopicMeta>>,
 }
 
 unsafe impl Sync for ServerNodeImpl {}
@@ -65,10 +66,10 @@ unsafe impl Send for ServerNodeImpl {}
 impl ServerNode {
     pub fn new() -> ServerNode {
         ServerNode(Arc::new(Mutex::new(ServerNodeImpl {
-            clients: HashMap::new(),
-            sub_topics: HashMap::new(),
-            retain_topics: HashMap::new(),
-            metas: HashMap::new(),
+            clients: FnvHashMap::default(),
+            sub_topics: FnvHashMap::default(),
+            retain_topics: FnvHashMap::default(),
+            metas: FnvHashMap::default(),
         })))
     }
 }
@@ -106,7 +107,7 @@ impl Server for ServerNode {
         can_publish: bool,
         can_subscribe: bool,
         only_one_key: Option<Atom>,
-        handler: Box<Fn(Result<&[u8]>)>,
+        handler: Box<Fn(Arc<ClientStub>, Result<Arc<[u8]>>)>,
     ) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
         let topic = mqtt3::TopicPath::from_str(&name);
@@ -155,7 +156,7 @@ fn handle_recv(
             Packet::Connect(connect) => recv_connect(n, socket, stream, connect),
             Packet::Subscribe(sub) => recv_sub(n, socket, sub),
             Packet::Unsubscribe(unsub) => recv_unsub(n, socket, unsub),
-            Packet::Publish(publish) => recv_publish(n, publish),
+            Packet::Publish(publish) => recv_publish(n, publish, socket),
             Packet::Pingreq => recv_pingreq(n, socket),
             Packet::Disconnect => recv_disconnect(n, socket.socket),
             _ => panic!("server handle_recv: invalid packet!"),
@@ -187,16 +188,42 @@ fn recv_connect(
     } else {
         // TODO: 验证 client_id 是否合法
         // code = mqtt3::ConnectReturnCode::RefusedIdentifierRejected;
+        let mut att = FnvHashMap::default();
+        
+        
+        if let Some(username) = connect.username {
+            att.insert(Atom::from("$username"), Arc::new(Vec::from(username)));
+        }
+        if let Some(password) = connect.password {
+            att.insert(Atom::from("$password"), Arc::new(Vec::from(password)));
+        }
+        att.insert(Atom::from("$client_id"), Arc::new(Vec::from(connect.client_id)));
+        att.insert(Atom::from("$connect_time"), Arc::new(Vec::from(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().to_string())));
+
         let node = &mut node.lock().unwrap();
         let s = socket.clone();
         node.clients.insert(
             socket.socket,
-            ClientStub {
+            Arc::new(ClientStub {
                 socket: s,
                 _keep_alive: connect.keep_alive,
                 _last_will: connect.last_will,
-                attributes: HashMap::new(),
-            },
+                attributes: Arc::new(RwLock::new(att)),
+            }),
+        );
+        //创建$r/$id
+        let name = Atom::from(String::from("$r/") + &socket.socket.to_string());
+        let topic = mqtt3::TopicPath::from_str(&name);
+        let topic = topic.unwrap();
+        node.metas.insert(
+            name,
+            Arc::new(TopicMeta {
+                topic,
+                can_publish: false,
+                can_subscribe: false,
+                only_one_key: None,
+                publish_func: Box::new(|_attr, _result| {}),
+            }),
         );
     }
     util::send_connack(socket, code);
@@ -268,7 +295,8 @@ fn recv_sub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) -> mqtt3::Su
             
             let key = meta.only_one_key.as_ref().unwrap();
             let c = node.clients.get(&cid).unwrap();
-            let attr = c.attributes.get(key).unwrap();
+            let att = c.attributes.read().unwrap();
+            let attr = att.get(key).unwrap();
             
             use std::str;
             let attr = str::from_utf8(attr).unwrap();
@@ -346,7 +374,8 @@ fn recv_unsub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) {
 
             let key = meta.only_one_key.as_ref().unwrap();
             let c = node.clients.get(&cid).unwrap();
-            let attr = c.attributes.get(key).unwrap();
+            let att = c.attributes.read().unwrap();
+            let attr = att.get(key).unwrap();
             
             use std::str;
             let attr = str::from_utf8(attr).unwrap();
@@ -357,7 +386,7 @@ fn recv_unsub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) {
     }
 }
 
-fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish) {
+fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish, socket: &Socket) {
     if publish.qos != mqtt3::QoS::AtMostOnce {
         return;
     }
@@ -370,7 +399,9 @@ fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish) {
     let node = &mut node.lock().unwrap();
     for (_, meta) in node.metas.iter() {
         if meta.topic.is_match(&topic) {
-            (meta.publish_func)(Ok(&publish.payload));
+            let client_stub = node.clients.get(&socket.socket).unwrap();
+            let payload = Arc::from(publish.payload.as_slice());
+            (meta.publish_func)(client_stub.clone(), Ok(payload));
         }
     }
 }

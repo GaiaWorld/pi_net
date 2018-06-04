@@ -6,6 +6,7 @@ extern crate mqtt3;
 extern crate net;
 extern crate rand;
 extern crate string_cache;
+extern crate fnv;
 
 mod client;
 mod data;

@@ -57,7 +57,7 @@ fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketA
 
     let mut server = ServerNode::new();
     server.add_stream(socket, stream);
-    server.set_topic_meta(Atom::from(String::from("a/b/c").as_str()), true, true, None, Box::new(|r| println!("a/b/c  publish ok!!! r:{:?}", r.unwrap())));
+    server.set_topic_meta(Atom::from(String::from("a/b/c").as_str()), true, true, None, Box::new(|c, r| println!("a/b/c  publish ok!!! r:{:?}", r.unwrap())));
     thread::spawn(move || handle_publish(&mut server));
 }
 
