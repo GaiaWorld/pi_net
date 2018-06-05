@@ -10,3 +10,4 @@ fnv = "1.0.6"
 net = {path="../net"}
 mqtt = {path="../mqtt"}
 pi_vm = {path="../../pi_vm"}
+pi_db = {path="../../pi_db"}
