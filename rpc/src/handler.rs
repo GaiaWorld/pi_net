@@ -73,8 +73,8 @@ impl TopicHandler {
 		self.gray_tab.write().unwrap().remove(&gray);
 	}
 
-	//设置会话
-	pub fn set_session(&mut self, session: Session) -> Option<Session> {
+	//设置新的会话，返回旧的会话
+	pub fn set_session(&mut self, session: Arc<RwLock<Session>>) -> Option<Arc<RwLock<Session>>> {
 		let old = self.session.take();
 		self.session = Some(session);
 		old
