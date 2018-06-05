@@ -1,24 +1,33 @@
+use std::io::{Error, Result};
 /**
  * RPC传输协议：
  * 消息体：1字节表示压缩和版本，4字节消息ID，剩下的BonBuffer
  * 第一字节：前3位表示压缩算法，后5位表示版本（灰度）
  * 压缩算法：0：不压缩，1：rsync, 2:LZ4 BLOCK, 3:LZ4 SEREAM, 4、5、6、7预留
  */
-
 use std::sync::{Arc, RwLock};
-use std::io::{Error, Result};
 
-use string_cache::DefaultAtom as Atom;
 use fnv::FnvHashMap;
+use string_cache::DefaultAtom as Atom;
 
-use mqtt::{ServerNode as MQTT, ClientStub, Server};
-
+use mqtt::{ClientStub, Server, ServerNode as MQTT};
 
 use handler::TopicHandler;
 
 use traits::RPCServer;
+use util::{compress, uncompress, CompressLevel};
 
-pub struct RpcServer(MQTT);
+pub struct RpcServer {
+    mqtt: MQTT,
+    sessions: Arc<RwLock<FnvHashMap<Atom, Arc<RwLock<Session>>>>>,
+    }
+
+// enum Compress {
+//     NO = 0,
+//     RSYNC,
+//     LZ4_BLOCK = 2,
+//     LZ4_SEREAM,
+// }
 
 #[derive(Clone)]
 pub struct Session {
@@ -29,14 +38,17 @@ pub struct Session {
 
 impl RpcServer {
     pub fn new(mqtt: MQTT) -> Self {
-        RpcServer(mqtt)
+        RpcServer{
+            mqtt,
+            sessions: Arc::new(RwLock::new(FnvHashMap::default())),
+        }
     }
 }
 
 //会话
 impl Session {
     pub fn new(client: Arc<ClientStub>) -> Self {
-        Session{
+        Session {
             client,
             msg_id: None,
             gray: None,
@@ -45,6 +57,10 @@ impl Session {
 
     //发布消息
     pub fn send(&self, topic: Atom, msg: Vec<u8>) -> Result<()> {
+        //大于64k需要压缩
+        if msg.len() > 64 {
+            
+        }
         Ok(())
     }
     //获取会话表数据
@@ -55,9 +71,7 @@ impl Session {
     pub fn set_attr(&self, key: Atom, Value: Option<Arc<[u8]>>) -> Result<()> {
         Ok(())
     }
-    pub fn close(&self) {
-
-    }
+    pub fn close(&self) {}
     pub fn get_gray(&self) -> Option<u8> {
         self.gray
     }
@@ -68,21 +82,42 @@ impl Session {
 
 impl RPCServer for RpcServer {
     fn register_sync(&mut self, topic: Atom, func: TopicHandler) -> Result<()> {
-        let handle = | client: Arc<ClientStub>, r: Result<Arc<Vec<u8>>> | {
-            let mut session = Session::new(client);
-            
-            let vsn: u8 = 0; //灰度版本
-            //TODO 分析数据(解压、uid)
-            //TODO msg_id写入session
-            // func.handle(topic, session, vsn, r);
+        let sessions = self.sessions.clone();
+        let rpc_handle = |client: Arc<ClientStub>, r: Result<Arc<Vec<u8>>>| {
+            let data = r.unwrap();
+            let header = data[0];
+            let compress = (&header >> 5) as u8;
+            let vsn = &header & 0b11111;
+            let [a, b, c] = data[1..4];
+            let mut session;
+            if let Some(s) = sessions.write().unwrap().get(&topic) {
+                session = s;
+            } else {
+                let s = Arc::new(RwLock::new(Session::new(client)));
+                session = &s;
+                sessions.write().unwrap().insert(topic, s);
+                func.set_session(s.clone());
+            }
+            session.write().unwrap().msg_id = Some(((a << 16) + (b << 8) + c) as usize);
+            let mut rdata = Vec::new();
+            match compress {
+                2 => {
+                    let mut vec_ = Vec::new();
+                    uncompress(&data[5..], &mut vec_).is_ok();
+                    rdata.extend_from_slice(&vec_[..]);
+                },
+                _ => rdata.extend_from_slice(&data[5..]),
+            }
+
+            func.handle(topic, vsn, Arc::new(rdata));
         };
-        self.0.set_topic_meta(topic, true, true, None, Box::new(move |c, r| {handle(c, r)}));
+        self.mqtt
+            .set_topic_meta(topic, true, true, None, Box::new(move |c, r| rpc_handle(c, r)));
         Ok(())
     }
 
     fn unregister(&mut self, topic: Atom) -> Result<()> {
-        self.0.unset_topic_meta(topic);
+        self.mqtt.unset_topic_meta(topic);
         Ok(())
     }
 }
-
