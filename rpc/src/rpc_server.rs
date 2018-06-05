@@ -61,6 +61,9 @@ impl Session {
     pub fn get_gray(&self) -> Option<u8> {
         self.gray
     }
+    pub fn set_gray(&mut self, gray: u8) {
+        self.gray = Some(gray);
+    }
 }
 
 impl RPCServer for RpcServer {
