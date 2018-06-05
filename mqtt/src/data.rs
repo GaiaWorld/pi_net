@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 use mqtt3::{LastWill, QoS};
 
 use net::{Socket, Stream};
+use server::{ClientStub};
 
 use string_cache::DefaultAtom as Atom;
 
@@ -69,6 +70,6 @@ pub trait Server {
         can_publish: bool,
         can_subscribe: bool,
         only_one_key: Option<Atom>,
-        handler: Box<Fn(Result<&[u8]>)>,
+        handler: Box<Fn(Arc<ClientStub>, Result<Arc<[u8]>>)>,
     ) -> Result<()>;
 }

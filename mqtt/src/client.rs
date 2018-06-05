@@ -1,5 +1,5 @@
 use std::boxed::FnBox;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{VecDeque};
 use std::io::{Error, ErrorKind, Result};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -8,6 +8,7 @@ use mqtt3::{self, LastWill, Packet, PacketIdentifier};
 use data::{Client, ClientCallback};
 use net::{Socket, Stream};
 use util;
+use fnv::FnvHashMap;
 
 use string_cache::DefaultAtom as Atom;
 
@@ -21,13 +22,13 @@ pub struct ClientNodeImpl {
     curr_sub_id: u16,
     curr_unsub_id: u16,
     // 奇数表示sub，偶数表示unsub
-    sub_map: HashMap<usize, Option<ClientCallback>>,
+    sub_map: FnvHashMap<usize, Option<ClientCallback>>,
 
-    attributes: HashMap<Atom, Arc<Vec<u8>>>,
+    attributes: FnvHashMap<Atom, Arc<Vec<u8>>>,
 
     // topics由set_topic_handler设置回调
-    topics: HashMap<Atom, TopicData>,
-    topic_patterns: HashMap<Atom, TopicData>,
+    topics: FnvHashMap<Atom, TopicData>,
+    topic_patterns: FnvHashMap<Atom, TopicData>,
 
     // 当socket和stream还没准备好时候的缓冲区
     socket_handlers: VecDeque<Box<FnBox(&Socket, Arc<RwLock<Stream>>)>>,
@@ -52,14 +53,14 @@ impl ClientNode {
             connect_func: None,
             close_func: None,
 
-            attributes: HashMap::new(),
+            attributes: FnvHashMap::default(),
 
             curr_sub_id: 0,
             curr_unsub_id: 0,
-            sub_map: HashMap::new(),
+            sub_map: FnvHashMap::default(),
 
-            topics: HashMap::new(),
-            topic_patterns: HashMap::new(),
+            topics: FnvHashMap::default(),
+            topic_patterns: FnvHashMap::default(),
             socket_handlers: VecDeque::new(),
         })))
     }
