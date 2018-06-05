@@ -32,7 +32,7 @@ impl TopicHandler {
 	}
 
 	//处理方法
-	pub fn handle(topic: Atom, session: Session, version: u8, bin: Arc<Vec<u8>>) {
+	pub fn handle(&self, topic: Atom, session: Session, version: u8, bin: Arc<Vec<u8>>) {
 		let args = move |vm: JS| -> JS {
 			vm.new_str((*topic).to_string());
 			let array = vm.new_uint8_array(bin.len() as u32);
