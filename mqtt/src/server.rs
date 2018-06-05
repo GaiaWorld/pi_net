@@ -22,9 +22,7 @@ pub struct TopicMeta {
     // 如果有唯一键，需要到ClientStub去找值
     only_one_key: Option<Atom>,
     // 对应的应用层回调 
-    // TODO 改成Arc<QueueHandler>
-    // TODO 回调修改参数：(Arc<ClientStub>, Result<Arc<[u8]>>)
-    publish_func: Box<Fn(Arc<ClientStub>, Result<Arc<[u8]>>)>,
+    publish_func: Box<Fn(Arc<ClientStub>, Result<Arc<Vec<u8>>>)>,
 }
 
 /// 订阅的主题
@@ -107,7 +105,7 @@ impl Server for ServerNode {
         can_publish: bool,
         can_subscribe: bool,
         only_one_key: Option<Atom>,
-        handler: Box<Fn(Arc<ClientStub>, Result<Arc<[u8]>>)>,
+        handler: Box<Fn(Arc<ClientStub>, Result<Arc<Vec<u8>>>)>,
     ) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
         let topic = mqtt3::TopicPath::from_str(&name);
@@ -128,6 +126,14 @@ impl Server for ServerNode {
                 publish_func: handler,
             }),
         );
+        return Ok(());
+    }
+    fn unset_topic_meta(
+        &mut self,
+        name: Atom,
+    ) -> Result<()> {
+        let node = &mut self.0.lock().unwrap();
+        node.metas.remove(&name);
         return Ok(());
     }
 }
@@ -400,8 +406,7 @@ fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish, socke
     for (_, meta) in node.metas.iter() {
         if meta.topic.is_match(&topic) {
             let client_stub = node.clients.get(&socket.socket).unwrap();
-            let payload = Arc::from(publish.payload.as_slice());
-            (meta.publish_func)(client_stub.clone(), Ok(payload));
+            (meta.publish_func)(client_stub.clone(), Ok(publish.payload.clone()));
         }
     }
 }
