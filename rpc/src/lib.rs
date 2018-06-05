@@ -9,9 +9,10 @@ extern crate string_cache;
 extern crate fnv;
 extern crate pi_vm;
 
+mod util;
+mod handler;
 mod traits;
 mod rpc_server;
-mod util;
 
 pub use util::*;
 

@@ -1,6 +1,6 @@
 use mqtt::{ServerNode};
 use string_cache::DefaultAtom as Atom;
-use pi_vm::pi_vm_impl::TopicHandler;
+use handler::TopicHandler;
 
 use std::io::{Result};
 
