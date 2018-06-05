@@ -70,6 +70,10 @@ pub trait Server {
         can_publish: bool,
         can_subscribe: bool,
         only_one_key: Option<Atom>,
-        handler: Box<Fn(Arc<ClientStub>, Result<Arc<[u8]>>)>,
+        handler: Box<Fn(Arc<ClientStub>, Result<Arc<Vec<u8>>>)>,
+    ) -> Result<()>;
+    fn unset_topic_meta(
+        &mut self,
+        name: Atom,
     ) -> Result<()>;
 }

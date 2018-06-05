@@ -16,11 +16,11 @@ pub trait RPCServer {
     // $r 回应
     // 最终变为：$q，payload; 返回值, $r/$id
     // 
-    fn register_sync(topic: Atom, func: TopicHandler) -> Result<()>;
+    fn register_sync(&mut self, topic: Atom, func: TopicHandler) -> Result<()>;
     
     // fn register_async(func_name: Atom, fn: Box<Fn(&[u8], Arc<Fn(&[u8])>>));
     
-    fn unregister(topic: Atom) -> Result<()>;
+    fn unregister(&mut self, topic: Atom) -> Result<()>;
 }
 
 
