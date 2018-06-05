@@ -18,7 +18,7 @@ pub struct TopicHandler {
 	factory: 	Arc<VMFactory>,										//默认虚拟机工厂
 	mgr: 		Mgr,												//默认事务管理器
 	gray_tab: 	Arc<RwLock<FnvHashMap<u8, (Arc<VMFactory>, Mgr)>>>,	//灰度表
-	session:	Option<Session>,									//会话
+	session:	Option<Arc<RwLock<Session>>>,						//会话
 }
 
 impl TopicHandler {
@@ -40,19 +40,18 @@ impl TopicHandler {
 
 	//设置指定灰度为默认版本
 	pub fn set_default(&mut self, gray: u8) {
-		match &mut self.session {
-			None => (),
-			Some(ref mut s) => {
-				match self.gray_tab.write().unwrap().remove(&gray) {
-					None => (),
-					Some((f, m)) => {
-						self.factory = f;
-						self.mgr = m;
-						s.set_gray(gray);
-					},
-				}
-			}
+		if self.session.is_none() {
+			return;
 		}
+		
+		match self.gray_tab.write().unwrap().remove(&gray) {
+			None => return,
+			Some((f, m)) => {
+				self.factory = f;
+				self.mgr = m;
+			},
+		}
+		self.session.as_ref().unwrap().write().unwrap().set_gray(gray);
 	}
 
 	//获取指定灰度的事务管理器
@@ -96,8 +95,8 @@ impl TopicHandler {
 	}
 
 	//获取指定的虚拟机工厂和事务管理器
-	fn get(&self, session: &Session) -> (Arc<VMFactory>, Mgr) {
-		match session.get_gray() {
+	fn get(&self, session: &Arc<RwLock<Session>>) -> (Arc<VMFactory>, Mgr) {
+		match session.read().unwrap().get_gray() {
 			Some(gray) => {
 				match self.get_gray_mgr(gray) {
 					None => self.get_default(),
