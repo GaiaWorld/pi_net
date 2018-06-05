@@ -6,7 +6,7 @@ use fnv::FnvHashMap;
 
 use mqtt::{ServerNode as MQTT, ClientStub};
 
-use pi_vm::pi_vm_impl::TopicHandler;
+use handler::TopicHandler;
 
 use traits::RPCServer;
 
