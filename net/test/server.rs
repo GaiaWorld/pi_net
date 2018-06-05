@@ -1,5 +1,4 @@
 use std::io::Result;
-use std::ops::Range;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 
@@ -18,7 +17,7 @@ fn handle_recv(socket: Socket, stream: Arc<RwLock<Stream>>, begin: usize, end: u
 
     let func = Box::new(move |data: Result<Arc<Vec<u8>>>| {
         {
-            let s_borrow = &s.read().unwrap();
+            let _s_borrow = &s.read().unwrap();
 
             let b = data.unwrap();
             for (i, &d) in b.iter().enumerate() {

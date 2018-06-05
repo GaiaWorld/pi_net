@@ -22,7 +22,7 @@ pub struct TopicMeta {
     only_one_key: Option<Atom>,
     // 对应的应用层回调 
     // TODO 改成Arc<QueueHandler>
-    // TODO 回调需要加上一个参数：Arc<ClientStub>
+    // TODO 回调修改参数：(Arc<ClientStub>, Result<Arc<[u8]>>)
     publish_func: Box<Fn(Result<&[u8]>)>,
 }
 
@@ -132,7 +132,6 @@ impl Server for ServerNode {
 }
 
 fn handle_stream(node: Arc<Mutex<ServerNodeImpl>>, socket: Socket, stream: Arc<RwLock<Stream>>) {
-    println!("server handle_stream");
 
     let s = stream.clone();
     util::recv_mqtt_packet(
@@ -149,7 +148,6 @@ fn handle_recv(
     stream: Arc<RwLock<Stream>>,
     packet: Result<Packet>,
 ) {
-    println!("server handle_recv, packet");
     let n = node.clone();
     let st = stream.clone();
     if let Ok(packet) = packet {
@@ -421,13 +419,14 @@ fn publish_impl(
             );
         }
     }
-
+    
     for (_, top) in node.sub_topics.iter() {
         if top.meta.can_publish && top.path.is_match(&t) {
             for cid in top.clients.iter() {
                 let client = node.clients.get(cid).unwrap();
+                let socket = client.socket.clone();
                 util::send_publish(
-                    &client.socket,
+                    &socket,
                     retain,
                     mqtt3::QoS::AtMostOnce,
                     t.path.as_str(),
@@ -436,6 +435,5 @@ fn publish_impl(
             }
         }
     }
-
     return Ok(());
 }

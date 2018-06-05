@@ -1,7 +1,6 @@
 use std::sync::{Arc, RwLock};
 use std::io::Result;
 use std::net::SocketAddr;
-use std::ops::Range;
 
 use net::{Config, NetManager, Protocol, Socket, Stream};
 
@@ -23,7 +22,7 @@ fn handle_recv(socket: Socket, stream: Arc<RwLock<Stream>>, begin: usize, end: u
         }
 
         {
-            let s_borrow = &s.read().unwrap();
+            let _s_borrow = &s.read().unwrap();
 
             let b = data.unwrap();
             for (i, &d) in b.iter().enumerate() {

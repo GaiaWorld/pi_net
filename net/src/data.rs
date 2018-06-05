@@ -3,13 +3,14 @@ use std::boxed::FnBox;
 use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::time::{Duration};
 use std::collections::VecDeque;
 
 use slab::Slab;
 
 use mio::{Poll, Ready, Token};
 use mio::net::{TcpListener, TcpStream};
+use timer::{NetTimer, NetTimers, TimerCallback};
 
 pub type SendClosureFn = Box<FnBox(&mut NetHandler) + Send>;
 
@@ -48,7 +49,7 @@ pub struct Stream {
     pub send_bufs: VecDeque<Arc<Vec<u8>>>,
 
     pub recv_timeout: Option<Duration>,
-    pub recv_start_time: Option<Instant>,
+    pub recv_timer: Option<NetTimer<Token>>,
 
     pub recv_buf: Vec<u8>,
     pub recv_size: usize,
@@ -62,6 +63,8 @@ pub struct Stream {
 
     pub recv_callback: Option<RecvFn>,
     pub close_callback: Option<CloseFn>,
+
+    pub net_timers: Arc<RwLock<NetTimers<TimerCallback>>>,
 }
 
 pub enum State {
@@ -80,4 +83,5 @@ pub struct NetHandler {
     pub slab: Slab<NetData>,
     pub sender: Sender<SendClosureFn>,
     pub recv_comings: Arc<RwLock<Vec<Token>>>,
+    pub net_timers: Arc<RwLock<NetTimers<TimerCallback>>>,
 }

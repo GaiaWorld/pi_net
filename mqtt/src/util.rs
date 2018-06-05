@@ -115,7 +115,7 @@ fn gen_client_id() -> String {
 }
 
 fn recv_header(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
-    const FIXTED_LEN: usize = 5;
+    const FIXTED_LEN: usize = 1;
 
     let handle_header;
     {
@@ -123,8 +123,9 @@ fn recv_header(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
         let stream = stream.clone();
         handle_header = Box::new(move |data: Result<Arc<Vec<u8>>>| {
             pack.extend_from_slice(data.unwrap().as_slice());
-            let size = get_recv_size(pack.as_slice()).unwrap();
-            recv_pack(stream, pack, size, func);
+            // let size = get_recv_size(pack.as_slice()).unwrap();
+            // recv_pack(stream, pack, size, func);
+            recv_header2(stream, pack, func);
         });
     }
 
@@ -132,6 +133,29 @@ fn recv_header(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
     if let Some((func, data)) = r {
         func(data);
     }
+}
+
+fn recv_header2(stream: Arc<RwLock<Stream>>, packs: Vec<u8>, func: MqttRecvCallback) {
+    const FIXTED_LEN: usize = 1;
+    let handle_header2;
+    {
+        let mut pack = vec![];
+        let stream = stream.clone();
+        handle_header2 = Box::new(move |data: Result<Arc<Vec<u8>>>| {
+            pack.extend_from_slice(packs.as_slice());
+            pack.extend_from_slice(data.unwrap().as_slice());
+            match if_ack_size(pack.as_slice()) {
+                Ok(-1) => {
+                    recv_header2(stream.clone(), pack, func);
+                },
+                Ok(size) => {
+                    recv_pack(stream.clone(), pack, size as usize, func);
+                },
+                Err(e) => println!("recv_header error: {}", e)
+            }
+        })
+    }
+    stream.write().unwrap().recv(FIXTED_LEN, handle_header2);
 }
 
 fn recv_pack(
@@ -174,7 +198,7 @@ fn get_recv_size(pack: &[u8]) -> Result<usize> {
         done = (pack[i] & 0x80) == 0;
         i += 1;
     }
-    if i < pack.len() {
+    if i <= pack.len() {
         let mut r = 0;
         if len > pack.len() - i {
             r = len - (pack.len() - i);
@@ -182,5 +206,34 @@ fn get_recv_size(pack: &[u8]) -> Result<usize> {
         return Ok(r);
     } else {
         return Err(Error::new(ErrorKind::Other, "i < pack.len()"));
+    }
+}
+
+fn if_ack_size(pack: &[u8]) -> Result<isize> {
+    let mut mult: usize = 1;
+    let mut len: usize = 0;
+    let mut done = false;
+
+    const MULTIPLIER: usize = 0x80 * 0x80 * 0x80 * 0x80;
+
+    let mut i = 1;
+    while !done && i < pack.len() {
+        len += mult * (pack[i] & 0x7F) as usize;
+        mult *= 0x80;
+        if mult > MULTIPLIER {
+            return Err(Error::new(ErrorKind::Other, "mult > MULTIPLIER"));
+        }
+
+        done = (pack[i] & 0x80) == 0;
+        i += 1;
+    }
+    if i <= pack.len() {
+        let mut r = 0;
+        if len > pack.len() - i {
+            r = len - (pack.len() - i);
+        }
+        return Ok(r as isize);
+    } else {
+        return Ok(-1);
     }
 }

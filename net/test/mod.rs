@@ -15,9 +15,6 @@ fn run() {
     let _s = start_server();
 
     let _c = start_client();
-
-    loop { 
-        sleep(Duration::from_secs(10));
-    }
+    sleep(Duration::from_secs(30));
 }
 

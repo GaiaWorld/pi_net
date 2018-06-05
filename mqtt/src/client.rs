@@ -1,5 +1,5 @@
 use std::boxed::FnBox;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Error, ErrorKind, Result};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -25,14 +25,15 @@ pub struct ClientNodeImpl {
 
     attributes: HashMap<Atom, Arc<Vec<u8>>>,
 
+    // topics由set_topic_handler设置回调
     topics: HashMap<Atom, TopicData>,
     topic_patterns: HashMap<Atom, TopicData>,
 
     // 当socket和stream还没准备好时候的缓冲区
-    socket_handlers: Vec<Box<FnBox(&Socket, Arc<RwLock<Stream>>)>>,
+    socket_handlers: VecDeque<Box<FnBox(&Socket, Arc<RwLock<Stream>>)>>,
 }
 
-pub struct ClientNode(Arc<Mutex<ClientNodeImpl>>);
+pub struct ClientNode(pub Arc<Mutex<ClientNodeImpl>>);
 
 unsafe impl Sync for ClientNodeImpl {}
 unsafe impl Send for ClientNodeImpl {}
@@ -59,7 +60,7 @@ impl ClientNode {
 
             topics: HashMap::new(),
             topic_patterns: HashMap::new(),
-            socket_handlers: Vec::new(),
+            socket_handlers: VecDeque::new(),
         })))
     }
 }
@@ -69,7 +70,7 @@ impl Client for ClientNode {
         let node = &mut self.0.lock().unwrap();
 
         while !node.socket_handlers.is_empty() {
-            let func = node.socket_handlers.pop().unwrap();
+            let func = node.socket_handlers.pop_front().unwrap();
             func.call_box((&socket, stream.clone()));
         }
 
@@ -102,34 +103,37 @@ impl Client for ClientNode {
         topics: Vec<(String, mqtt3::QoS)>,
         resp_func: Option<ClientCallback>,
     ) -> Result<()> {
-        let node = &mut self.0.lock().unwrap();
+        let curr_id;
+        {
+            let node = &mut self.0.lock().unwrap();
 
-        // 检查参数合法性
-        let mut ts = Vec::with_capacity(topics.len());
-        for &(ref name, ref _qos) in topics.iter() {
-            let map;
-            if is_topic_contains_wildcards(name)? {
-                map = &node.topic_patterns;
-            } else {
-                map = &node.topics;
+            // 检查参数合法性
+            let mut ts = Vec::with_capacity(topics.len());
+            for &(ref name, ref _qos) in topics.iter() {
+                let map;
+                if is_topic_contains_wildcards(name)? {
+                    map = &node.topic_patterns;
+                } else {
+                    map = &node.topics;
+                }
+
+                if map.contains_key(&Atom::from(name.clone())) {
+                    ts.push((name.to_string(), mqtt3::QoS::AtMostOnce));
+                } else {
+                    return Err(Error::new(
+                        ErrorKind::Other,
+                        format!("Client Subscribe, topic {} can't find handler!", name),
+                    ));
+                }
             }
 
-            if map.contains_key(&Atom::from(name.clone())) {
-                ts.push((name.to_string(), mqtt3::QoS::AtMostOnce));
+            curr_id = node.curr_sub_id;
+            node.sub_map.insert((2 * curr_id + 1) as usize, resp_func);
+            if node.curr_sub_id < u16::max_value() {
+                node.curr_sub_id += 1;
             } else {
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    format!("Client Subscribe, topic {} can't find handler!", name),
-                ));
+                node.curr_sub_id = 0;
             }
-        }
-
-        let curr_id = node.curr_sub_id;
-        node.sub_map.insert((2 * curr_id + 1) as usize, resp_func);
-        if node.curr_sub_id < u16::max_value() {
-            node.curr_sub_id += 1;
-        } else {
-            node.curr_sub_id = 0;
         }
 
         let func = Box::new(move |socket: &Socket, _stream: Arc<RwLock<Stream>>| {
@@ -145,34 +149,36 @@ impl Client for ClientNode {
         topics: Vec<String>,
         resp_func: Option<ClientCallback>,
     ) -> Result<()> {
-        let node = &mut self.0.lock().unwrap();
+        let curr_id;
+        {
+            let node = &mut self.0.lock().unwrap();
+            // 检查参数合法性
+            let mut ts = Vec::with_capacity(topics.len());
+            for name in topics.iter() {
+                let map;
+                if is_topic_contains_wildcards(name)? {
+                    map = &node.topic_patterns;
+                } else {
+                    map = &node.topics;
+                }
 
-        // 检查参数合法性
-        let mut ts = Vec::with_capacity(topics.len());
-        for name in topics.iter() {
-            let map;
-            if is_topic_contains_wildcards(name)? {
-                map = &node.topic_patterns;
-            } else {
-                map = &node.topics;
+                if map.contains_key(&Atom::from(name.clone())) {
+                    ts.push((name.to_string(), mqtt3::QoS::AtMostOnce));
+                } else {
+                    return Err(Error::new(
+                        ErrorKind::Other,
+                        format!("Client Subscribe, topic {} can't find handler!", name),
+                    ));
+                }
             }
 
-            if map.contains_key(&Atom::from(name.clone())) {
-                ts.push((name.to_string(), mqtt3::QoS::AtMostOnce));
+            curr_id = node.curr_unsub_id;
+            node.sub_map.insert((2 * curr_id) as usize, resp_func);
+            if node.curr_unsub_id < u16::max_value() {
+                node.curr_unsub_id += 1;
             } else {
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    format!("Client Subscribe, topic {} can't find handler!", name),
-                ));
+                node.curr_unsub_id = 0;
             }
-        }
-
-        let curr_id = node.curr_unsub_id;
-        node.sub_map.insert((2 * curr_id) as usize, resp_func);
-        if node.curr_unsub_id < u16::max_value() {
-            node.curr_unsub_id += 1;
-        } else {
-            node.curr_unsub_id = 0;
         }
 
         let func = Box::new(move |socket: &Socket, _stream: Arc<RwLock<Stream>>| {
@@ -188,7 +194,6 @@ impl Client for ClientNode {
             util::send_disconnect(socket);
         });
         handle_slot(self.0.clone(), func);
-
         let node = &mut self.0.lock().unwrap();
 
         // 删除所有的数据结构
@@ -201,7 +206,6 @@ impl Client for ClientNode {
         node.topics.clear();
         node.topic_patterns.clear();
         node.socket_handlers.clear();
-
         return Ok(());
     }
 
@@ -308,8 +312,6 @@ fn handle_connect(
     keep_alive: u16,
     last_will: Option<LastWill>,
 ) {
-    println!("client handle connect");
-
     util::send_connect(socket, keep_alive, last_will);
 
     let s = stream.clone();
@@ -326,7 +328,6 @@ fn handle_recv(
     stream: Arc<RwLock<Stream>>,
     packet: Result<Packet>,
 ) {
-    println!("client handle_recv, packet");
     let n = node.clone();
     if let Ok(packet) = packet {
         match packet {
@@ -405,13 +406,12 @@ fn recv_unsub_ack(node: Arc<Mutex<ClientNodeImpl>>, id: u16) {
 
 fn recv_publish(node: Arc<Mutex<ClientNodeImpl>>, publish: mqtt3::Publish) {
     let node = &mut node.lock().unwrap();
-    
+
     let publish_topic = mqtt3::TopicPath::from_str(&publish.topic_name);
     if let Err(_) = publish_topic {
-        println!("Warning! client recv publish topic {}", publish.topic_name);
         return;
     }
-    
+
     let atom = Atom::from(publish.topic_name.as_str());
     if let Some(data) = node.topics.get(&atom) {
         (data.func)(Ok(publish.payload.as_slice()));
@@ -429,7 +429,7 @@ fn handle_slot(node: Arc<Mutex<ClientNodeImpl>>, func: Box<FnBox(&Socket, Arc<Rw
     let no_socket = node.socket.is_none();
 
     if no_socket {
-        node.socket_handlers.push(func);
+        node.socket_handlers.push_back(func);
         return;
     }
 
@@ -442,7 +442,7 @@ fn handle_slot(node: Arc<Mutex<ClientNodeImpl>>, func: Box<FnBox(&Socket, Arc<Rw
 fn is_topic_contains_wildcards(name: &str) -> Result<bool> {
     return match mqtt3::TopicPath::from_str(name) {
         Ok(topic) => Ok(topic.wildcards),
-        Err(_) => Err(Error::new(
+        Err(_e) => Err(Error::new(
             ErrorKind::Other,
             format!("InvalidTopic, {}", name),
         )),

@@ -1,13 +1,14 @@
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
 use std::io::{Error, ErrorKind, Read, Result, Write};
-use std::time::{Duration, Instant};
+use std::time::{Duration};
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
 use std::net::{Shutdown, SocketAddr};
 
 use mio::{Events, Poll, PollOpt, Ready, Token};
 use mio::net::{TcpListener, TcpStream};
+use timer::{NetTimer, NetTimers, TimerCallback};
 
 use slab::Slab;
 
@@ -50,7 +51,7 @@ pub fn connect_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
 
         s.set_recv_buffer_size(MAX_RECV_SIZE).unwrap();
 
-        let mut stream = Stream::new(key, handler.recv_comings.clone());
+        let mut stream = Stream::new(key, handler.recv_comings.clone(), handler.net_timers.clone());
         stream.interest.insert(Ready::writable());
 
         println!(
@@ -99,7 +100,7 @@ fn send_tcp(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream, v8: Arc<V
                 if stream.send_remain_size == 0 {
                     stream.interest.insert(Ready::writable());
                     println!(
-                        "stream {:?}: reregister, interest = {:?}",
+                        "send_tcp stream {:?}: reregister, interest = {:?}",
                         stream.token, stream.interest
                     );
                     poll.reregister(mio, stream.token, stream.interest, PollOpt::level())
@@ -164,9 +165,9 @@ pub fn handle_close(handler: &mut NetHandler, stream: usize, force: bool) {
     }
 }
 
-fn tcp_event(mio: &mut TcpListener, recv_comings: Arc<RwLock<Vec<Token>>>) -> Option<NetData> {
+fn tcp_event(mio: &mut TcpListener, recv_comings: Arc<RwLock<Vec<Token>>>, net_timers: Arc<RwLock<NetTimers<TimerCallback>>>) -> Option<NetData> {
     let (tcp_stream, _) = mio.accept().unwrap();
-    let s = Stream::new(0, recv_comings);
+    let s = Stream::new(0, recv_comings, net_timers);
     tcp_stream.set_recv_buffer_size(MAX_RECV_SIZE).unwrap();
     Some(NetData::TcpStream(Arc::new(RwLock::new(s)), tcp_stream))
 }
@@ -311,6 +312,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
         slab: Slab::<NetData>::new(),
         poll: Poll::new().unwrap(),
         recv_comings: Arc::new(RwLock::new(Vec::<Token>::new())),
+        net_timers: Arc::new(RwLock::new(NetTimers::new())),
     };
 
     let mut events = Events::with_capacity(1024);
@@ -352,7 +354,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                 match data {
                     &mut NetData::TcpServer(_, ref mut mio) => {
                         if readiness.is_readable() {
-                            net_data = tcp_event(mio, handler.recv_comings.clone());
+                            net_data = tcp_event(mio, handler.recv_comings.clone(), handler.net_timers.clone());
                         } else if readiness.is_writable() {
                             // TODO error callback
                             panic!("TODO tcp_event error callback");
@@ -361,7 +363,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                     &mut NetData::TcpStream(ref s, ref mut mio) => {
                         if readiness.is_readable() {
                             let mut is_close = false;
-
+                            
                             let recv_r = stream_recv(&mut s.write().unwrap(), mio);
 
                             if let Some(r) = recv_r {
@@ -481,6 +483,9 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
         while let Ok(func) = receiver.try_recv() {
             func.call_box((&mut handler,));
         }
+        
+        //轮询定时器
+        handler.net_timers.write().unwrap().poll();
 
         // handle timeout net
         let mut tokens: Vec<usize> = vec![];
@@ -488,14 +493,15 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
             match val {
                 &NetData::TcpStream(ref s, ref _mio) => {
                     let s = &mut s.read().unwrap();
-                    if s.recv_callback.is_none() || s.recv_start_time == None {
+                    if s.recv_callback.is_none() || s.recv_timer.is_none() {
                         continue;
                     }
-                    let last = s.recv_start_time.unwrap();
-                    let timeout = s.recv_timeout.unwrap();
-                    if last.elapsed() >= timeout {
-                        let Token(id) = s.token;
-                        tokens.push(id);
+                    let timer = s.recv_timer.as_ref().unwrap();
+                    match timer.poll() {
+                        Some(Token(id)) => {
+                            tokens.push(id);
+                        },
+                        None => (),
                     }
                 }
                 _ => {}
@@ -512,7 +518,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
 }
 
 impl Stream {
-    pub fn new(id: usize, recv_comings: Arc<RwLock<Vec<Token>>>) -> Self {
+    pub fn new(id: usize, recv_comings: Arc<RwLock<Vec<Token>>>, net_timers: Arc<RwLock<NetTimers<TimerCallback>>>) -> Self {
         let mut recv_buf = Vec::with_capacity(MAX_RECV_SIZE);
         unsafe {
             recv_buf.set_len(MAX_RECV_SIZE);
@@ -536,11 +542,13 @@ impl Stream {
             recv_size: 0,
             temp_recv_buf_offset: 0,
             recv_comings: recv_comings,
-            recv_start_time: None,
+            recv_timer: None,
             temp_recv_buf: None,
 
             recv_callback: None,
             close_callback: None,
+
+            net_timers: net_timers,
         }
     }
 
@@ -566,7 +574,7 @@ impl Stream {
                 "Recive callback can't set twice",
             ))));
         }
-
+        
         self.temp_recv_buf = None;
         self.temp_recv_buf_offset = 0;
 
@@ -597,10 +605,12 @@ impl Stream {
             self.recv_callback_offset = 0;
             self.recv_buf_offset = len;
         }
-
+        let timeout = self.recv_timeout.unwrap();
+        let timer = NetTimer::new();
+        timer.set_timeout(timeout, self.token);
         self.recv_size = size;
         self.recv_callback = Some(func);
-        self.recv_start_time = Some(Instant::now());
+        self.recv_timer = Some(timer);
         self.recv_comings.write().unwrap().push(self.token);
 
         return None;
