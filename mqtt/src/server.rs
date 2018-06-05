@@ -49,7 +49,7 @@ pub struct ClientStub {
     socket: Socket,
     _keep_alive: u16,
     _last_will: Option<mqtt3::LastWill>,
-    attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>, //TODO Arc<RwLock<<FnvHashMap<Atom, Arc<Vec<u8>>>>
+    attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>,
 }
 
 struct ServerNodeImpl {

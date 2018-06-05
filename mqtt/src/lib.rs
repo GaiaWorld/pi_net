@@ -16,4 +16,4 @@ mod util;
 pub use client::ClientNode;
 pub use data::{Client, Server};
 pub use mqtt3::{LastWill, QoS};
-pub use server::ServerNode;
+pub use server::{ServerNode, ClientStub};
