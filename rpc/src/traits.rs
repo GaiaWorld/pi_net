@@ -1,8 +1,9 @@
 use mqtt::{ServerNode};
 use string_cache::DefaultAtom as Atom;
-use handler::TopicHandler;
+use handler::TopicHandle;
 
 use std::io::{Result};
+use std::sync::{Arc};
 
 pub trait RPCClient {
     // 最终变为：$r，payload: params
@@ -16,7 +17,7 @@ pub trait RPCServer {
     // $r 回应
     // 最终变为：$q，payload; 返回值, $r/$id
     // 
-    fn register_sync(&mut self, topic: Atom, func: TopicHandler) -> Result<()>;
+    fn register(&mut self, topic: Atom, sync: bool, func: Arc<TopicHandle>) -> Result<()>;
     
     // fn register_async(func_name: Atom, fn: Box<Fn(&[u8], Arc<Fn(&[u8])>>));
     

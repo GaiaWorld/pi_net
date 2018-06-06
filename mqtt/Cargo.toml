@@ -9,3 +9,4 @@ mqtt3 = { git = "https://github.com/tekjar/mqtt3" }
 string_cache = "0.7.2"
 fnv = "1.0.6"
 net = {path="../net"}
+magnetic = "2.0.0"

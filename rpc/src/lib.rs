@@ -7,8 +7,7 @@ extern crate net;
 extern crate mqtt;
 extern crate string_cache;
 extern crate fnv;
-extern crate pi_vm;
-extern crate pi_db;
+
 
 mod util;
 mod handler;

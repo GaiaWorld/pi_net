@@ -7,6 +7,7 @@ extern crate net;
 extern crate rand;
 extern crate string_cache;
 extern crate fnv;
+extern crate magnetic;
 
 mod client;
 mod data;

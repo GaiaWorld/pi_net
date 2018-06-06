@@ -2,6 +2,11 @@ use std::io::{Error, ErrorKind, Result};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 
+use magnetic::mpsc::mpsc_queue;
+use magnetic::buffer::dynamic::DynamicBuffer;
+use magnetic::{Producer, Consumer};
+use magnetic::mpsc::{MPSCProducer, MPSCConsumer};
+
 use data::Server;
 use mqtt3::{self, Packet};
 use net::{Socket, Stream};
@@ -22,7 +27,7 @@ pub struct TopicMeta {
     // 如果有唯一键，需要到ClientStub去找值
     only_one_key: Option<Atom>,
     // 对应的应用层回调 
-    publish_func: Box<Fn(Arc<ClientStub>, Result<Arc<Vec<u8>>>)>,
+    publish_func: Box<Fn(ClientStub, Result<Arc<Vec<u8>>>)>,
 }
 
 /// 订阅的主题
@@ -43,11 +48,14 @@ struct RetainTopic {
     retain_msg: Option<Vec<u8>>,
 }
 
+#[derive(Clone)]
 pub struct ClientStub {
     socket: Socket,
     _keep_alive: u16,
     _last_will: Option<mqtt3::LastWill>,
     attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>,
+    queue: Arc<(MPSCProducer<Vec<u8>, DynamicBuffer<Vec<u8>>>, MPSCConsumer<Vec<u8>, DynamicBuffer<Vec<u8>>>)>,
+    queue_size: u8,
 }
 
 struct ServerNodeImpl {
@@ -105,7 +113,7 @@ impl Server for ServerNode {
         can_publish: bool,
         can_subscribe: bool,
         only_one_key: Option<Atom>,
-        handler: Box<Fn(Arc<ClientStub>, Result<Arc<Vec<u8>>>)>,
+        handler: Box<Fn(ClientStub, Result<Arc<Vec<u8>>>)>,
     ) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
         let topic = mqtt3::TopicPath::from_str(&name);
@@ -215,6 +223,8 @@ fn recv_connect(
                 _keep_alive: connect.keep_alive,
                 _last_will: connect.last_will,
                 attributes: Arc::new(RwLock::new(att)),
+                queue: Arc::new(mpsc_queue(DynamicBuffer::new(32).unwrap())),
+                queue_size: 0,
             }),
         );
         //创建$r/$id
@@ -406,6 +416,7 @@ fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish, socke
     for (_, meta) in node.metas.iter() {
         if meta.topic.is_match(&topic) {
             let client_stub = node.clients.get(&socket.socket).unwrap();
+            let client_stub = &*client_stub.clone();
             (meta.publish_func)(client_stub.clone(), Ok(publish.payload.clone()));
         }
     }
