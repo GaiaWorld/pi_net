@@ -71,10 +71,9 @@ pub fn start_server() -> NetManager {
     let mgr = NetManager::new();
     let config = Config {
         protocol: Protocol::TCP,
-        server_addr: None,
+        addr: "127.0.0.1:1234".parse().unwrap(),
     };
 
-    let addr = "127.0.0.1:1234".parse().unwrap();
-    mgr.bind(addr, config, Box::new(|peer, addr| handle_bind(peer, addr)));
+    mgr.bind(config, Box::new(|peer, addr| handle_bind(peer, addr)));
     return mgr;
 }

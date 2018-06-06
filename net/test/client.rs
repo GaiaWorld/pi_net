@@ -78,7 +78,7 @@ pub fn start_client() -> NetManager {
     let mgr = NetManager::new();
     let config = Config {
         protocol: Protocol::TCP,
-        server_addr: Some("127.0.0.1:1234".parse().unwrap()),
+        addr: "127.0.0.1:1234".parse().unwrap(),
     };
     mgr.connect(config, Box::new(|peer, addr| handle_connect(peer, addr)));
 
