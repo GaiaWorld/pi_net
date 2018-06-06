@@ -1,6 +1,7 @@
 use std::io::{Error, ErrorKind, Result};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
+use std::sync::atomic::AtomicUsize;
 
 use magnetic::mpsc::mpsc_queue;
 use magnetic::buffer::dynamic::DynamicBuffer;
@@ -55,7 +56,7 @@ pub struct ClientStub {
     _last_will: Option<mqtt3::LastWill>,
     attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>,
     queue: Arc<(MPSCProducer<Vec<u8>, DynamicBuffer<Vec<u8>>>, MPSCConsumer<Vec<u8>, DynamicBuffer<Vec<u8>>>)>,
-    queue_size: u8,
+    queue_size: Arc<AtomicUsize>,
 }
 
 struct ServerNodeImpl {
@@ -224,7 +225,7 @@ fn recv_connect(
                 _last_will: connect.last_will,
                 attributes: Arc::new(RwLock::new(att)),
                 queue: Arc::new(mpsc_queue(DynamicBuffer::new(32).unwrap())),
-                queue_size: 0,
+                queue_size: Arc::new(AtomicUsize::new(0)),
             }),
         );
         //创建$r/$id

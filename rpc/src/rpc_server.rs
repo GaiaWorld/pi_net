@@ -91,8 +91,13 @@ impl RPCServer for RpcServer {
                 }
                 _ => rdata.extend_from_slice(&data[5..]),
             }
+            if sync {
+                topic_handle.handle(topic2.clone(), vsn, Arc::new(session), Arc::new(rdata));
+            } else {
+                // client.
+            }
 
-            topic_handle.handle(topic2.clone(), vsn, Arc::new(session), Arc::new(rdata));
+            
         };
         match self.mqtt.set_topic_meta(
             topic,

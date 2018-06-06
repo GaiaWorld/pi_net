@@ -9,10 +9,8 @@ extern crate string_cache;
 extern crate fnv;
 
 
-mod util;
-mod handler;
-mod traits;
-mod rpc_server;
-
-pub use util::*;
+pub mod util;
+pub mod handler;
+pub mod traits;
+pub mod rpc_server;
 
