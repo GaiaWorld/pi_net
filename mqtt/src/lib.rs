@@ -13,6 +13,8 @@ mod client;
 mod data;
 mod server;
 mod util;
+pub mod handler;
+pub mod session;
 
 pub use client::ClientNode;
 pub use data::{Client, Server};

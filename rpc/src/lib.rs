@@ -10,7 +10,6 @@ extern crate fnv;
 
 
 pub mod util;
-pub mod handler;
 pub mod traits;
 pub mod rpc_server;
 

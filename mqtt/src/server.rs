@@ -1,7 +1,7 @@
 use std::io::{Error, ErrorKind, Result};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use magnetic::mpsc::mpsc_queue;
 use magnetic::buffer::dynamic::DynamicBuffer;
@@ -14,6 +14,7 @@ use net::{Socket, Stream};
 use string_cache::DefaultAtom as Atom;
 use util;
 use fnv::FnvHashMap;
+use handler::TopicHandle;
 
 pub struct ServerNode(Arc<Mutex<ServerNodeImpl>>);
 
@@ -55,7 +56,7 @@ pub struct ClientStub {
     _keep_alive: u16,
     _last_will: Option<mqtt3::LastWill>,
     attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>,
-    queue: Arc<(MPSCProducer<Vec<u8>, DynamicBuffer<Vec<u8>>>, MPSCConsumer<Vec<u8>, DynamicBuffer<Vec<u8>>>)>,
+    queue: Arc<(MPSCProducer<Arc<TopicHandle>, DynamicBuffer<Arc<TopicHandle>>>, MPSCConsumer<Arc<TopicHandle>, DynamicBuffer<Arc<TopicHandle>>>)>,
     queue_size: Arc<AtomicUsize>,
 }
 
@@ -69,6 +70,15 @@ struct ServerNodeImpl {
 
 unsafe impl Sync for ServerNodeImpl {}
 unsafe impl Send for ServerNodeImpl {}
+
+impl ClientStub {
+    pub fn get_queue_size(&self) -> usize {
+        self.queue_size.load(Ordering::Relaxed)
+    }
+    pub fn queue_producer(&self, val: usize) {
+        self.queue_size.store(val, Ordering::Relaxed)
+    }
+}
 
 impl ServerNode {
     pub fn new() -> ServerNode {

@@ -1,6 +1,6 @@
 extern crate rpc;
 
-use rpc::{CompressLevel, compress, uncompress};
+use rpc::util::{CompressLevel, compress, uncompress};
 
 #[test]
 fn test_lz4() {

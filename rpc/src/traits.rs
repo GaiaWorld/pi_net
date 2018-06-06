@@ -1,6 +1,7 @@
 use mqtt::{ServerNode};
+use mqtt::handler::TopicHandle;
+
 use string_cache::DefaultAtom as Atom;
-use handler::TopicHandle;
 
 use std::io::{Result};
 use std::sync::{Arc};
