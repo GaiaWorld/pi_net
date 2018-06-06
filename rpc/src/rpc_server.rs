@@ -1,17 +1,18 @@
 use std::io::{Error, Result};
 /**
  * RPC传输协议：
- * 消息体：1字节表示压缩和版本, 1字节超时时长（0表示不超时），4字节消息ID，剩下的BonBuffer
+ * 消息体：1字节表示压缩和版本,4字节消息ID，剩下的BonBuffer ,1字节超时时长（0表示不超时)
  * 第一字节：前3位表示压缩算法，后5位表示版本（灰度）
  * 压缩算法：0：不压缩，1：rsync, 2:LZ4 BLOCK, 3:LZ4 SEREAM, 4、5、6、7预留
  */
 use std::sync::{Arc, RwLock};
+use std::time::SystemTime;
 
 use fnv::FnvHashMap;
 use string_cache::DefaultAtom as Atom;
 
 use mqtt::{ClientStub, Server, ServerNode as MQTT};
-use mqtt::session::Session;
+use mqtt::session::{Session, LZ4_BLOCK, UNCOMPRESS};
 use mqtt::handler::TopicHandle;
 
 use traits::RPCServer;
@@ -44,28 +45,32 @@ impl RPCServer for RpcServer {
         let rpc_handle = move |client: ClientStub, r: Result<Arc<Vec<u8>>>| {
             let data = r.unwrap();
             let header = data[0];
+            //压缩版本
             let compress = (&header >> 5) as u8;
+            //消息版本
             let vsn = &header & 0b11111;
-
             let mut session = Session::new(client.clone(), sync);
             let uid = data[1..4].as_ptr();
             session.msg_id = Some(u32::from_be(unsafe { *(uid as *mut u32) }));
+            let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+            session.timeout = (data[5] as usize) + (now as usize);
             let mut rdata = Vec::new();
             match compress {
-                2 => {
+                LZ4_BLOCK => {
                     let mut vec_ = Vec::new();
-                    uncompress(&data[5..], &mut vec_).is_ok();
+                    uncompress(&data[6..], &mut vec_).is_ok();
                     rdata.extend_from_slice(&vec_[..]);
                 }
                 _ => rdata.extend_from_slice(&data[5..]),
             }
             if sync {
                 topic_handle.handle(topic2.clone(), vsn, Arc::new(session), Arc::new(rdata));
-            } else if client.get_queue_size() > 0 {
-                
+            } else if client.get_queue_size() == 0 {
+                topic_handle.handle(topic2.clone(), vsn, Arc::new(session), Arc::new(rdata));
+                client.queue_push(topic_handle.clone());
+            } else {
+                client.queue_push(topic_handle.clone());
             }
-
-            
         };
         match self.mqtt.set_topic_meta(
             topic,

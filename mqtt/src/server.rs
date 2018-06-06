@@ -75,8 +75,17 @@ impl ClientStub {
     pub fn get_queue_size(&self) -> usize {
         self.queue_size.load(Ordering::Relaxed)
     }
-    pub fn queue_producer(&self, val: usize) {
-        self.queue_size.store(val, Ordering::Relaxed)
+    pub fn queue_push(&self, handle: Arc<TopicHandle>) {
+        self.queue.0.push(handle).is_ok();
+        self.queue_size.store(self.get_queue_size() + 1, Ordering::Relaxed)
+    }
+    pub fn queue_pop(&self) -> Option<Arc<TopicHandle>> {
+        if self.get_queue_size() > 0 {
+            let v = self.queue.1.pop().unwrap();
+            self.queue_size.store(self.get_queue_size() - 1, Ordering::Relaxed);
+            return Some(v)
+        }
+        None
     }
 }
 

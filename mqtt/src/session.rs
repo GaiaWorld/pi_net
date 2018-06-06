@@ -4,11 +4,17 @@ use std::sync::{Arc};
 use server::{ClientStub};
 use string_cache::DefaultAtom as Atom;
 
+//LZ4_BLOCK 压缩
+pub const LZ4_BLOCK: u8 = 2;
+//不压缩
+pub const UNCOMPRESS: u8 = 0;
+
 #[derive(Clone)]
 pub struct Session {
     pub client: ClientStub,
     pub msg_id: Option<u32>,
     pub seq: bool,
+    pub timeout: usize,
 }
 
 //会话
@@ -18,15 +24,18 @@ impl Session {
             client,
             msg_id: None,
             seq,
+            timeout: 0,
         }
     }
 
     //发布消息
     pub fn send(&self, topic: Atom, msg: Vec<u8>) -> Result<()> {
         // let mut body;
+        // let mut compress = UNCOMPRESS;
         // if msg.len() > 64 {
-
+        //     compress = LZ4_BLOCK
         // }
+
         Ok(())
     }
     //获取会话表数据
