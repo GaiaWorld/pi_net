@@ -42,7 +42,7 @@ pub trait Client {
     // 给服务器发送数据
     fn publish(&mut self, retain: bool, qos: QoS, topic: Atom, payload: Vec<u8>) -> Result<()>;
 
-    fn set_topic_handler(&mut self, name: Atom, handler: Box<Fn(Result<&[u8]>)>) -> Result<()>;
+    fn set_topic_handler(&mut self, name: Atom, handler: Box<Fn(Result<(Socket, &[u8])>)>) -> Result<()>;
 
     fn remove_topic_handler(&mut self, name: Atom) -> Result<()>;
 

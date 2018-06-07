@@ -1,4 +1,3 @@
-use mqtt::server::{ServerNode};
 use mqtt::handler::TopicHandle;
 
 use pi_lib::atom::Atom;
@@ -8,7 +7,7 @@ use std::sync::{Arc};
 
 pub trait RPCClientTraits {
     // 最终变为：$r，payload: params
-    fn request(func_name: Atom, params: &[u8], resp: Fn(&[u8]));
+    fn request(&mut self, func_name: Atom, msg: Vec<u8>, resp: Box<Fn(Arc<Vec<u8>>)>, timeout: u8);
     
     //订阅$r/#
 }

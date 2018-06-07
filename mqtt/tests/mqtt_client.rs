@@ -26,7 +26,7 @@ fn handle_mqtt(client: &mut ClientNode) {
     subscribe.push((String::from("a/b/c"), QoS::AtMostOnce));
     client.set_topic_handler(
         Atom::from(String::from("a/b/c").as_str()),
-        Box::new(|r| println!("subscribe ok!!!!!!! r:{:?}", r.unwrap())),
+        Box::new(|r| println!("subscribe ok!!!!!!! r:{:?}", r.unwrap().1)),
     );
     //订阅主题
     match client.subscribe(

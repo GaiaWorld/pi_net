@@ -1,10 +1,9 @@
-use std::io::Result;
 use std::sync::Arc;
-use mqtt3::{self, Packet};
+use mqtt3::{self};
 
 use server::ClientStub;
 use pi_lib::atom::Atom;
-use pi_base::util::{compress, uncompress, CompressLevel};
+use pi_base::util::{compress, CompressLevel};
 use util;
 
 //LZ4_BLOCK 压缩
@@ -32,7 +31,7 @@ impl Session {
     }
 
     //发送消息
-    pub fn send(&self, topic: Atom, msg: Vec<u8>) {
+    pub fn send(&self, _topic: Atom, msg: Vec<u8>) {
         let mut buff: Vec<u8> = vec![];
         let msg_size = msg.len();
         let msg_id = self.msg_id;
@@ -58,7 +57,7 @@ impl Session {
         //剩下的消息体
         buff.extend_from_slice(body.as_slice());
 
-        let t = mqtt3::TopicPath::from_str((*topic).clone().as_str());
+        let t = mqtt3::TopicPath::from_str(String::from("$r").as_str());
         //发送数据
         util::send_publish(
             &self.client.get_socket(),

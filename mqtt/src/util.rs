@@ -180,34 +180,34 @@ fn recv_pack(
     }
 }
 
-fn get_recv_size(pack: &[u8]) -> Result<usize> {
-    let mut mult: usize = 1;
-    let mut len: usize = 0;
-    let mut done = false;
+// fn get_recv_size(pack: &[u8]) -> Result<usize> {
+//     let mut mult: usize = 1;
+//     let mut len: usize = 0;
+//     let mut done = false;
 
-    const MULTIPLIER: usize = 0x80 * 0x80 * 0x80 * 0x80;
+//     const MULTIPLIER: usize = 0x80 * 0x80 * 0x80 * 0x80;
 
-    let mut i = 1;
-    while !done && i < pack.len() {
-        len += mult * (pack[i] & 0x7F) as usize;
-        mult *= 0x80;
-        if mult > MULTIPLIER {
-            return Err(Error::new(ErrorKind::Other, "mult > MULTIPLIER"));
-        }
+//     let mut i = 1;
+//     while !done && i < pack.len() {
+//         len += mult * (pack[i] & 0x7F) as usize;
+//         mult *= 0x80;
+//         if mult > MULTIPLIER {
+//             return Err(Error::new(ErrorKind::Other, "mult > MULTIPLIER"));
+//         }
 
-        done = (pack[i] & 0x80) == 0;
-        i += 1;
-    }
-    if i <= pack.len() {
-        let mut r = 0;
-        if len > pack.len() - i {
-            r = len - (pack.len() - i);
-        }
-        return Ok(r);
-    } else {
-        return Err(Error::new(ErrorKind::Other, "i < pack.len()"));
-    }
-}
+//         done = (pack[i] & 0x80) == 0;
+//         i += 1;
+//     }
+//     if i <= pack.len() {
+//         let mut r = 0;
+//         if len > pack.len() - i {
+//             r = len - (pack.len() - i);
+//         }
+//         return Ok(r);
+//     } else {
+//         return Err(Error::new(ErrorKind::Other, "i < pack.len()"));
+//     }
+// }
 
 fn if_ack_size(pack: &[u8]) -> Result<isize> {
     let mut mult: usize = 1;

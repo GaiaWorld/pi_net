@@ -3,6 +3,7 @@
 
 extern crate net;
 extern crate mqtt;
+extern crate mqtt3;
 extern crate fnv;
 extern crate pi_base;
 extern crate pi_lib;

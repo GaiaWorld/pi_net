@@ -7,5 +7,6 @@ authors = ["moyy <moyy@yineng.com>"]
 fnv = "1.0.6"
 net = {path="../net"}
 mqtt = {path="../mqtt"}
+mqtt3 = { git = "https://github.com/tekjar/mqtt3" }
 pi_base = {path="../../pi_base"}
 pi_lib = {path="../../pi_lib"}

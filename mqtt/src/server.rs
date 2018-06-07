@@ -14,7 +14,6 @@ use net::{Socket, Stream};
 use pi_lib::atom::Atom;
 use util;
 use fnv::FnvHashMap;
-use handler::TopicHandle;
 
 pub struct ServerNode(Arc<Mutex<ServerNodeImpl>>);
 
