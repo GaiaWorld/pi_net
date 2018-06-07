@@ -11,7 +11,7 @@ use magnetic::mpsc::{MPSCProducer, MPSCConsumer};
 use data::Server;
 use mqtt3::{self, Packet};
 use net::{Socket, Stream};
-use string_cache::DefaultAtom as Atom;
+use pi_lib::atom::Atom;
 use util;
 use fnv::FnvHashMap;
 use handler::TopicHandle;
@@ -137,7 +137,7 @@ impl Server for ServerNode {
         handler: Box<Fn(ClientStub, Result<Arc<Vec<u8>>>)>,
     ) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
-        let topic = mqtt3::TopicPath::from_str(&name);
+        let topic = mqtt3::TopicPath::from_str((*name).clone().as_str());
         if topic.is_err() {
             return Err(Error::new(
                 ErrorKind::Other,
@@ -250,7 +250,7 @@ fn recv_connect(
         );
         //创建$r/$id
         let name = Atom::from(String::from("$r/") + &socket.socket.to_string());
-        let topic = mqtt3::TopicPath::from_str(&name);
+        let topic = mqtt3::TopicPath::from_str((*name).clone().as_str());
         let topic = topic.unwrap();
         node.metas.insert(
             name,
@@ -351,7 +351,7 @@ fn recv_sub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) -> mqtt3::Su
     }
 
     {
-        let mtopic = mqtt3::TopicPath::from_str(topic_atom).unwrap();
+        let mtopic = mqtt3::TopicPath::from_str((*topic_atom).clone().as_str()).unwrap();
         // 发布保留主题
         for (_, curr) in node.retain_topics.iter() {
             if mtopic.is_match(&curr.path) {
@@ -464,7 +464,7 @@ fn publish_impl(
         return Err(Error::new(ErrorKind::Other, "publish impl, invalid qos"));
     }
 
-    let t = mqtt3::TopicPath::from_str(&topic);
+    let t = mqtt3::TopicPath::from_str((*topic).clone().as_str());
     if t.is_err() {
         return Err(Error::new(ErrorKind::Other, "publish impl, invalid topic"));
     }

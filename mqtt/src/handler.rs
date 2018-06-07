@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use string_cache::DefaultAtom as Atom;
+use pi_lib::atom::Atom;
 use session::Session;
 
 /*

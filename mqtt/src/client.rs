@@ -10,7 +10,7 @@ use net::{Socket, Stream};
 use util;
 use fnv::FnvHashMap;
 
-use string_cache::DefaultAtom as Atom;
+use pi_lib::atom::Atom;
 
 pub struct ClientNodeImpl {
     socket: Option<Socket>,
@@ -233,12 +233,12 @@ impl Client for ClientNode {
     fn set_topic_handler(&mut self, name: Atom, handler: Box<Fn(Result<&[u8]>)>) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
         let topic;
-        match mqtt3::TopicPath::from_str(&name) {
+        match mqtt3::TopicPath::from_str((*name).clone().as_str()) {
             Ok(t) => topic = t,
             Err(_) => {
                 return Err(Error::new(
                     ErrorKind::Other,
-                    format!("InvalidTopic, {}", name),
+                    format!("InvalidTopic, {}", *name),
                 ))
             }
         }
@@ -263,12 +263,12 @@ impl Client for ClientNode {
     fn remove_topic_handler(&mut self, name: Atom) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
         let topic;
-        match mqtt3::TopicPath::from_str(&name) {
+        match mqtt3::TopicPath::from_str((*name).clone().as_str()) {
             Ok(t) => topic = t,
             Err(_) => {
                 return Err(Error::new(
                     ErrorKind::Other,
-                    format!("InvalidTopic, {}", name),
+                    format!("InvalidTopic, {}", *name),
                 ))
             }
         }

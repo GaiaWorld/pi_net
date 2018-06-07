@@ -9,17 +9,18 @@ use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
 use fnv::FnvHashMap;
-use string_cache::DefaultAtom as Atom;
+use pi_lib::atom::Atom;
 
-use mqtt::{ClientStub, Server, ServerNode as MQTT};
+use mqtt::server::{ServerNode, ClientStub};
 use mqtt::session::{Session, LZ4_BLOCK, UNCOMPRESS};
 use mqtt::handler::TopicHandle;
+use mqtt::data::Server;
 
 use traits::RPCServer;
 use pi_base::util::{compress, uncompress, CompressLevel};
 
 pub struct RpcServer {
-    mqtt: MQTT,
+    mqtt: ServerNode,
 }
 
 // enum Compress {
@@ -32,7 +33,7 @@ pub struct RpcServer {
 
 
 impl RpcServer {
-    pub fn new(mqtt: MQTT) -> Self {
+    pub fn new(mqtt: ServerNode) -> Self {
         RpcServer { mqtt }
     }
 }

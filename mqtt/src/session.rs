@@ -3,7 +3,7 @@ use std::sync::Arc;
 use mqtt3::{self, Packet};
 
 use server::ClientStub;
-use string_cache::DefaultAtom as Atom;
+use pi_lib::atom::Atom;
 use pi_base::util::{compress, uncompress, CompressLevel};
 use util;
 
@@ -60,7 +60,7 @@ impl Session {
         //剩下的消息体
         buff.extend_from_slice(body.as_slice());
 
-        let t = mqtt3::TopicPath::from_str(&topic);
+        let t = mqtt3::TopicPath::from_str((*topic).clone().as_str());
         //发送数据
         util::send_publish(
             &self.client.socket.clone(),
