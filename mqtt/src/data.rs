@@ -7,7 +7,7 @@ use mqtt3::{LastWill, QoS};
 use net::{Socket, Stream};
 use server::{ClientStub};
 
-use string_cache::DefaultAtom as Atom;
+use pi_lib::atom::Atom;
 
 pub type ClientCallback = Box<FnBox(Result<()>)>;
 
