@@ -8,6 +8,7 @@ extern crate rand;
 extern crate string_cache;
 extern crate fnv;
 extern crate magnetic;
+extern crate pi_base;
 
 mod client;
 mod data;

@@ -52,11 +52,12 @@ struct RetainTopic {
 
 #[derive(Clone)]
 pub struct ClientStub {
-    socket: Socket,
+    pub socket: Socket,
     _keep_alive: u16,
     _last_will: Option<mqtt3::LastWill>,
-    attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>,
-    queue: Arc<(MPSCProducer<Arc<TopicHandle>, DynamicBuffer<Arc<TopicHandle>>>, MPSCConsumer<Arc<TopicHandle>, DynamicBuffer<Arc<TopicHandle>>>)>,
+    pub attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>,
+    // queue: Arc<(MPSCProducer<Arc<TopicHandle>, DynamicBuffer<Arc<TopicHandle>>>, MPSCConsumer<Arc<TopicHandle>, DynamicBuffer<Arc<TopicHandle>>>)>,
+    queue: Arc<(MPSCProducer<Arc<Fn()>, DynamicBuffer<Arc<Fn()>>>, MPSCConsumer<Arc<Fn()>, DynamicBuffer<Arc<Fn()>>>)>,
     queue_size: Arc<AtomicUsize>,
 }
 
@@ -75,11 +76,11 @@ impl ClientStub {
     pub fn get_queue_size(&self) -> usize {
         self.queue_size.load(Ordering::Relaxed)
     }
-    pub fn queue_push(&self, handle: Arc<TopicHandle>) {
+    pub fn queue_push(&self, handle: Arc<Fn()>) {
         self.queue.0.push(handle).is_ok();
         self.queue_size.store(self.get_queue_size() + 1, Ordering::Relaxed)
     }
-    pub fn queue_pop(&self) -> Option<Arc<TopicHandle>> {
+    pub fn queue_pop(&self) -> Option<Arc<Fn()>> {
         if self.get_queue_size() > 0 {
             let v = self.queue.1.pop().unwrap();
             self.queue_size.store(self.get_queue_size() - 1, Ordering::Relaxed);
