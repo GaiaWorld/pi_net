@@ -52,10 +52,10 @@ struct RetainTopic {
 
 #[derive(Clone)]
 pub struct ClientStub {
-    pub socket: Socket,
+    socket: Socket,
     _keep_alive: u16,
     _last_will: Option<mqtt3::LastWill>,
-    pub attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>,
+    attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>,
     // queue: Arc<(MPSCProducer<Arc<TopicHandle>, DynamicBuffer<Arc<TopicHandle>>>, MPSCConsumer<Arc<TopicHandle>, DynamicBuffer<Arc<TopicHandle>>>)>,
     queue: Arc<(MPSCProducer<Arc<Fn()>, DynamicBuffer<Arc<Fn()>>>, MPSCConsumer<Arc<Fn()>, DynamicBuffer<Arc<Fn()>>>)>,
     queue_size: Arc<AtomicUsize>,
@@ -87,6 +87,12 @@ impl ClientStub {
             return Some(v)
         }
         None
+    }
+    pub fn get_socket(&self) -> Socket {
+        self.socket.clone()
+    }
+    pub fn get_attributes(&self) -> Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>> {
+        self.attributes.clone()
     }
 }
 

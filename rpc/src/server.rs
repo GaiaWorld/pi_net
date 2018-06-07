@@ -16,10 +16,10 @@ use mqtt::session::{Session, LZ4_BLOCK, UNCOMPRESS};
 use mqtt::handler::TopicHandle;
 use mqtt::data::Server;
 
-use traits::RPCServer;
+use traits::RPCServerTraits;
 use pi_base::util::{compress, uncompress, CompressLevel};
 
-pub struct RpcServer {
+pub struct RPCServer {
     mqtt: ServerNode,
 }
 
@@ -32,15 +32,15 @@ pub struct RpcServer {
 
 
 
-impl RpcServer {
+impl RPCServer {
     pub fn new(mqtt: ServerNode) -> Self {
-        RpcServer { mqtt }
+        RPCServer { mqtt }
     }
 }
 
 
 
-impl RPCServer for RpcServer {
+impl RPCServerTraits for RPCServer {
     fn register(&mut self, topic: Atom, sync: bool, topic_handle: Arc<TopicHandle>) -> Result<()> {
         let topic2 = topic.clone();
         let rpc_handle = move |client: ClientStub, r: Result<Arc<Vec<u8>>>| {
@@ -50,19 +50,19 @@ impl RPCServer for RpcServer {
             let compress = (&header >> 5) as u8;
             //消息版本
             let vsn = &header & 0b11111;
-            let mut session = Session::new(client.clone(), sync);
             let uid = data[1..4].as_ptr();
-            session.msg_id = Some(u32::from_be(unsafe { *(uid as *mut u32) }));
+            let mut session = Session::new(client.clone(), sync, u32::from_be(unsafe { *(uid as *mut u32) }));
             let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
-            session.timeout = (data[5] as usize, now as usize);
+            session.set_timeout(now as usize, data[5]);
             let mut rdata = Vec::new();
             match compress {
+                UNCOMPRESS => rdata.extend_from_slice(&data[5..]),
                 LZ4_BLOCK => {
                     let mut vec_ = Vec::new();
                     uncompress(&data[6..], &mut vec_).is_ok();
                     rdata.extend_from_slice(&vec_[..]);
-                }
-                _ => rdata.extend_from_slice(&data[5..]),
+                },
+                _ => session.close(),
             }
             let session = Arc::new(session);
             let rdata = Arc::new(rdata);

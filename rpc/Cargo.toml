@@ -4,7 +4,6 @@ version = "0.1.0"
 authors = ["moyy <moyy@yineng.com>"]
 
 [dependencies]
-string_cache = "0.7.2"
 fnv = "1.0.6"
 net = {path="../net"}
 mqtt = {path="../mqtt"}
