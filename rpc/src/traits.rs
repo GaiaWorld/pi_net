@@ -7,7 +7,7 @@ use std::sync::{Arc};
 
 pub trait RPCClientTraits {
     // 最终变为：$r，payload: params
-    fn request(&mut self, func_name: Atom, msg: Vec<u8>, resp: Box<Fn(Arc<Vec<u8>>)>, timeout: u8);
+    fn request(&mut self, func_name: Atom, msg: Vec<u8>, resp: Box<Fn(Result<Arc<Vec<u8>>>)>, timeout: u8);
     
     //订阅$r/#
 }

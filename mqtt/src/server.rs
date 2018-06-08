@@ -14,6 +14,7 @@ use net::{Socket, Stream};
 use pi_lib::atom::Atom;
 use util;
 use fnv::FnvHashMap;
+use session;
 
 pub struct ServerNode(Arc<Mutex<ServerNodeImpl>>);
 
@@ -242,31 +243,24 @@ fn recv_connect(
 
         let node = &mut node.lock().unwrap();
         let s = socket.clone();
-        node.clients.insert(
-            socket.socket,
-            Arc::new(ClientStub {
+        let client_stub = Arc::new(ClientStub {
                 socket: s,
                 _keep_alive: connect.keep_alive,
                 _last_will: connect.last_will,
                 attributes: Arc::new(RwLock::new(att)),
                 queue: Arc::new(mpsc_queue(DynamicBuffer::new(32).unwrap())),
                 queue_size: Arc::new(AtomicUsize::new(0)),
-            }),
-        );
-        //创建$r/$id
-        let name = Atom::from(String::from("$r/") + &socket.socket.to_string());
-        let topic = mqtt3::TopicPath::from_str((*name).clone().as_str());
-        let topic = topic.unwrap();
-        node.metas.insert(
-            name,
-            Arc::new(TopicMeta {
-                topic,
-                can_publish: false,
-                can_subscribe: false,
-                only_one_key: None,
-                publish_func: Box::new(|_attr, _result| {}),
-            }),
-        );
+            });
+        node.clients.insert(
+            socket.socket,
+            client_stub.clone()
+            );
+        //模拟客户端发送主题消息
+        let name = Atom::from(String::from("$open"));
+        if let Some(meta) = node.metas.get(&name) {
+                let client_stub = &*client_stub.clone();
+                (meta.publish_func)(client_stub.clone(), Ok(Arc::new(session::encode(0, 10, vec![]))));
+        }
     }
     util::send_connack(socket, code);
 }
@@ -456,6 +450,13 @@ fn recv_pingreq(_node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket) {
 fn recv_disconnect(node: Arc<Mutex<ServerNodeImpl>>, cid: usize) {
     let node = &mut node.lock().unwrap();
     node.clients.remove(&cid);
+    //模拟客户端发送主题消息
+    let name = Atom::from(String::from("$close"));
+    if let Some(meta) = node.metas.get(&name) {
+        let client_stub = node.clients.get(&cid).unwrap();
+        let client_stub = &*client_stub.clone();
+        (meta.publish_func)(client_stub.clone(), Ok(Arc::new(session::encode(0, 10, vec![]))));
+    }
 }
 
 fn publish_impl(

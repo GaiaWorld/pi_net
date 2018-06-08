@@ -5,7 +5,7 @@ use std::io::{Result};
  * 第一字节：前3位表示压缩算法，后5位表示版本（灰度）
  * 压缩算法：0：不压缩，1：rsync, 2:LZ4 BLOCK, 3:LZ4 SEREAM, 4、5、6、7预留
  */
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 
 use fnv::FnvHashMap;
 use pi_lib::atom::Atom;
@@ -26,7 +26,7 @@ use traits::RPCClientTraits;
 pub struct RPCClient {
     mqtt: ClientNode,
     msg_id: u32,
-    handlers: Arc<RwLock<FnvHashMap<u32, Box<Fn(Arc<Vec<u8>>)>>>>,
+    handlers: Arc<Mutex<FnvHashMap<u32, Box<Fn(Result<Arc<Vec<u8>>>)>>>>,
 }
 
 impl RPCClient {
@@ -34,13 +34,13 @@ impl RPCClient {
         RPCClient {
             mqtt,
             msg_id: 0,
-            handlers: Arc::new(RwLock::new(FnvHashMap::default())),
+            handlers: Arc::new(Mutex::new(FnvHashMap::default())),
         }
     }
     pub fn connect(
         &mut self,
-        keep_alive: u16,
-        will: Option<LastWill>,
+        keep_alive: u16, //ping-pong
+        will: Option<LastWill>, //遗言
         close_func: Option<ClientCallback>,
         connect_func: Option<ClientCallback>,
     ) {
@@ -68,10 +68,10 @@ impl RPCClient {
                 _ => socket.close(true),
             }
             let rdata = Arc::new(rdata);
-            let mut handlers = handlers.write().unwrap();
+            let mut handlers = handlers.lock().unwrap();
             match handlers.get(&msg_id) {
                 Some(func) => {
-                    func(rdata);
+                    func(Ok(rdata));
                 }
                 None => socket.close(true),
             };
@@ -85,7 +85,7 @@ impl RPCClient {
 }
 
 impl RPCClientTraits for RPCClient {
-    fn request(&mut self, func_name: Atom, msg: Vec<u8>, resp: Box<Fn(Arc<Vec<u8>>)>, timeout: u8) {
+    fn request(&mut self, func_name: Atom, msg: Vec<u8>, resp: Box<Fn(Result<Arc<Vec<u8>>>)>, timeout: u8) {
         self.msg_id += 1;
         let socket = self.mqtt.get_socket();
         let mut buff: Vec<u8> = vec![];
@@ -113,7 +113,7 @@ impl RPCClientTraits for RPCClient {
         buff.extend_from_slice(body.as_slice());
         //发布消息
         util::send_publish(&socket, false, mqtt3::QoS::AtMostOnce, &func_name, buff);
-        let mut handlers = self.handlers.write().unwrap();
+        let mut handlers = self.handlers.lock().unwrap();
         handlers.insert(msg_id, resp);
     }
 }
