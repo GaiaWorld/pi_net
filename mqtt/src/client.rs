@@ -41,7 +41,7 @@ unsafe impl Send for ClientNodeImpl {}
 
 struct TopicData {
     topic: mqtt3::TopicPath,
-    func: Box<Fn(Result<&[u8]>)>,
+    func: Box<Fn(Result<(Socket, &[u8])>)>,
 }
 
 impl ClientNode {
@@ -63,6 +63,10 @@ impl ClientNode {
             topic_patterns: FnvHashMap::default(),
             socket_handlers: VecDeque::new(),
         })))
+    }
+    pub fn get_socket(&self) -> Socket {
+        let node = self.0.lock().unwrap();
+        node.socket.clone().unwrap().clone()
     }
 }
 
@@ -230,7 +234,7 @@ impl Client for ClientNode {
         return Ok(());
     }
 
-    fn set_topic_handler(&mut self, name: Atom, handler: Box<Fn(Result<&[u8]>)>) -> Result<()> {
+    fn set_topic_handler(&mut self, name: Atom, handler: Box<Fn(Result<(Socket, &[u8])>)>) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
         let topic;
         match mqtt3::TopicPath::from_str((*name).clone().as_str()) {
@@ -414,13 +418,14 @@ fn recv_publish(node: Arc<Mutex<ClientNodeImpl>>, publish: mqtt3::Publish) {
     }
 
     let atom = Atom::from(publish.topic_name.as_str());
+    let socket = node.socket.clone().unwrap();
     if let Some(data) = node.topics.get(&atom) {
-        (data.func)(Ok(publish.payload.as_slice()));
+        (data.func)(Ok((socket.clone(), publish.payload.as_slice())));
     }
     let publish_topic = publish_topic.unwrap();
     for (_, data) in node.topic_patterns.iter() {
         if data.topic.is_match(&publish_topic) {
-            (data.func)(Ok(publish.payload.as_slice()));
+            (data.func)(Ok((socket.clone(), publish.payload.as_slice())));
         }
     }
 }

@@ -1,7 +1,3 @@
-extern crate net;
-extern crate mqtt;
-extern crate mqtt3;
-extern crate string_cache;
 
 use std::io::Result;
 use std::net::SocketAddr;
@@ -9,9 +5,11 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 
 use net::{Config, NetManager, Protocol, Socket, Stream};
-use mqtt::{ServerNode, Server};
+use mqtt::server::{ServerNode};
+use mqtt::data::Server;
 use mqtt3::{QoS};
-use string_cache::atom::DefaultAtom as Atom;
+
+use pi_lib::atom::Atom;
 
 use std::thread::sleep;
 use std::time::Duration;
