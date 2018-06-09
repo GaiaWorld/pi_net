@@ -29,6 +29,9 @@ pub struct RPCClient {
     handlers: Arc<Mutex<FnvHashMap<u32, Box<Fn(Result<Arc<Vec<u8>>>)>>>>,
 }
 
+unsafe impl Sync for RPCClient {}
+unsafe impl Send for RPCClient {}
+
 impl RPCClient {
     pub fn new(mqtt: ClientNode) -> Self {
         RPCClient {
@@ -85,7 +88,7 @@ impl RPCClient {
 }
 
 impl RPCClientTraits for RPCClient {
-    fn request(&mut self, func_name: Atom, msg: Vec<u8>, resp: Box<Fn(Result<Arc<Vec<u8>>>)>, timeout: u8) {
+    fn request(&mut self, topic: Atom, msg: Vec<u8>, resp: Box<Fn(Result<Arc<Vec<u8>>>)>, timeout: u8) {
         self.msg_id += 1;
         let socket = self.mqtt.get_socket();
         let mut buff: Vec<u8> = vec![];
@@ -112,7 +115,7 @@ impl RPCClientTraits for RPCClient {
         //剩下的消息体
         buff.extend_from_slice(body.as_slice());
         //发布消息
-        util::send_publish(&socket, false, mqtt3::QoS::AtMostOnce, &func_name, buff);
+        util::send_publish(&socket, false, mqtt3::QoS::AtMostOnce, &topic, buff);
         let mut handlers = self.handlers.lock().unwrap();
         handlers.insert(msg_id, resp);
     }
