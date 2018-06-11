@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
 
 use pi_lib::atom::Atom;
 use session::Session;

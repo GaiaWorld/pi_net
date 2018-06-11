@@ -1,7 +1,4 @@
-extern crate mqtt;
-extern crate mqtt3;
-extern crate net;
-extern crate string_cache;
+extern crate pi_lib;
 
 use std::io::Result;
 use std::net::SocketAddr;
@@ -10,8 +7,9 @@ use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
 
-use mqtt::{Client, ClientNode};
-use string_cache::atom::DefaultAtom as Atom;
+use pi_lib::atom::Atom;
+use mqtt::client::{ClientNode};
+use mqtt::data::Client;
 
 use mqtt3::{QoS};
 use net::{Config, NetManager, Protocol, Socket, Stream};
@@ -28,7 +26,7 @@ fn handle_mqtt(client: &mut ClientNode) {
     subscribe.push((String::from("a/b/c"), QoS::AtMostOnce));
     client.set_topic_handler(
         Atom::from(String::from("a/b/c").as_str()),
-        Box::new(|r| println!("subscribe ok!!!!!!! r:{:?}", r.unwrap())),
+        Box::new(|r| println!("subscribe ok!!!!!!! r:{:?}", r.unwrap().1)),
     );
     //订阅主题
     match client.subscribe(
