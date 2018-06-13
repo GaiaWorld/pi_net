@@ -1,21 +1,23 @@
 use std::io::{Error, ErrorKind, Result};
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::SystemTime;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
+use std::time::SystemTime;
 
-use magnetic::mpsc::mpsc_queue;
 use magnetic::buffer::dynamic::DynamicBuffer;
-use magnetic::{Producer, Consumer};
-use magnetic::mpsc::{MPSCProducer, MPSCConsumer};
+use magnetic::mpsc::mpsc_queue;
+use magnetic::mpsc::{MPSCConsumer, MPSCProducer};
+use magnetic::{Consumer, Producer};
 
 use data::Server;
+use fnv::FnvHashMap;
 use mqtt3::{self, Packet};
 use net::{Socket, Stream};
 use pi_lib::atom::Atom;
-use util;
-use fnv::FnvHashMap;
 use session;
+use util;
 
+#[derive(Clone)]
 pub struct ServerNode(Arc<Mutex<ServerNodeImpl>>);
 
 /// 主题元信息
@@ -28,7 +30,7 @@ pub struct TopicMeta {
     can_subscribe: bool,
     // 如果有唯一键，需要到ClientStub去找值
     only_one_key: Option<Atom>,
-    // 对应的应用层回调 
+    // 对应的应用层回调
     publish_func: Box<Fn(ClientStub, Result<Arc<Vec<u8>>>)>,
 }
 
@@ -53,11 +55,13 @@ struct RetainTopic {
 #[derive(Clone)]
 pub struct ClientStub {
     socket: Socket,
-    _keep_alive: u16,
-    _last_will: Option<mqtt3::LastWill>,
+    keep_alive: u16,
+    last_will: Option<mqtt3::LastWill>,
     attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>,
-    // queue: Arc<(MPSCProducer<Arc<TopicHandle>, DynamicBuffer<Arc<TopicHandle>>>, MPSCConsumer<Arc<TopicHandle>, DynamicBuffer<Arc<TopicHandle>>>)>,
-    queue: Arc<(MPSCProducer<Arc<Fn()>, DynamicBuffer<Arc<Fn()>>>, MPSCConsumer<Arc<Fn()>, DynamicBuffer<Arc<Fn()>>>)>,
+    queue: Arc<(
+        MPSCProducer<Arc<Fn()>, DynamicBuffer<Arc<Fn()>>>,
+        MPSCConsumer<Arc<Fn()>, DynamicBuffer<Arc<Fn()>>>,
+    )>,
     queue_size: Arc<AtomicUsize>,
 }
 
@@ -73,27 +77,36 @@ unsafe impl Sync for ServerNodeImpl {}
 unsafe impl Send for ServerNodeImpl {}
 
 impl ClientStub {
+    //获取发送队列大小
     pub fn get_queue_size(&self) -> usize {
         self.queue_size.load(Ordering::Relaxed)
     }
+    //增加队列消息
     pub fn queue_push(&self, handle: Arc<Fn()>) {
         self.queue.0.push(handle).is_ok();
-        self.queue_size.store(self.get_queue_size() + 1, Ordering::Relaxed)
+        self.queue_size
+            .store(self.get_queue_size() + 1, Ordering::Relaxed)
     }
+    //弹出队列消息
     pub fn queue_pop(&self) -> Option<Arc<Fn()>> {
         if self.get_queue_size() > 0 {
             let v = self.queue.1.pop().unwrap();
-            self.queue_size.store(self.get_queue_size() - 1, Ordering::Relaxed);
-            return Some(v)
+            self.queue_size
+                .store(self.get_queue_size() - 1, Ordering::Relaxed);
+            return Some(v);
         }
         None
     }
+    //获取连接
     pub fn get_socket(&self) -> Socket {
         self.socket.clone()
     }
+    //获取会话表
     pub fn get_attributes(&self) -> Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>> {
         self.attributes.clone()
     }
+    //判断心跳是否超时
+    pub fn if_keep_alive() {}
 }
 
 impl ServerNode {
@@ -163,10 +176,7 @@ impl Server for ServerNode {
         );
         return Ok(());
     }
-    fn unset_topic_meta(
-        &mut self,
-        name: Atom,
-    ) -> Result<()> {
+    fn unset_topic_meta(&mut self, name: Atom) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
         node.metas.remove(&name);
         return Ok(());
@@ -174,7 +184,6 @@ impl Server for ServerNode {
 }
 
 fn handle_stream(node: Arc<Mutex<ServerNodeImpl>>, socket: Socket, stream: Arc<RwLock<Stream>>) {
-
     let s = stream.clone();
     util::recv_mqtt_packet(
         stream,
@@ -204,6 +213,30 @@ fn handle_recv(
         }
     }
 
+    //设置keep_alive定时器
+    {
+        let node = &mut node.lock().unwrap();
+        let clients = node.clients.get(&socket.socket).unwrap();
+        let keep_alive = clients.keep_alive;
+        if keep_alive > 0 {
+            let stream = st.clone();
+            let stream = stream.read().unwrap();
+            let mut timers = stream.net_timers.write().unwrap();
+            let socket = socket.clone();
+            //mqtt协议要求keep_alive的1.5倍超时关闭连接
+            let keep_alive = (keep_alive as f32) * 1.5;
+            timers.set_timeout(
+                Atom::from(String::from("handle_recv") + &socket.socket.to_string()),
+                Duration::from_secs(keep_alive as u64),
+                Box::new(move |_src: Atom| {
+                    println!("keep_alive timeout con close!!!!!!!!!!!!");
+                    //关闭连接
+                    socket.close(true);
+                }),
+            )
+        }
+    }
+
     {
         let s = st.clone();
         let socket = socket.clone();
@@ -230,36 +263,47 @@ fn recv_connect(
         // TODO: 验证 client_id 是否合法
         // code = mqtt3::ConnectReturnCode::RefusedIdentifierRejected;
         let mut att = FnvHashMap::default();
-        
-        
+
         if let Some(username) = connect.username {
             att.insert(Atom::from("$username"), Arc::new(Vec::from(username)));
         }
         if let Some(password) = connect.password {
             att.insert(Atom::from("$password"), Arc::new(Vec::from(password)));
         }
-        att.insert(Atom::from("$client_id"), Arc::new(Vec::from(connect.client_id)));
-        att.insert(Atom::from("$connect_time"), Arc::new(Vec::from(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().to_string())));
+        att.insert(
+            Atom::from("$client_id"),
+            Arc::new(Vec::from(connect.client_id)),
+        );
+        att.insert(
+            Atom::from("$connect_time"),
+            Arc::new(Vec::from(
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    .to_string(),
+            )),
+        );
 
         let node = &mut node.lock().unwrap();
         let s = socket.clone();
         let client_stub = Arc::new(ClientStub {
-                socket: s,
-                _keep_alive: connect.keep_alive,
-                _last_will: connect.last_will,
-                attributes: Arc::new(RwLock::new(att)),
-                queue: Arc::new(mpsc_queue(DynamicBuffer::new(32).unwrap())),
-                queue_size: Arc::new(AtomicUsize::new(0)),
-            });
-        node.clients.insert(
-            socket.socket,
-            client_stub.clone()
-            );
+            socket: s,
+            keep_alive: connect.keep_alive,
+            last_will: connect.last_will,
+            attributes: Arc::new(RwLock::new(att)),
+            queue: Arc::new(mpsc_queue(DynamicBuffer::new(32).unwrap())),
+            queue_size: Arc::new(AtomicUsize::new(0)),
+        });
+        node.clients.insert(socket.socket, client_stub.clone());
         //模拟客户端发送主题消息
         let name = Atom::from(String::from("$open"));
         if let Some(meta) = node.metas.get(&name) {
-                let client_stub = &*client_stub.clone();
-                (meta.publish_func)(client_stub.clone(), Ok(Arc::new(session::encode(0, 10, vec![]))));
+            let client_stub = &*client_stub.clone();
+            (meta.publish_func)(
+                client_stub.clone(),
+                Ok(Arc::new(session::encode(0, 10, vec![]))),
+            );
         }
     }
     util::send_connack(socket, code);
@@ -328,12 +372,12 @@ fn recv_sub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) -> mqtt3::Su
                     return mqtt3::SubscribeReturnCodes::Failure;
                 }
             }
-            
+
             let key = meta.only_one_key.as_ref().unwrap();
             let c = node.clients.get(&cid).unwrap();
             let att = c.attributes.read().unwrap();
             let attr = att.get(key).unwrap();
-            
+
             use std::str;
             let attr = str::from_utf8(attr).unwrap();
             name = name + attr;
@@ -412,7 +456,7 @@ fn recv_unsub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) {
             let c = node.clients.get(&cid).unwrap();
             let att = c.attributes.read().unwrap();
             let attr = att.get(key).unwrap();
-            
+
             use std::str;
             let attr = str::from_utf8(attr).unwrap();
             name = name + attr;
@@ -443,7 +487,6 @@ fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish, socke
 }
 
 fn recv_pingreq(_node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket) {
-    // TODO
     util::send_pingresp(socket);
 }
 
@@ -455,7 +498,10 @@ fn recv_disconnect(node: Arc<Mutex<ServerNodeImpl>>, cid: usize) {
     if let Some(meta) = node.metas.get(&name) {
         let client_stub = node.clients.get(&cid).unwrap();
         let client_stub = &*client_stub.clone();
-        (meta.publish_func)(client_stub.clone(), Ok(Arc::new(session::encode(0, 10, vec![]))));
+        (meta.publish_func)(
+            client_stub.clone(),
+            Ok(Arc::new(session::encode(0, 10, vec![]))),
+        );
     }
 }
 
@@ -493,7 +539,7 @@ fn publish_impl(
             );
         }
     }
-    
+
     for (_, top) in node.sub_topics.iter() {
         if top.meta.can_publish && top.path.is_match(&t) {
             for cid in top.clients.iter() {

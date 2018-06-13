@@ -42,7 +42,7 @@ fn handle_close(stream_id: usize, reason: Result<()>) {
 }
 
 
-fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketAddr>) {
+fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketAddr>, mut mqtt: ServerNode, mut rpc: RPCServer) {
     
     let (socket, stream) = peer.unwrap();
     println!("server handle_bind: addr = {:?}, socket:{}", addr.unwrap(), socket.socket);
@@ -54,11 +54,8 @@ fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketA
         s.set_recv_timeout(500 * 1000);
     }
 
-    let mut server = ServerNode::new();
-    server.add_stream(socket, stream);
+    mqtt.add_stream(socket, stream);
     
-    //rpc服务
-    let mut rpc = RPCServer::new(server);
     let topic_handle = Handle::new();
     //通过rpc注册topic
     rpc.register(Atom::from(String::from("a/b/c").as_str()), true, Arc::new(topic_handle)).is_ok();
@@ -70,7 +67,10 @@ pub fn start_server() -> NetManager {
         protocol: Protocol::TCP,
         server_addr: None,
     };
+    let mut mqtt = ServerNode::new();
+    //rpc服务
+    let mut rpc = RPCServer::new(mqtt.clone());
     let addr = "127.0.0.1:1234".parse().unwrap();
-    mgr.bind(addr, config, Box::new(move |peer, addr| handle_bind(peer, addr)));
+    mgr.bind(addr, config, Box::new(move |peer, addr| handle_bind(peer, addr, mqtt.clone(), rpc.clone())));
     return mgr;
 }

@@ -1,14 +1,16 @@
 use std::boxed::FnBox;
-use std::collections::{VecDeque};
+use std::collections::VecDeque;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::{Arc, Mutex, RwLock};
 
 use mqtt3::{self, LastWill, Packet, PacketIdentifier};
 
 use data::{Client, ClientCallback};
-use net::{Socket, Stream};
-use util;
 use fnv::FnvHashMap;
+use net::{Socket, Stream};
+use net::timer::{NetTimers, TimerCallback};
+use util;
+
 
 use pi_lib::atom::Atom;
 
@@ -34,6 +36,7 @@ pub struct ClientNodeImpl {
     socket_handlers: VecDeque<Box<FnBox(&Socket, Arc<RwLock<Stream>>)>>,
 }
 
+#[derive(Clone)]
 pub struct ClientNode(pub Arc<Mutex<ClientNodeImpl>>);
 
 unsafe impl Sync for ClientNodeImpl {}
@@ -67,6 +70,20 @@ impl ClientNode {
     pub fn get_socket(&self) -> Socket {
         let node = self.0.lock().unwrap();
         node.socket.clone().unwrap().clone()
+    }
+
+    pub fn ping(&self) {
+        let node = self.0.lock().unwrap();
+        let socket = &node.socket.clone().unwrap();
+        //发送数据
+        util::send_pingreq(&socket);
+    }
+    //获取net定时器
+    pub fn get_timers(&self) -> Arc<RwLock<NetTimers<TimerCallback>>> {
+        let node = self.0.lock().unwrap();
+        let stream = node.stream.clone().unwrap();
+        let stream = stream.read().unwrap();
+        stream.net_timers.clone()
     }
 }
 
@@ -234,7 +251,11 @@ impl Client for ClientNode {
         return Ok(());
     }
 
-    fn set_topic_handler(&mut self, name: Atom, handler: Box<Fn(Result<(Socket, &[u8])>)>) -> Result<()> {
+    fn set_topic_handler(
+        &mut self,
+        name: Atom,
+        handler: Box<Fn(Result<(Socket, &[u8])>)>,
+    ) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
         let topic;
         match mqtt3::TopicPath::from_str((*name).clone().as_str()) {

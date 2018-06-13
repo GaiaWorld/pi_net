@@ -56,7 +56,7 @@ fn handle_connect(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<Sock
 
     let mut rpc = RPCClient::new(client_node);
     rpc.connect(
-        30,
+        10,
         None,
         Some(Box::new(|_r| println!("client handle_close ok "))),
         Some(Box::new(|_r| {

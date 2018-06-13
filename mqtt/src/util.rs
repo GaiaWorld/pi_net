@@ -80,8 +80,14 @@ pub fn send_unsuback(socket: &Socket, id: PacketIdentifier) {
     send_packet(socket, Packet::Unsuback(id));
 }
 
+//发送pong
 pub fn send_pingresp(socket: &Socket) {
     send_packet(socket, Packet::Pingresp);
+}
+
+//发送ping
+pub fn send_pingreq(socket: &Socket) {
+    send_packet(socket, Packet::Pingreq);
 }
 
 pub fn send_publish(socket: &Socket, retain: bool, _qos: QoS, topic: &str, payload: Vec<u8>) {
