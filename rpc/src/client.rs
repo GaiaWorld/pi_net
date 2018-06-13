@@ -6,7 +6,6 @@ use std::io::Result;
  * 压缩算法：0：不压缩，1：rsync, 2:LZ4 BLOCK, 3:LZ4 SEREAM, 4、5、6、7预留
  */
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use fnv::FnvHashMap;
 use pi_lib::atom::Atom;
@@ -29,7 +28,6 @@ pub struct RPCClient {
     mqtt: ClientNode,
     msg_id: u32,
     handlers: Arc<Mutex<FnvHashMap<u32, Box<Fn(Result<Arc<Vec<u8>>>)>>>>,
-    keep_alive: u16,
 }
 
 unsafe impl Sync for RPCClient {}
@@ -41,7 +39,6 @@ impl RPCClient {
             mqtt,
             msg_id: 0,
             handlers: Arc::new(Mutex::new(FnvHashMap::default())),
-            keep_alive: 0,
         }
     }
     pub fn connect(
@@ -51,8 +48,6 @@ impl RPCClient {
         close_func: Option<ClientCallback>,
         connect_func: Option<ClientCallback>,
     ) {
-        self.keep_alive = keep_alive;
-        self.ping();
         //连接MQTTser
         self.mqtt
             .connect(keep_alive, will, close_func, connect_func);
@@ -93,27 +88,6 @@ impl RPCClient {
             )
             .is_ok();
     }
-
-    pub fn ping(&self) {
-        let client = self.clone();
-        let keep_alive = self.keep_alive;
-        let mqtt = self.mqtt.clone();
-        if keep_alive > 0 {
-            let timers = mqtt.get_timers();
-            let mut timers = timers.write().unwrap();
-            timers.set_timeout(
-                Atom::from(String::from("client_ping")),
-                Duration::from_secs(keep_alive as u64),
-                Box::new(move |_src: Atom| {
-                    println!("keep_alive timeout ping !!!!!!!!!!!!");
-                    //ping
-                    mqtt.ping();
-                    //递归
-                    client.ping();
-                }),
-            )
-        }
-    }
 }
 
 impl RPCClientTraits for RPCClient {
@@ -124,7 +98,6 @@ impl RPCClientTraits for RPCClient {
         resp: Box<Fn(Result<Arc<Vec<u8>>>)>,
         timeout: u8,
     ) {
-        self.ping();
         self.msg_id += 1;
         let socket = self.mqtt.get_socket();
         let mut buff: Vec<u8> = vec![];

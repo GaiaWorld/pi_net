@@ -12,7 +12,7 @@ use magnetic::{Consumer, Producer};
 use data::Server;
 use fnv::FnvHashMap;
 use mqtt3::{self, Packet};
-use net::{Socket, Stream};
+use net::{CloseFn, Socket, Stream};
 use pi_lib::atom::Atom;
 use session;
 use util;
@@ -56,7 +56,7 @@ struct RetainTopic {
 pub struct ClientStub {
     socket: Socket,
     keep_alive: u16,
-    last_will: Option<mqtt3::LastWill>,
+    last_will: Arc<RwLock<Option<mqtt3::LastWill>>>,
     attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>,
     queue: Arc<(
         MPSCProducer<Arc<Fn()>, DynamicBuffer<Arc<Fn()>>>,
@@ -105,8 +105,12 @@ impl ClientStub {
     pub fn get_attributes(&self) -> Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>> {
         self.attributes.clone()
     }
-    //判断心跳是否超时
-    pub fn if_keep_alive() {}
+
+    //修改遗言
+    pub fn set_last_will(&mut self, last_will: mqtt3::LastWill) {
+        let mut last_will2 = self.last_will.write().unwrap();
+        *last_will2 = Some(last_will);
+    }
 }
 
 impl ServerNode {
@@ -117,6 +121,31 @@ impl ServerNode {
             retain_topics: FnvHashMap::default(),
             metas: FnvHashMap::default(),
         })))
+    }
+    //设置连接关闭回调(遗言发布)
+    pub fn set_close_callback(&mut self, stream: &mut Stream, func: CloseFn) {
+        let node = self.0.clone();
+        let handle = move |socket_id: usize, r: Result<()>| {
+            //获取遗言消息
+            let node = node.lock().unwrap();
+            let client = node.clients.get(&socket_id).unwrap();
+            if let Some(last_will) = client.last_will.read().unwrap().clone() {
+                // let retain = last_will.retain;
+                // let qos = last_will.qos;
+                // let topic = Atom::from(last_will.topic.as_str());
+                let payload = Vec::from(last_will.message);
+
+                //固定遗言topic 通过set_topic_meta设置回调
+                let will_topic = Atom::from("$last_will");
+                if let Some(meta) = node.metas.get(&will_topic) {
+                    let client_stub = node.clients.get(&socket_id).unwrap();
+                    let client_stub = &*client_stub.clone();
+                    (meta.publish_func)(client_stub.clone(), Ok(Arc::new(payload)));
+                }
+            }
+            func.call_box((socket_id, r));
+        };
+        stream.set_close_callback(Box::new(handle));
     }
 }
 
@@ -290,7 +319,7 @@ fn recv_connect(
         let client_stub = Arc::new(ClientStub {
             socket: s,
             keep_alive: connect.keep_alive,
-            last_will: connect.last_will,
+            last_will: Arc::new(RwLock::new(connect.last_will)),
             attributes: Arc::new(RwLock::new(att)),
             queue: Arc::new(mpsc_queue(DynamicBuffer::new(32).unwrap())),
             queue_size: Arc::new(AtomicUsize::new(0)),

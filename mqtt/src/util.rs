@@ -54,6 +54,8 @@ pub fn send_unsubscribe(socket: &Socket, id: u16, topics: Vec<String>) {
 
 pub fn send_disconnect(socket: &Socket) {
     send_packet(socket, Packet::Disconnect);
+    //关闭连接
+    socket.close(true);
 }
 
 pub fn send_connack(socket: &Socket, code: mqtt3::ConnectReturnCode) {

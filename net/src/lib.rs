@@ -15,4 +15,4 @@ mod data;
 pub mod timer;
 
 pub use api::NetManager;
-pub use data::{Config, Socket, Stream, Protocol};
+pub use data::{Config, Socket, Stream, Protocol, CloseFn};

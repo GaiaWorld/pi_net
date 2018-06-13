@@ -8,6 +8,7 @@ use std::thread;
 
 use mqtt::client::ClientNode;
 use mqtt::data::Client;
+use mqtt3::{LastWill, QoS};
 use pi_lib::atom::Atom;
 
 use std::thread::sleep;
@@ -55,9 +56,16 @@ fn handle_connect(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<Sock
     client_node.set_stream(socket, stream);
 
     let mut rpc = RPCClient::new(client_node);
+    //遗言
+    let last_will = LastWill {
+        topic: String::from("$last_will"),
+        message: String::from("{clientid:1, msg:'xxx'}"),
+        qos: QoS::AtMostOnce,
+        retain: false,
+    };
     rpc.connect(
         10,
-        None,
+        Some(last_will),
         Some(Box::new(|_r| println!("client handle_close ok "))),
         Some(Box::new(|_r| {
             println!("client connect ok!!!!!!!!!");

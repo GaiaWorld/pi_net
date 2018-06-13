@@ -45,17 +45,22 @@ fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketA
     
     let (socket, stream) = peer.unwrap();
     println!("server handle_bind: addr = {:?}, socket:{}", addr.unwrap(), socket.socket);
+    let mut server = ServerNode::new();
     {
         let s = &mut stream.write().unwrap();
 
-        s.set_close_callback(Box::new(|id, reason| handle_close(id, reason)));
+        // s.set_close_callback(Box::new(|id, reason| handle_close(id, reason)));
+        //通过MQTT设置回调(自动注册遗言)
+        server.set_close_callback(s, Box::new(|id, reason| handle_close(id, reason)));
         s.set_send_buf_size(1024 * 1024);
         s.set_recv_timeout(500 * 1000);
     }
 
-    let mut server = ServerNode::new();
+    
     server.add_stream(socket, stream);
     server.set_topic_meta(Atom::from(String::from("a/b/c").as_str()), true, true, None, Box::new(|c, r| println!("a/b/c  publish ok!!! r:{:?}", r.unwrap())));
+    //遗言
+    server.set_topic_meta(Atom::from(String::from("$last_will").as_str()), true, true, None, Box::new(|c, r| println!("last_will  publish 遗言 ok!!! r:{:?}", r.unwrap())));
     thread::spawn(move || handle_publish(&mut server));
 }
 
