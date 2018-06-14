@@ -115,9 +115,9 @@ fn send_tcp(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream, v8: Arc<V
     };
 }
 
-pub fn handle_send(handler: &mut NetHandler, stream: usize, v8: Arc<Vec<u8>>) {
+pub fn handle_send(handler: &mut NetHandler, socket: usize, v8: Arc<Vec<u8>>) {
     let mut should_close = false;
-    if let Some(data) = handler.slab.get_mut(stream) {
+    if let Some(data) = handler.slab.get_mut(socket) {
         should_close = match data {
             &mut NetData::TcpStream(ref s, ref mut mio) => {
                 let mut s_data = s.write().unwrap();
@@ -129,7 +129,7 @@ pub fn handle_send(handler: &mut NetHandler, stream: usize, v8: Arc<Vec<u8>>) {
     }
 
     if should_close {
-        handle_close(handler, stream, true);
+        handle_close(handler, socket, true);
     }
 }
 
@@ -148,20 +148,23 @@ fn close_tcp(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream, force: b
     }
 }
 
-pub fn handle_close(handler: &mut NetHandler, stream: usize, force: bool) {
-    if let Some(data) = handler.slab.get_mut(stream) {
+pub fn handle_close(handler: &mut NetHandler, socket: usize, force: bool) {
+    if let Some(data) = handler.slab.get_mut(socket) {
         match data {
             &mut NetData::TcpServer(_, _) => panic!("invalid close: TcpServer "),
             &mut NetData::TcpStream(ref mut s, ref mut mio) => {
                 close_tcp(&mut handler.poll, &mut s.write().unwrap(), mio, force);
                 let func = s.write().unwrap().close_callback.take().unwrap();
-                func.call_box((stream, Ok(())));
+                func.call_box((socket, Ok(())));
             }
         }
     }
 
     if force {
-        handler.slab.remove(stream);
+        if handler.slab.contains(socket) {
+            handler.slab.remove(socket);
+        }
+        
     }
 }
 
