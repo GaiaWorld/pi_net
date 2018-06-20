@@ -56,7 +56,7 @@ impl RPCServerTraits for RPCServer {
             session.set_timeout(now as usize, data[5]);
             let mut rdata = Vec::new();
             match compress {
-                UNCOMPRESS => rdata.extend_from_slice(&data[5..]),
+                UNCOMPRESS => rdata.extend_from_slice(&data[6..]),
                 LZ4_BLOCK => {
                     let mut vec_ = Vec::new();
                     uncompress(&data[6..], &mut vec_).is_ok();
