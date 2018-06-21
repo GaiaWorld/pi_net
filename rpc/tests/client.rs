@@ -26,7 +26,8 @@ fn handle_close(stream_id: usize, reason: Result<()>) {
 fn client_request(mut rpc: RPCClient) {
     sleep(Duration::from_secs(2));
     rpc.request(
-        Atom::from("a/b/c"),
+        Atom::from("app/rpc/player.getName"),
+        // Atom::from("a/b/c"),
         String::from("hello world").into_bytes(),
         Box::new(move |r: Result<Arc<Vec<u8>>>| {
             let r = &*(r.unwrap());
@@ -72,7 +73,7 @@ pub fn start_client() -> NetManager {
     let mgr = NetManager::new();
     let config = Config {
         protocol: Protocol::TCP,
-        server_addr: Some("127.0.0.1:1234".parse().unwrap()),
+        addr: "127.0.0.1:1234".parse().unwrap(),
     };
     mgr.connect(config, Box::new(|peer, addr| handle_connect(peer, addr)));
 

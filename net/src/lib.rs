@@ -8,8 +8,8 @@ extern crate slab;
 extern crate mio_extras;
 
 mod net;
-mod api;
-mod data;
+pub mod api;
+pub mod data;
 mod timer;
 
 pub use api::NetManager;
