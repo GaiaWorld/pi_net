@@ -18,6 +18,7 @@ use mqtt::data::Server;
 use traits::RPCServerTraits;
 use pi_base::util::{uncompress};
 
+#[derive(Clone)]
 pub struct RPCServer {
     mqtt: ServerNode,
 }

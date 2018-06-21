@@ -54,6 +54,8 @@ pub fn send_unsubscribe(socket: &Socket, id: u16, topics: Vec<String>) {
 
 pub fn send_disconnect(socket: &Socket) {
     send_packet(socket, Packet::Disconnect);
+    //关闭连接
+    socket.close(true);
 }
 
 pub fn send_connack(socket: &Socket, code: mqtt3::ConnectReturnCode) {
@@ -80,8 +82,14 @@ pub fn send_unsuback(socket: &Socket, id: PacketIdentifier) {
     send_packet(socket, Packet::Unsuback(id));
 }
 
+//发送pong
 pub fn send_pingresp(socket: &Socket) {
     send_packet(socket, Packet::Pingresp);
+}
+
+//发送ping
+pub fn send_pingreq(socket: &Socket) {
+    send_packet(socket, Packet::Pingreq);
 }
 
 pub fn send_publish(socket: &Socket, retain: bool, _qos: QoS, topic: &str, payload: Vec<u8>) {

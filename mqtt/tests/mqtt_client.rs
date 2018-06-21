@@ -11,7 +11,7 @@ use pi_lib::atom::Atom;
 use mqtt::client::{ClientNode};
 use mqtt::data::Client;
 
-use mqtt3::{QoS};
+use mqtt3::{LastWill, QoS};
 use net::{Config, NetManager, Protocol, Socket, Stream};
 
 fn handle_close(stream_id: usize, reason: Result<()>) {
@@ -55,9 +55,16 @@ fn handle_connect(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<Sock
 
     let mut client_node = ClientNode::new();
     client_node.set_stream(socket, stream);
+    //遗言
+    let last_will = LastWill {
+        topic: String::from("test_last_will"),
+        message: String::from("{clientid:1, msg:'xxx'}"),
+        qos: QoS::AtMostOnce,
+        retain: false,
+    };
     client_node.connect(
         30,
-        None,
+        Some(last_will),
         Some(Box::new(|_r| println!("client handle_close ok "))),
         Some(Box::new(|_r| {
             println!("client connect ok!!!!!!!!!");
@@ -98,11 +105,11 @@ fn client_handle(mut client: ClientNode) {
                 vec![10],
             );
             //关闭连接
-            thread::spawn(move || {
-                sleep(Duration::from_secs(8));
-                println!("关闭连接");
-                client.disconnect()
-            });
+            // thread::spawn(move || {
+            //     sleep(Duration::from_secs(8));
+            //     println!("关闭连接");
+            //     client.disconnect()
+            // });
         });
     });
 }

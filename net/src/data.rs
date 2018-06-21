@@ -28,6 +28,9 @@ pub struct Socket {
     pub sender: Sender<SendClosureFn>,
 }
 
+unsafe impl Sync for Socket {}
+unsafe impl Send for Socket {}
+
 pub enum Protocol {
     TCP,
 }

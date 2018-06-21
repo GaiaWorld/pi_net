@@ -2,15 +2,17 @@
 //!
 #![feature(fnbox)]
 #![feature(pointer_methods)]
+#![feature(fn_traits)]
 
 extern crate mio;
 extern crate slab;
 extern crate mio_extras;
+extern crate pi_lib;
 
 mod net;
 pub mod api;
 pub mod data;
-mod timer;
+pub mod timer;
 
 pub use api::NetManager;
-pub use data::{Config, Socket, Stream, Protocol};
+pub use data::{Config, Socket, Stream, Protocol, CloseFn};

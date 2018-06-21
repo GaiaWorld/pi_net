@@ -1,14 +1,16 @@
 use std::boxed::FnBox;
-use std::collections::{VecDeque};
+use std::collections::VecDeque;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
 use mqtt3::{self, LastWill, Packet, PacketIdentifier};
 
 use data::{Client, ClientCallback};
+use fnv::FnvHashMap;
+use net::timer::{NetTimers, TimerCallback};
 use net::{Socket, Stream};
 use util;
-use fnv::FnvHashMap;
 
 use pi_lib::atom::Atom;
 
@@ -32,8 +34,10 @@ pub struct ClientNodeImpl {
 
     // 当socket和stream还没准备好时候的缓冲区
     socket_handlers: VecDeque<Box<FnBox(&Socket, Arc<RwLock<Stream>>)>>,
+    keep_alive: u16,
 }
 
+#[derive(Clone)]
 pub struct ClientNode(pub Arc<Mutex<ClientNodeImpl>>);
 
 unsafe impl Sync for ClientNodeImpl {}
@@ -62,11 +66,47 @@ impl ClientNode {
             topics: FnvHashMap::default(),
             topic_patterns: FnvHashMap::default(),
             socket_handlers: VecDeque::new(),
+            keep_alive: 0,
         })))
     }
     pub fn get_socket(&self) -> Socket {
         let node = self.0.lock().unwrap();
         node.socket.clone().unwrap().clone()
+    }
+
+    //只有在keep_alive时间内都没有数据包发送才会发送ping包
+    pub fn ping(&self) {
+        let client = self.clone();
+        let keep_alive;
+        let socket;
+        {
+            let node = self.0.lock().unwrap();
+            keep_alive = node.keep_alive;
+            socket = node.socket.clone();
+        }
+        if keep_alive > 0 {
+            let timers = self.get_timers();
+            let mut timers = timers.write().unwrap();
+            timers.set_timeout(
+                Atom::from(String::from("client_ping")),
+                Duration::from_secs(keep_alive as u64),
+                Box::new(move |_src: Atom| {
+                    println!("keep_alive timeout ping !!!!!!!!!!!!");
+                    let socket = socket.unwrap();
+                    //发送数据
+                    util::send_pingreq(&socket);
+                    //递归
+                    client.ping();
+                }),
+            )
+        }
+    }
+    //获取net定时器
+    pub fn get_timers(&self) -> Arc<RwLock<NetTimers<TimerCallback>>> {
+        let node = self.0.lock().unwrap();
+        let stream = node.stream.clone().unwrap();
+        let stream = stream.read().unwrap();
+        stream.net_timers.clone()
     }
 }
 
@@ -94,6 +134,7 @@ impl Client for ClientNode {
             let node = &mut self.0.lock().unwrap();
             node.close_func = close_func;
             node.connect_func = connect_func;
+            node.keep_alive = keep_alive;
         }
 
         let node = self.0.clone();
@@ -234,7 +275,11 @@ impl Client for ClientNode {
         return Ok(());
     }
 
-    fn set_topic_handler(&mut self, name: Atom, handler: Box<Fn(Result<(Socket, &[u8])>)>) -> Result<()> {
+    fn set_topic_handler(
+        &mut self,
+        name: Atom,
+        handler: Box<Fn(Result<(Socket, &[u8])>)>,
+    ) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
         let topic;
         match mqtt3::TopicPath::from_str((*name).clone().as_str()) {
@@ -431,18 +476,25 @@ fn recv_publish(node: Arc<Mutex<ClientNodeImpl>>, publish: mqtt3::Publish) {
 }
 
 fn handle_slot(node: Arc<Mutex<ClientNodeImpl>>, func: Box<FnBox(&Socket, Arc<RwLock<Stream>>)>) {
-    let node = &mut node.lock().unwrap();
-    let no_socket = node.socket.is_none();
+    let node = node.clone();
+    {
+        
+        let node = &mut node.lock().unwrap();
+        let no_socket = node.socket.is_none();
 
-    if no_socket {
-        node.socket_handlers.push_back(func);
-        return;
-    }
+        if no_socket {
+            node.socket_handlers.push_back(func);
+            return;
+        }
 
-    if let Some(ref socket) = node.socket.as_ref() {
-        let stream = node.stream.as_ref().unwrap();
-        func.call_box((socket, stream.clone()));
+        if let Some(ref socket) = node.socket.as_ref() {
+            let stream = node.stream.as_ref().unwrap();
+            func.call_box((socket, stream.clone()));
+        }
     }
+    let client = ClientNode(node.clone());
+    //只有在keep_alive时间内都没有数据包发送才会发送ping包
+    client.ping();
 }
 
 fn is_topic_contains_wildcards(name: &str) -> Result<bool> {

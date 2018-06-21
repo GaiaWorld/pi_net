@@ -1,4 +1,4 @@
-use std::io::{Result};
+use std::io::Result;
 /**
  * RPC传输协议：
  * 消息体：1字节表示压缩和版本,4字节消息ID，1字节超时时长（0表示不超时), 剩下的BonBuffer ,
@@ -11,7 +11,7 @@ use fnv::FnvHashMap;
 use pi_lib::atom::Atom;
 
 use mqtt3;
-use mqtt3::{LastWill};
+use mqtt3::LastWill;
 
 use mqtt::client::ClientNode;
 use mqtt::data::{Client, ClientCallback};
@@ -23,6 +23,7 @@ use net::Socket;
 use pi_base::util::{compress, uncompress, CompressLevel};
 use traits::RPCClientTraits;
 
+#[derive(Clone)]
 pub struct RPCClient {
     mqtt: ClientNode,
     msg_id: u32,
@@ -42,7 +43,7 @@ impl RPCClient {
     }
     pub fn connect(
         &mut self,
-        keep_alive: u16, //ping-pong
+        keep_alive: u16,        //ping-pong
         will: Option<LastWill>, //遗言
         close_func: Option<ClientCallback>,
         connect_func: Option<ClientCallback>,
@@ -80,15 +81,23 @@ impl RPCClient {
             };
             handlers.remove(&msg_id);
         };
-        self.mqtt.set_topic_handler(
-            Atom::from(String::from("$r").as_str()),
-            Box::new(move |r| topic_handle(r)),
-        ).is_ok();
+        self.mqtt
+            .set_topic_handler(
+                Atom::from(String::from("$r").as_str()),
+                Box::new(move |r| topic_handle(r)),
+            )
+            .is_ok();
     }
 }
 
 impl RPCClientTraits for RPCClient {
-    fn request(&mut self, topic: Atom, msg: Vec<u8>, resp: Box<Fn(Result<Arc<Vec<u8>>>)>, timeout: u8) {
+    fn request(
+        &mut self,
+        topic: Atom,
+        msg: Vec<u8>,
+        resp: Box<Fn(Result<Arc<Vec<u8>>>)>,
+        timeout: u8,
+    ) {
         self.msg_id += 1;
         let socket = self.mqtt.get_socket();
         let mut buff: Vec<u8> = vec![];

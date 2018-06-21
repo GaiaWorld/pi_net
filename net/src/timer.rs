@@ -1,10 +1,12 @@
 use mio_extras::timer::{Timeout, Timer};
+use pi_lib::atom::Atom;
 
 use std::cell::RefCell;
-use std::sync::{Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::thread;
+use std::boxed::FnBox;
 
-use slab::Slab;
 use std::time::Duration;
 
 pub struct NetTimer<T> {
@@ -15,11 +17,14 @@ pub type NetTimeout = Timeout;
 
 //定时器管理
 pub struct NetTimers<T> {
-    timers: Slab<(Timer<T>, NetTimeout)>,
+    timers: HashMap<Atom, (Timer<T>, NetTimeout)>,
 }
 
+// unsafe impl Sync for NetTimers<TimerCallback> {}
+// unsafe impl Send for NetTimers<TimerCallback> {}
+
 //回调函数
-pub type TimerCallback = Arc<fn(usize)>;
+pub type TimerCallback = Box<FnBox(Atom) + Send>;
 
 impl<T> NetTimer<T> {
     pub fn new() -> NetTimer<T> {
@@ -46,62 +51,62 @@ impl NetTimers<TimerCallback> {
     //在pi_net NetHandler 中初始化
     pub fn new() -> Self {
         Self {
-            timers: Slab::new(),
+            timers: HashMap::new(),
         }
     }
     //设置定时器，并设置回调,返回定时器ID
-    pub fn set_timeout(&mut self, delay_from_now: Duration, state: TimerCallback) -> usize {
+    pub fn set_timeout(&mut self, src: Atom, delay_from_now: Duration, state: TimerCallback) {
         let mut timer = Timer::default();
         let timeout = timer.set_timeout(delay_from_now, state);
-        self.timers.insert((timer, timeout))
+        self.timers.insert(src, (timer, timeout));
     }
     //取消定时器，传入设置定时器返回的ID
-    pub fn cancel_timeout(&mut self, id: usize) -> Option<TimerCallback> {
-        let v = match self.timers.get_mut(id) {
-            Some((timer, timeout)) => {
-                timer.cancel_timeout(timeout)
-            },
+    pub fn cancel_timeout(&mut self, src: Atom) -> Option<TimerCallback> {
+        let v = match self.timers.get_mut(&src) {
+            Some((timer, timeout)) => timer.cancel_timeout(timeout),
             None => None,
         };
-        self.timers.remove(id);
+        self.timers.remove(&src);
         v
     }
     //mio中轮训，到期开新进程触发回调
     pub fn poll(&mut self) {
         let mut vec = Vec::new();
-        for (id, (timer, _timeout)) in self.timers.iter_mut() {
+        for (src, (timer, _timeout)) in self.timers.iter_mut() {
             match timer.poll() {
                 Some(cb) => {
+                    let src1 = src.clone();
                     thread::spawn(move || {
-                        (*cb)(id)
+                        cb.call_box((src1,))
                     });
-                    vec.push(id)
+                    let src2 = src.clone();
+                    vec.push(src2)
                 }
                 None => (),
             }
         }
-        for id in vec {
-            self.timers.remove(id);
+        for src in vec {
+            self.timers.remove(&src);
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use timer::{NetTimers};
-    use std::time::{Duration};
-    use std::sync::{Arc};
+    use pi_lib::atom::Atom;
+    use std::sync::Arc;
     use std::thread;
+    use std::time::Duration;
+    use timer::NetTimers;
 
     #[test]
     pub fn timer_test() {
         let mut timers = NetTimers::new();
-        let id1 = timers.set_timeout(Duration::from_millis(100), 
-        Arc::new(|id2: usize| {
-            println!("timeout id2: {}", id2)
-        }));
-        
-        println!("timeout id1: {}", id1);
+        timers.set_timeout(
+            Atom::from("test"),
+            Duration::from_millis(100),
+            Box::new(|src: Atom| println!("timeout src: {}", *src)),
+        );
         //下面由mio线程轮询
         {
             thread::sleep(Duration::from_millis(500));
@@ -112,14 +117,17 @@ mod test {
     #[test]
     pub fn cancel_timeout_test() {
         let mut timers = NetTimers::new();
-        let id = timers.set_timeout(Duration::from_millis(200), 
-        Arc::new(|_id: usize| {
-            assert!(false);
-        }));
-        
-        println!("timeout cancel id: {}", id);
+        let src = Atom::from("test2");
+        timers.set_timeout(
+            src.clone(),
+            Duration::from_millis(200),
+            Box::new(|_src: Atom| {
+                assert!(false);
+            }),
+        );
+
         //取消定时器
-        timers.cancel_timeout(id);
+        timers.cancel_timeout(src);
         //下面由mio线程轮询
         {
             thread::sleep(Duration::from_millis(500));

@@ -7,6 +7,7 @@ authors = ["moyy <moyy@yineng.com>"]
 mio = "0.6.14"
 slab = "0.4.0"
 mio-extras = "2.0.4"
+pi_lib = {path="../../pi_lib"}
 
 [[test]]
 name = "test"
