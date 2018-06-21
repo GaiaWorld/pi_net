@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::time::SystemTime;
+use std::fmt::{Debug, Result as DebugResult, Formatter};
 
 use magnetic::buffer::dynamic::DynamicBuffer;
 use magnetic::mpsc::mpsc_queue;
@@ -63,6 +64,12 @@ pub struct ClientStub {
         MPSCConsumer<Arc<Fn()>, DynamicBuffer<Arc<Fn()>>>,
     )>,
     queue_size: Arc<AtomicUsize>,
+}
+
+impl Debug for ClientStub {
+	fn fmt(&self, f: &mut Formatter) -> DebugResult {
+		write!(f, "ClientStub[socket = {}, keep_alive = {}]", self.socket.socket, self.keep_alive)
+	}
 }
 
 struct ServerNodeImpl {

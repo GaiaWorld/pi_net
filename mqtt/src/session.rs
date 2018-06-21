@@ -11,13 +11,16 @@ pub const LZ4_BLOCK: u8 = 2;
 //不压缩
 pub const UNCOMPRESS: u8 = 0;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Session {
     client: ClientStub,
     msg_id: u32,
     seq: bool,
     timeout: (usize, u8), //(系统当前时间, 超时时长)
 }
+
+unsafe impl Sync for Session {}
+unsafe impl Send for Session {}
 
 pub fn encode(msg_id: u32, timeout: u8, msg: Vec<u8>) -> Vec<u8> {
     let mut buff: Vec<u8> = vec![];

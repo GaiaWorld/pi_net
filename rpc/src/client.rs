@@ -63,7 +63,7 @@ impl RPCClient {
             let msg_id = u32::from_be(unsafe { *((data[1..4].as_ptr()) as *mut u32) });
             let mut rdata = Vec::new();
             match compress {
-                UNCOMPRESS => rdata.extend_from_slice(&data[5..]),
+                UNCOMPRESS => rdata.extend_from_slice(&data[6..]),
                 LZ4_BLOCK => {
                     let mut vec_ = Vec::new();
                     uncompress(&data[6..], &mut vec_).is_ok();
