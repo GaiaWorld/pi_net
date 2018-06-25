@@ -7,7 +7,7 @@ use net::{Config, NetManager, Protocol, Socket, Stream};
 use mqtt::session::{Session};
 use mqtt::server::{ServerNode};
 use mqtt::data::Server;
-use mqtt::handler::TopicHandle;
+use pi_lib::handler::{Handler, Args, Env};
 use rpc::server::{RPCServer};
 use rpc::traits::RPCServerTraits;
 
@@ -26,11 +26,15 @@ impl Handle {
     }
 }
 
-impl TopicHandle for Handle {
-    fn handle(&self, atom: Atom, _vsn: u8, session: Arc<Session>, msg: Arc<Vec<u8>>){
-        let msg = &*msg;
-        println!("topic_handle!!!!!!!atom:{}, msg:{:?}", *atom, String::from_utf8(msg.clone()));
-        session.respond(atom, String::from("ok!!!!").into_bytes());
+impl Handler for Handle {
+    type HandleResult = ();
+    fn handle(&self, session: Arc<dyn Env>, atom: Atom, mut args: Args) -> Self::HandleResult {
+        let msg: Arc<Vec<u8>> = args.remove(1).unwrap();
+        println!("topic_handle!!!!!!!atom:{}, msg:{:?}", *atom, String::from_utf8(msg.to_vec()));
+        unsafe {
+            let session = Arc::from_raw(Arc::into_raw(session) as *const Session);
+            session.respond(atom, String::from("ok!!!!").into_bytes());
+        }
     }
 }
 

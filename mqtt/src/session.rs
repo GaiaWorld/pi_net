@@ -1,9 +1,12 @@
 use std::sync::Arc;
+use std::any::Any;
+
 use mqtt3::{self};
 
 use server::ClientStub;
 use pi_lib::atom::Atom;
 use pi_base::util::{compress, CompressLevel};
+use pi_lib::handler::Env;
 use util;
 
 //LZ4_BLOCK 压缩
@@ -48,6 +51,7 @@ pub fn encode(msg_id: u32, timeout: u8, msg: Vec<u8>) -> Vec<u8> {
     return buff
 }
 
+
 //会话
 impl Session {
     pub fn new(client: ClientStub, seq: bool, msg_id: u32) -> Self {
@@ -83,28 +87,8 @@ impl Session {
             self.send(Atom::from("$r"), msg);
             //检查队列中是否还有未处理的handle
             if self.client.get_queue_size() > 0 {
-                let func = self.client.queue_pop().unwrap();
-                func();
+                (self.client.queue_pop().unwrap())();
             }
-        }
-    }
-    //获取会话表数据
-    pub fn get_attr(&self, key: Atom) -> Option<Arc<Vec<u8>>> {
-        let attr = self.client.get_attributes();
-        let attr = attr.read().unwrap();
-        if let Some(v) = attr.get(&key) {
-            return Some(v.clone())
-        }
-        None
-    }
-    //设置会话表
-    pub fn set_attr(&self, key: Atom, value: Option<Arc<Vec<u8>>>) -> Option<Arc<Vec<u8>>> {
-        let attr = self.client.get_attributes();
-        let mut attr = attr.write().unwrap();
-        if let Some(v) = value {
-            return attr.insert(key, v)
-        } else {
-            return attr.remove(&key)
         }
     }
     pub fn close(&self) {
@@ -112,5 +96,31 @@ impl Session {
     }
     pub fn set_timeout(&mut self, systime: usize, timeout: u8) {
         self.timeout = (systime, timeout);
+    }
+}
+
+impl Env for Session {
+    //获取属性
+    fn get_attr(&self, key: Atom) -> Option<Box<Any>> {
+        let attr = self.client.get_attributes();
+        let attr = attr.read().unwrap();
+        if let Some(v) = attr.get(&key) {
+            return Some(Box::new(v.clone()) as Box<Any>)
+        }
+        None
+    }
+    //设置属性，返回上个属性值
+    fn set_attr(&mut self, key: Atom, value: Box<Any>) -> Option<Box<Any>> {
+        let attr = self.client.get_attributes();
+        let mut attr = attr.write().unwrap();
+        let value: Option<&Arc<Vec<u8>>> = value.downcast_ref();
+        if let Some(v) = value {
+            if let Some(old) = attr.insert(key, v.clone()) {
+                return Some(Box::new(old) as Box<Any>)
+            } else {
+                return None
+            }
+        }
+        None
     }
 }

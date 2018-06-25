@@ -1,4 +1,4 @@
-use mqtt::handler::TopicHandle;
+use pi_lib::handler::{Handler};
 
 use pi_lib::atom::Atom;
 
@@ -17,7 +17,7 @@ pub trait RPCServerTraits {
     // $r 回应
     // 最终变为：$q，payload; 返回值, $r/$id
     // 
-    fn register(&mut self, topic: Atom, sync: bool, func: Arc<TopicHandle>) -> Result<()>;
+    fn register(&mut self, topic: Atom, sync: bool, handle: Arc<Handler<HandleResult = ()>>) -> Result<()>;
     
     // fn register_async(func_name: Atom, fn: Box<Fn(&[u8], Arc<Fn(&[u8])>>));
     
