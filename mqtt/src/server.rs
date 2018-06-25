@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::time::SystemTime;
 use std::fmt::{Debug, Result as DebugResult, Formatter};
+use std::boxed::FnBox;
 
 use magnetic::buffer::dynamic::DynamicBuffer;
 use magnetic::mpsc::mpsc_queue;
@@ -60,8 +61,8 @@ pub struct ClientStub {
     last_will: Arc<RwLock<Option<mqtt3::LastWill>>>,
     attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>,
     queue: Arc<(
-        MPSCProducer<Arc<Fn()>, DynamicBuffer<Arc<Fn()>>>,
-        MPSCConsumer<Arc<Fn()>, DynamicBuffer<Arc<Fn()>>>,
+        MPSCProducer<Box<FnBox()>, DynamicBuffer<Box<FnBox()>>>,
+        MPSCConsumer<Box<FnBox()>, DynamicBuffer<Box<FnBox()>>>,
     )>,
     queue_size: Arc<AtomicUsize>,
 }
@@ -89,13 +90,13 @@ impl ClientStub {
         self.queue_size.load(Ordering::Relaxed)
     }
     //增加队列消息
-    pub fn queue_push(&self, handle: Arc<Fn()>) {
+    pub fn queue_push(&self, handle: Box<FnBox()>) {
         self.queue.0.push(handle).is_ok();
         self.queue_size
             .store(self.get_queue_size() + 1, Ordering::Relaxed)
     }
     //弹出队列消息
-    pub fn queue_pop(&self) -> Option<Arc<Fn()>> {
+    pub fn queue_pop(&self) -> Option<Box<FnBox()>> {
         if self.get_queue_size() > 0 {
             let v = self.queue.1.pop().unwrap();
             self.queue_size

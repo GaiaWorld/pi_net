@@ -1,22 +1,22 @@
-use std::io::{Result};
+use std::io::Result;
 /**
  * RPC传输协议：
  * 消息体：1字节表示压缩和版本,4字节消息ID，1字节超时时长（0表示不超时), 剩下的BonBuffer ,
  * 第一字节：前3位表示压缩算法，后5位表示版本（灰度）
  * 压缩算法：0：不压缩，1：rsync, 2:LZ4 BLOCK, 3:LZ4 SEREAM, 4、5、6、7预留
  */
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use pi_lib::atom::Atom;
 
-use mqtt::server::{ServerNode, ClientStub};
-use mqtt::session::{Session, LZ4_BLOCK, UNCOMPRESS};
-use mqtt::handler::TopicHandle;
 use mqtt::data::Server;
+use mqtt::server::{ClientStub, ServerNode};
+use mqtt::session::{LZ4_BLOCK, Session, UNCOMPRESS};
 
+use pi_base::util::uncompress;
+use pi_lib::handler::{Args, Handler};
 use traits::RPCServerTraits;
-use pi_base::util::{uncompress};
 
 #[derive(Clone)]
 pub struct RPCServer {
@@ -30,18 +30,19 @@ pub struct RPCServer {
 //     LZ4_SEREAM,
 // }
 
-
-
 impl RPCServer {
     pub fn new(mqtt: ServerNode) -> Self {
         RPCServer { mqtt }
     }
 }
 
-
-
 impl RPCServerTraits for RPCServer {
-    fn register(&mut self, topic: Atom, sync: bool, topic_handle: Arc<TopicHandle>) -> Result<()> {
+    fn register(
+        &mut self,
+        topic: Atom,
+        sync: bool,
+        handle: Arc<Handler<HandleResult = ()>>,
+    ) -> Result<()> {
         let topic2 = topic.clone();
         let rpc_handle = move |client: ClientStub, r: Result<Arc<Vec<u8>>>| {
             let data = r.unwrap();
@@ -51,8 +52,15 @@ impl RPCServerTraits for RPCServer {
             //消息版本
             let vsn = &header & 0b11111;
             let uid = data[1..4].as_ptr();
-            let mut session = Session::new(client.clone(), sync, u32::from_be(unsafe { *(uid as *mut u32) }));
-            let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+            let mut session = Session::new(
+                client.clone(),
+                sync,
+                u32::from_be(unsafe { *(uid as *mut u32) }),
+            );
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
             session.set_timeout(now as usize, data[5]);
             let mut rdata = Vec::new();
             match compress {
@@ -61,27 +69,34 @@ impl RPCServerTraits for RPCServer {
                     let mut vec_ = Vec::new();
                     uncompress(&data[6..], &mut vec_).is_ok();
                     rdata.extend_from_slice(&vec_[..]);
-                },
+                }
                 _ => session.close(),
             }
             let session = Arc::new(session);
             let rdata = Arc::new(rdata);
-            let func;
-            {   
+            let handle_func;
+            {
                 let topic2 = topic2.clone();
                 let vsn = vsn;
                 let rdata = rdata.clone();
                 let session = session.clone();
-                let topic_handle = topic_handle.clone();
-                func = Arc::new(move || {topic_handle.clone().handle(topic2.clone(), vsn, session.clone(), rdata.clone())});
+                let handle = handle.clone();
+                let mut args = Args::new(2);
+                args.push(vsn);
+                args.push(rdata);
+                handle_func =
+                    Box::new(move || handle.clone().handle(session.clone(), topic2.clone(), args));
             }
             if sync {
-                topic_handle.handle(topic2.clone(), vsn.clone(), session.clone(), rdata.clone());
+                handle_func();
             } else if client.get_queue_size() == 0 {
-                topic_handle.handle(topic2.clone(), vsn.clone(), session.clone(), rdata.clone());
-                client.queue_push(func.clone());
+                let mut args = Args::new(2);
+                args.push(vsn);
+                args.push(rdata);
+                handle.clone().handle(session.clone(), topic2.clone(), args);
+                client.queue_push(handle_func);
             } else {
-                client.queue_push(func.clone());
+                client.queue_push(handle_func);
             }
         };
         match self.mqtt.set_topic_meta(
