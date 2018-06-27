@@ -7,9 +7,9 @@ use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
 
-use pi_lib::atom::Atom;
-use mqtt::client::{ClientNode};
+use mqtt::client::ClientNode;
 use mqtt::data::Client;
+use pi_lib::atom::Atom;
 
 use mqtt3::{LastWill, QoS};
 use net::{Config, NetManager, Protocol, Socket, Stream};

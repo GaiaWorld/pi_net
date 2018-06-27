@@ -5,7 +5,7 @@ use std::io::Result;
  * 第一字节：前3位表示压缩算法，后5位表示版本（灰度）
  * 压缩算法：0：不压缩，1：rsync, 2:LZ4 BLOCK, 3:LZ4 SEREAM, 4、5、6、7预留
  */
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use fnv::FnvHashMap;
 use pi_lib::atom::Atom;
@@ -18,7 +18,7 @@ use mqtt::data::{Client, ClientCallback};
 use mqtt::session::{LZ4_BLOCK, UNCOMPRESS};
 use mqtt::util;
 
-use net::Socket;
+use net::{Socket, Stream};
 
 use pi_base::util::{compress, uncompress, CompressLevel};
 use traits::RPCClientTraits;
@@ -87,6 +87,10 @@ impl RPCClient {
                 Box::new(move |r| topic_handle(r)),
             )
             .is_ok();
+    }
+
+    pub fn set_stream(&mut self, socket: Socket, stream: Arc<RwLock<Stream>>) {
+        self.mqtt.set_stream(socket, stream)
     }
 }
 

@@ -1,18 +1,16 @@
-
 use std::io::Result;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 
-use net::{Config, NetManager, Protocol, Socket, Stream};
-use mqtt::session::{Session};
-use mqtt::server::{ServerNode};
 use mqtt::data::Server;
-use pi_lib::handler::{Handler, Args, Env};
-use rpc::server::{RPCServer};
+use mqtt::server::ServerNode;
+use mqtt::session::Session;
+use net::{Config, NetManager, Protocol, Socket, Stream};
+use pi_lib::handler::{Args, Env, Handler};
+use rpc::server::RPCServer;
 use rpc::traits::RPCServerTraits;
 
 use pi_lib::atom::Atom;
-
 
 struct Handle {
     _id: u8,
@@ -20,17 +18,33 @@ struct Handle {
 
 impl Handle {
     pub fn new() -> Self {
-        Handle{
-            _id: 1,
-        }
+        Handle { _id: 1 }
     }
 }
 
 impl Handler for Handle {
+    type A = u8;
+    type B = Arc<Vec<u8>>;
+    type C = ();
+    type D = ();
+    type E = ();
+    type F = ();
+    type G = ();
+    type H = ();
     type HandleResult = ();
-    fn handle(&self, session: Arc<dyn Env>, atom: Atom, mut args: Args) -> Self::HandleResult {
-        let msg: Arc<Vec<u8>> = args.remove(1).unwrap();
-        println!("topic_handle!!!!!!!atom:{}, msg:{:?}", *atom, String::from_utf8(msg.to_vec()));
+    fn handle(
+        &self,
+        session: Arc<dyn Env>,
+        atom: Atom,
+        args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>,
+    ) -> Self::HandleResult {
+        if let Args::TwoArgs(_vsn, msg) = args {
+            println!(
+                "topic_handle!!!!!!!atom:{}, msg:{:?}",
+                *atom,
+                String::from_utf8(msg.to_vec())
+            );
+        }
         unsafe {
             let session = Arc::from_raw(Arc::into_raw(session) as *const Session);
             session.respond(atom, String::from("ok!!!!").into_bytes());
@@ -45,11 +59,18 @@ fn handle_close(stream_id: usize, reason: Result<()>) {
     );
 }
 
-
-fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketAddr>, mut mqtt: ServerNode, mut rpc: RPCServer) {
-    
+fn handle_bind(
+    peer: Result<(Socket, Arc<RwLock<Stream>>)>,
+    addr: Result<SocketAddr>,
+    mut mqtt: ServerNode,
+    mut rpc: RPCServer,
+) {
     let (socket, stream) = peer.unwrap();
-    println!("server handle_bind: addr = {:?}, socket:{}", addr.unwrap(), socket.socket);
+    println!(
+        "server handle_bind: addr = {:?}, socket:{}",
+        addr.unwrap(),
+        socket.socket
+    );
     {
         let s = &mut stream.write().unwrap();
 
@@ -61,13 +82,21 @@ fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketA
     }
 
     mqtt.add_stream(socket, stream);
-    
+
     let topic_handle = Handle::new();
     //通过rpc注册topic
-    rpc.register(Atom::from(String::from("a/b/c").as_str()), true, Arc::new(topic_handle)).is_ok();
+    rpc.register(
+        Atom::from(String::from("a/b/c").as_str()),
+        true,
+        Arc::new(topic_handle),
+    ).is_ok();
     let topic_handle = Handle::new();
     //注册遗言
-    rpc.register(Atom::from(String::from("$last_will").as_str()), true, Arc::new(topic_handle)).is_ok();
+    rpc.register(
+        Atom::from(String::from("$last_will").as_str()),
+        true,
+        Arc::new(topic_handle),
+    ).is_ok();
 }
 
 pub fn start_server() -> NetManager {
@@ -80,6 +109,10 @@ pub fn start_server() -> NetManager {
     //rpc服务
     let mut rpc = RPCServer::new(mqtt.clone());
     let addr = "127.0.0.1:1234".parse().unwrap();
-    mgr.bind(addr, config, Box::new(move |peer, addr| handle_bind(peer, addr, mqtt.clone(), rpc.clone())));
+    mgr.bind(
+        addr,
+        config,
+        Box::new(move |peer, addr| handle_bind(peer, addr, mqtt.clone(), rpc.clone())),
+    );
     return mgr;
 }

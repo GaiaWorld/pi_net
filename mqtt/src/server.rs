@@ -1,10 +1,10 @@
+use std::boxed::FnBox;
+use std::fmt::{Debug, Formatter, Result as DebugResult};
 use std::io::{Error, ErrorKind, Result};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::time::SystemTime;
-use std::fmt::{Debug, Result as DebugResult, Formatter};
-use std::boxed::FnBox;
 
 use magnetic::buffer::dynamic::DynamicBuffer;
 use magnetic::mpsc::mpsc_queue;
@@ -68,9 +68,13 @@ pub struct ClientStub {
 }
 
 impl Debug for ClientStub {
-	fn fmt(&self, f: &mut Formatter) -> DebugResult {
-		write!(f, "ClientStub[socket = {}, keep_alive = {}]", self.socket.socket, self.keep_alive)
-	}
+    fn fmt(&self, f: &mut Formatter) -> DebugResult {
+        write!(
+            f,
+            "ClientStub[socket = {}, keep_alive = {}]",
+            self.socket.socket, self.keep_alive
+        )
+    }
 }
 
 struct ServerNodeImpl {

@@ -5,7 +5,7 @@ use std::io::Result;
  * 第一字节：前3位表示压缩算法，后5位表示版本（灰度）
  * 压缩算法：0：不压缩，1：rsync, 2:LZ4 BLOCK, 3:LZ4 SEREAM, 4、5、6、7预留
  */
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
 use pi_lib::atom::Atom;
@@ -18,9 +18,11 @@ use pi_base::util::uncompress;
 use pi_lib::handler::{Args, Handler};
 use traits::RPCServerTraits;
 
+use net::{CloseFn, Socket, Stream};
+
 #[derive(Clone)]
 pub struct RPCServer {
-    mqtt: ServerNode,
+    pub mqtt: ServerNode,
 }
 
 // enum Compress {
@@ -34,6 +36,18 @@ impl RPCServer {
     pub fn new(mqtt: ServerNode) -> Self {
         RPCServer { mqtt }
     }
+
+    pub fn unset_topic_meta(&mut self, topic: Atom) {
+        self.mqtt.unset_topic_meta(topic).is_ok();
+    }
+    //设置连接关闭回调
+    pub fn set_close_callback(&mut self, stream: &mut Stream, func: CloseFn) {
+        self.mqtt.set_close_callback(stream, func)
+    }
+    //
+    pub fn add_stream(&mut self, socket: Socket, stream: Arc<RwLock<Stream>>) {
+        self.mqtt.add_stream(socket, stream)
+    }
 }
 
 impl RPCServerTraits for RPCServer {
@@ -41,7 +55,19 @@ impl RPCServerTraits for RPCServer {
         &mut self,
         topic: Atom,
         sync: bool,
-        handle: Arc<Handler<HandleResult = ()>>,
+        handle: Arc<
+            Handler<
+                A = u8,
+                B = Arc<Vec<u8>>,
+                C = (),
+                D = (),
+                E = (),
+                F = (),
+                G = (),
+                H = (),
+                HandleResult = (),
+            >,
+        >,
     ) -> Result<()> {
         let topic2 = topic.clone();
         let rpc_handle = move |client: ClientStub, r: Result<Arc<Vec<u8>>>| {
@@ -81,19 +107,20 @@ impl RPCServerTraits for RPCServer {
                 let rdata = rdata.clone();
                 let session = session.clone();
                 let handle = handle.clone();
-                let mut args = Args::new(2);
-                args.push(vsn);
-                args.push(rdata);
-                handle_func =
-                    Box::new(move || handle.clone().handle(session.clone(), topic2.clone(), args));
+                handle_func = Box::new(move || {
+                    handle.clone().handle(
+                        session.clone(),
+                        topic2.clone(),
+                        Args::TwoArgs(vsn, rdata),
+                    )
+                });
             }
             if sync {
                 handle_func();
             } else if client.get_queue_size() == 0 {
-                let mut args = Args::new(2);
-                args.push(vsn);
-                args.push(rdata);
-                handle.clone().handle(session.clone(), topic2.clone(), args);
+                handle
+                    .clone()
+                    .handle(session.clone(), topic2.clone(), Args::TwoArgs(vsn, rdata));
                 client.queue_push(handle_func);
             } else {
                 client.queue_push(handle_func);
@@ -112,7 +139,7 @@ impl RPCServerTraits for RPCServer {
     }
 
     fn unregister(&mut self, topic: Atom) -> Result<()> {
-        self.mqtt.unset_topic_meta(topic).is_ok();
+        self.unset_topic_meta(topic);
         Ok(())
     }
 }

@@ -1,12 +1,9 @@
-use std::sync::Arc;
-use std::any::Any;
+use mqtt3;
 
-use mqtt3::{self};
-
-use server::ClientStub;
-use pi_lib::atom::Atom;
 use pi_base::util::{compress, CompressLevel};
-use pi_lib::handler::Env;
+use pi_lib::atom::Atom;
+use pi_lib::handler::{Env, GenType};
+use server::ClientStub;
 use util;
 
 //LZ4_BLOCK 压缩
@@ -48,9 +45,8 @@ pub fn encode(msg_id: u32, timeout: u8, msg: Vec<u8>) -> Vec<u8> {
     buff.push(timeout as u8);
     //剩下的消息体
     buff.extend_from_slice(body.as_slice());
-    return buff
+    return buff;
 }
-
 
 //会话
 impl Session {
@@ -81,7 +77,7 @@ impl Session {
     //回应消息
     pub fn respond(&self, _topic: Atom, msg: Vec<u8>) {
         if self.seq {
-            self.send(Atom::from("$r"), msg);    
+            self.send(Atom::from("$r"), msg);
         } else {
             self.client.queue_pop();
             self.send(Atom::from("$r"), msg);
@@ -101,25 +97,34 @@ impl Session {
 
 impl Env for Session {
     //获取属性
-    fn get_attr(&self, key: Atom) -> Option<Box<Any>> {
+    fn get_attr(&self, key: Atom) -> Option<GenType> {
         let attr = self.client.get_attributes();
         let attr = attr.read().unwrap();
         if let Some(v) = attr.get(&key) {
-            return Some(Box::new(v.clone()) as Box<Any>)
-        }
+            return Some(GenType::ArcBin(v.clone()));
+        };
         None
     }
     //设置属性，返回上个属性值
-    fn set_attr(&mut self, key: Atom, value: Box<Any>) -> Option<Box<Any>> {
+    fn set_attr(&mut self, key: Atom, value: GenType) -> Option<GenType> {
         let attr = self.client.get_attributes();
         let mut attr = attr.write().unwrap();
-        let value: Option<&Arc<Vec<u8>>> = value.downcast_ref();
-        if let Some(v) = value {
-            if let Some(old) = attr.insert(key, v.clone()) {
-                return Some(Box::new(old) as Box<Any>)
-            } else {
-                return None
+        match value {
+            GenType::ArcBin(v) => {
+                if let Some(old) = attr.insert(key, v.clone()) {
+                    return Some(GenType::ArcBin(old));
+                };
+                None
             }
+            _ => None,
+        }
+    }
+    //移除属性
+    fn remove_attr(&mut self, key: Atom) -> Option<GenType> {
+        let attr = self.client.get_attributes();
+        let mut attr = attr.write().unwrap();
+        if let Some(v) = attr.remove(&key) {
+            return Some(GenType::ArcBin(v));
         }
         None
     }
