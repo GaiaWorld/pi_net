@@ -37,7 +37,7 @@ pub enum Protocol {
 
 pub struct Config {
     pub protocol: Protocol,
-    pub server_addr: Option<SocketAddr>,
+    pub addr: SocketAddr,
 }
 
 // all size's unit is byte

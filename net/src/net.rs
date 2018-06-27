@@ -4,7 +4,7 @@ use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::time::{Duration};
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
-use std::net::{Shutdown, SocketAddr};
+use std::net::{Shutdown};
 
 use mio::{Events, Poll, PollOpt, Ready, Token};
 use mio::net::{TcpListener, TcpStream};
@@ -17,8 +17,8 @@ use data::{CloseFn, Config, ListenerFn, NetData, NetHandler, Protocol, RecvFn, S
 
 const MAX_RECV_SIZE: usize = 16 * 1024;
 
-fn bind_tcp(handler: &mut NetHandler, addr: SocketAddr, _config: Config, func: ListenerFn) {
-    if let Ok(lisn) = TcpListener::bind(&addr) {
+fn bind_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
+    if let Ok(lisn) = TcpListener::bind(&config.addr) {
         let entry = handler.slab.vacant_entry();
         let key = entry.key();
 
@@ -38,14 +38,14 @@ fn bind_tcp(handler: &mut NetHandler, addr: SocketAddr, _config: Config, func: L
     }
 }
 
-pub fn handle_bind(handler: &mut NetHandler, addr: SocketAddr, config: Config, func: ListenerFn) {
+pub fn handle_bind(handler: &mut NetHandler, config: Config, func: ListenerFn) {
     match config.protocol {
-        Protocol::TCP => bind_tcp(handler, addr, config, func),
+        Protocol::TCP => bind_tcp(handler, config, func),
     }
 }
 
 pub fn connect_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
-    if let Ok(s) = TcpStream::connect(&config.server_addr.unwrap()) {
+    if let Ok(s) = TcpStream::connect(&config.addr) {
         let entry = handler.slab.vacant_entry();
         let key = entry.key();
 

@@ -10,8 +10,8 @@ extern crate mio_extras;
 extern crate pi_lib;
 
 mod net;
-mod api;
-mod data;
+pub mod api;
+pub mod data;
 pub mod timer;
 
 pub use api::NetManager;

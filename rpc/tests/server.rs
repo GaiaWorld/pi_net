@@ -1,3 +1,4 @@
+
 use std::io::Result;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
@@ -11,6 +12,7 @@ use rpc::server::RPCServer;
 use rpc::traits::RPCServerTraits;
 
 use pi_lib::atom::Atom;
+
 
 struct Handle {
     _id: u8,
@@ -82,7 +84,7 @@ fn handle_bind(
     }
 
     mqtt.add_stream(socket, stream);
-
+    
     let topic_handle = Handle::new();
     //通过rpc注册topic
     rpc.register(
@@ -103,14 +105,12 @@ pub fn start_server() -> NetManager {
     let mgr = NetManager::new();
     let config = Config {
         protocol: Protocol::TCP,
-        server_addr: None,
+        addr: "127.0.0.1:1234".parse().unwrap(),
     };
     let mut mqtt = ServerNode::new();
     //rpc服务
     let mut rpc = RPCServer::new(mqtt.clone());
-    let addr = "127.0.0.1:1234".parse().unwrap();
     mgr.bind(
-        addr,
         config,
         Box::new(move |peer, addr| handle_bind(peer, addr, mqtt.clone(), rpc.clone())),
     );

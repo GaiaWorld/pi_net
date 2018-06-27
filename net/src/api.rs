@@ -1,7 +1,6 @@
 use std::thread;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
-use std::net::SocketAddr;
 
 use data::{Config, ListenerFn, NetHandler, SendClosureFn, Socket};
 use net::{handle_bind, handle_close, handle_connect, handle_net, handle_send};
@@ -25,9 +24,9 @@ impl NetManager {
     }
 
     /// call by logic thread
-    pub fn bind(&self, addr: SocketAddr, config: Config, func: ListenerFn) {
+    pub fn bind(&self, config: Config, func: ListenerFn) {
         let data = Box::new(move |handler: &mut NetHandler| {
-            handle_bind(handler, addr, config, func);
+            handle_bind(handler, config, func);
         });
 
         self.net_sender.send(data).unwrap();
