@@ -4,14 +4,14 @@ use std::io::{Error, ErrorKind, Result};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use std::time::SystemTime;
+use std::any::Any;
 
 use magnetic::buffer::dynamic::DynamicBuffer;
 use magnetic::mpsc::mpsc_queue;
 use magnetic::mpsc::{MPSCConsumer, MPSCProducer};
 use magnetic::{Consumer, Producer};
 
-use data::Server;
+use data::{Server, SetAttrFun};
 use fnv::FnvHashMap;
 use mqtt3::{self, Packet};
 use net::{CloseFn, Socket, Stream};
@@ -59,7 +59,7 @@ pub struct ClientStub {
     socket: Socket,
     keep_alive: u16,
     last_will: Arc<RwLock<Option<mqtt3::LastWill>>>,
-    attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>>,
+    attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Any>>>>,
     queue: Arc<(
         MPSCProducer<Box<FnBox()>, DynamicBuffer<Box<FnBox()>>>,
         MPSCConsumer<Box<FnBox()>, DynamicBuffer<Box<FnBox()>>>,
@@ -83,6 +83,7 @@ struct ServerNodeImpl {
     sub_topics: FnvHashMap<Atom, SubTopic>,
     retain_topics: FnvHashMap<Atom, RetainTopic>,
     metas: FnvHashMap<Atom, Arc<TopicMeta>>,
+    set_attr: Option<SetAttrFun>,
 }
 
 unsafe impl Sync for ServerNodeImpl {}
@@ -114,7 +115,7 @@ impl ClientStub {
         self.socket.clone()
     }
     //获取会话表
-    pub fn get_attributes(&self) -> Arc<RwLock<FnvHashMap<Atom, Arc<Vec<u8>>>>> {
+    pub fn get_attributes(&self) -> Arc<RwLock<FnvHashMap<Atom, Arc<Any>>>> {
         self.attributes.clone()
     }
 
@@ -132,10 +133,11 @@ impl ServerNode {
             sub_topics: FnvHashMap::default(),
             retain_topics: FnvHashMap::default(),
             metas: FnvHashMap::default(),
+            set_attr: None,
         })))
     }
     //设置连接关闭回调(遗言发布)
-    pub fn set_close_callback(&mut self, stream: &mut Stream, func: CloseFn) {
+    pub fn set_close_callback(&self, stream: &mut Stream, func: CloseFn) {
         let node = self.0.clone();
         let handle = move |socket_id: usize, r: Result<()>| {
             //获取遗言消息
@@ -162,12 +164,12 @@ impl ServerNode {
 }
 
 impl Server for ServerNode {
-    fn add_stream(&mut self, socket: Socket, stream: Arc<RwLock<Stream>>) {
+    fn add_stream(&self, socket: Socket, stream: Arc<RwLock<Stream>>) {
         handle_stream(self.0.clone(), socket, stream);
     }
 
     fn publish(
-        &mut self,
+        &self,
         retain: bool,
         qos: mqtt3::QoS,
         topic: Atom,
@@ -179,7 +181,7 @@ impl Server for ServerNode {
         return publish_impl(self.0.clone(), retain, qos, topic, payload);
     }
 
-    fn shutdown(&mut self) -> Result<()> {
+    fn shutdown(&self) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
         node.clients.clear();
         node.sub_topics.clear();
@@ -189,7 +191,7 @@ impl Server for ServerNode {
     }
 
     fn set_topic_meta(
-        &mut self,
+        &self,
         name: Atom,
         can_publish: bool,
         can_subscribe: bool,
@@ -217,10 +219,15 @@ impl Server for ServerNode {
         );
         return Ok(());
     }
-    fn unset_topic_meta(&mut self, name: Atom) -> Result<()> {
+    fn unset_topic_meta(&self, name: Atom) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
         node.metas.remove(&name);
         return Ok(());
+    }
+    fn set_attr(&self, handler: SetAttrFun) -> Result<()> {
+        let node = &mut self.0.lock().unwrap();
+        node.set_attr = Some(handler);
+        Ok(())
     }
 }
 
@@ -303,30 +310,14 @@ fn recv_connect(
     } else {
         // TODO: 验证 client_id 是否合法
         // code = mqtt3::ConnectReturnCode::RefusedIdentifierRejected;
-        let mut att = FnvHashMap::default();
-
-        if let Some(username) = connect.username {
-            att.insert(Atom::from("$username"), Arc::new(Vec::from(username)));
-        }
-        if let Some(password) = connect.password {
-            att.insert(Atom::from("$password"), Arc::new(Vec::from(password)));
-        }
-        att.insert(
-            Atom::from("$client_id"),
-            Arc::new(Vec::from(connect.client_id)),
-        );
-        att.insert(
-            Atom::from("$connect_time"),
-            Arc::new(Vec::from(
-                SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()
-                    .to_string(),
-            )),
-        );
+        
 
         let node = &mut node.lock().unwrap();
+        //调用设置attr方法
+        let mut att = FnvHashMap::default();
+        if let Some(attr_func) = &node.set_attr {
+            attr_func(&mut att, socket.clone(), connect.clone())
+        }
         let s = socket.clone();
         let client_stub = Arc::new(ClientStub {
             socket: s,
@@ -418,6 +409,7 @@ fn recv_sub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) -> mqtt3::Su
             let c = node.clients.get(&cid).unwrap();
             let att = c.attributes.read().unwrap();
             let attr = att.get(key).unwrap();
+            let attr: &Vec<u8> = attr.downcast_ref().unwrap();
 
             use std::str;
             let attr = str::from_utf8(attr).unwrap();
@@ -497,6 +489,7 @@ fn recv_unsub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) {
             let c = node.clients.get(&cid).unwrap();
             let att = c.attributes.read().unwrap();
             let attr = att.get(key).unwrap();
+            let attr: &Vec<u8> = attr.downcast_ref().unwrap();
 
             use std::str;
             let attr = str::from_utf8(attr).unwrap();

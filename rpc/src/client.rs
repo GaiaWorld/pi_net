@@ -19,6 +19,7 @@ use mqtt::session::{LZ4_BLOCK, UNCOMPRESS};
 use mqtt::util;
 
 use net::{Socket, Stream};
+use net::timer::{NetTimers, TimerCallback};
 
 use pi_base::util::{compress, uncompress, CompressLevel};
 use traits::RPCClientTraits;
@@ -26,7 +27,7 @@ use traits::RPCClientTraits;
 #[derive(Clone)]
 pub struct RPCClient {
     mqtt: ClientNode,
-    msg_id: u32,
+    msg_id: Arc<Mutex<u32>>,
     handlers: Arc<Mutex<FnvHashMap<u32, Box<Fn(Result<Arc<Vec<u8>>>)>>>>,
 }
 
@@ -37,17 +38,18 @@ impl RPCClient {
     pub fn new(mqtt: ClientNode) -> Self {
         RPCClient {
             mqtt,
-            msg_id: 0,
+            msg_id: Arc::new(Mutex::new(0)),
             handlers: Arc::new(Mutex::new(FnvHashMap::default())),
         }
     }
     pub fn connect(
-        &mut self,
+        &self,
         keep_alive: u16,        //ping-pong
         will: Option<LastWill>, //遗言
         close_func: Option<ClientCallback>,
         connect_func: Option<ClientCallback>,
     ) {
+        println!("rpc client connect!!!!!!!!");
         //连接MQTTser
         self.mqtt
             .connect(keep_alive, will, close_func, connect_func);
@@ -89,24 +91,41 @@ impl RPCClient {
             .is_ok();
     }
 
-    pub fn set_stream(&mut self, socket: Socket, stream: Arc<RwLock<Stream>>) {
+    pub fn set_stream(&self, socket: Socket, stream: Arc<RwLock<Stream>>) {
         self.mqtt.set_stream(socket, stream)
+    }
+
+    pub fn get_timers(&self) -> Arc<RwLock<NetTimers<TimerCallback>>> {
+        self.mqtt.get_timers()
+    }
+
+    pub fn set_topic_handler(
+        &self,
+        name: Atom,
+        handler: Box<Fn(Result<(Socket, &[u8])>)>,
+    ) -> Result<()> {
+        self.mqtt.set_topic_handler(name, handler)
     }
 }
 
 impl RPCClientTraits for RPCClient {
     fn request(
-        &mut self,
+        &self,
         topic: Atom,
         msg: Vec<u8>,
         resp: Box<Fn(Result<Arc<Vec<u8>>>)>,
         timeout: u8,
     ) {
-        self.msg_id += 1;
+        println!("pi_net rpc client request !!!!!!!!!!!!");
+        *self.msg_id.lock().unwrap() += 1;
+        println!("pi_net rpc client request 00000000000000");
         let socket = self.mqtt.get_socket();
+        println!("pi_net rpc client request 00000000000000");
         let mut buff: Vec<u8> = vec![];
+        println!("pi_net rpc client request 00000000000000");
         let msg_size = msg.len();
-        let msg_id = self.msg_id;
+        println!("pi_net rpc client request 00000000000000");
+        let msg_id = *self.msg_id.lock().unwrap();
         let mut compress_vsn = UNCOMPRESS;
         let mut body = vec![];
         if msg_size > 64 {
@@ -115,6 +134,7 @@ impl RPCClientTraits for RPCClient {
         } else {
             body = msg;
         }
+        println!("pi_net rpc client request 00000000000000");
         //第一字节：3位压缩版本、5位消息版本 TODO 消息版本以后定义
         buff.push(((compress_vsn << 5) | 0) as u8);
         let b1: u8 = ((msg_id >> 24) & 0xff) as u8;
@@ -129,7 +149,10 @@ impl RPCClientTraits for RPCClient {
         buff.extend_from_slice(body.as_slice());
         //发布消息
         util::send_publish(&socket, false, mqtt3::QoS::AtMostOnce, &topic, buff);
+        println!("pi_net rpc client request 11111111111");
         let mut handlers = self.handlers.lock().unwrap();
+        println!("pi_net rpc client request 2222222222");
         handlers.insert(msg_id, resp);
+        println!("pi_net rpc client request 333333333");
     }
 }

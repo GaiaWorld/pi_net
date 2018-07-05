@@ -111,7 +111,7 @@ impl ClientNode {
 }
 
 impl Client for ClientNode {
-    fn set_stream(&mut self, socket: Socket, stream: Arc<RwLock<Stream>>) {
+    fn set_stream(&self, socket: Socket, stream: Arc<RwLock<Stream>>) {
         let node = &mut self.0.lock().unwrap();
 
         while !node.socket_handlers.is_empty() {
@@ -124,7 +124,7 @@ impl Client for ClientNode {
     }
 
     fn connect(
-        &mut self,
+        &self,
         keep_alive: u16,
         will: Option<LastWill>,
         close_func: Option<ClientCallback>,
@@ -145,7 +145,7 @@ impl Client for ClientNode {
     }
 
     fn subscribe(
-        &mut self,
+        &self,
         topics: Vec<(String, mqtt3::QoS)>,
         resp_func: Option<ClientCallback>,
     ) -> Result<()> {
@@ -191,7 +191,7 @@ impl Client for ClientNode {
     }
 
     fn unsubscribe(
-        &mut self,
+        &self,
         topics: Vec<String>,
         resp_func: Option<ClientCallback>,
     ) -> Result<()> {
@@ -235,7 +235,7 @@ impl Client for ClientNode {
         return Ok(());
     }
 
-    fn disconnect(&mut self) -> Result<()> {
+    fn disconnect(&self) -> Result<()> {
         let func = Box::new(move |socket: &Socket, _stream: Arc<RwLock<Stream>>| {
             util::send_disconnect(socket);
         });
@@ -256,7 +256,7 @@ impl Client for ClientNode {
     }
 
     fn publish(
-        &mut self,
+        &self,
         retain: bool,
         _qos: mqtt3::QoS,
         topic: Atom,
@@ -276,7 +276,7 @@ impl Client for ClientNode {
     }
 
     fn set_topic_handler(
-        &mut self,
+        &self,
         name: Atom,
         handler: Box<Fn(Result<(Socket, &[u8])>)>,
     ) -> Result<()> {
@@ -309,7 +309,7 @@ impl Client for ClientNode {
         return Ok(());
     }
 
-    fn remove_topic_handler(&mut self, name: Atom) -> Result<()> {
+    fn remove_topic_handler(&self, name: Atom) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
         let topic;
         match mqtt3::TopicPath::from_str((*name).clone().as_str()) {
@@ -333,7 +333,7 @@ impl Client for ClientNode {
         return Ok(());
     }
 
-    fn add_attribute(&mut self, name: Atom, value: Vec<u8>) {
+    fn add_attribute(&self, name: Atom, value: Vec<u8>) {
         let node = &mut self.0.lock().unwrap();
         let has_attr = node.attributes.contains_key(&name);
         if !has_attr {
@@ -341,12 +341,12 @@ impl Client for ClientNode {
         }
     }
 
-    fn remove_attribute(&mut self, name: Atom) {
+    fn remove_attribute(&self, name: Atom) {
         let node = &mut self.0.lock().unwrap();
         node.attributes.remove(&name);
     }
 
-    fn get_attribute(&mut self, name: Atom) -> Option<Arc<Vec<u8>>> {
+    fn get_attribute(&self, name: Atom) -> Option<Arc<Vec<u8>>> {
         let node = &mut self.0.lock().unwrap();
         return match node.attributes.get(&name) {
             None => None,

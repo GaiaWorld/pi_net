@@ -10,7 +10,7 @@ use std::time::SystemTime;
 
 use pi_lib::atom::Atom;
 
-use mqtt::data::Server;
+use mqtt::data::{Server, SetAttrFun};
 use mqtt::server::{ClientStub, ServerNode};
 use mqtt::session::{LZ4_BLOCK, Session, UNCOMPRESS};
 
@@ -37,22 +37,26 @@ impl RPCServer {
         RPCServer { mqtt }
     }
 
-    pub fn unset_topic_meta(&mut self, topic: Atom) {
+    pub fn unset_topic_meta(&self, topic: Atom) {
         self.mqtt.unset_topic_meta(topic).is_ok();
     }
     //设置连接关闭回调
-    pub fn set_close_callback(&mut self, stream: &mut Stream, func: CloseFn) {
+    pub fn set_close_callback(&self, stream: &mut Stream, func: CloseFn) {
         self.mqtt.set_close_callback(stream, func)
     }
     //
-    pub fn add_stream(&mut self, socket: Socket, stream: Arc<RwLock<Stream>>) {
+    pub fn add_stream(&self, socket: Socket, stream: Arc<RwLock<Stream>>) {
         self.mqtt.add_stream(socket, stream)
+    }
+    //为连接设置初始化attr
+    pub fn set_attr(&self, handler: SetAttrFun) -> Result<()> {
+        self.mqtt.set_attr(handler)
     }
 }
 
 impl RPCServerTraits for RPCServer {
     fn register(
-        &mut self,
+        &self,
         topic: Atom,
         sync: bool,
         handle: Arc<
@@ -138,7 +142,7 @@ impl RPCServerTraits for RPCServer {
         }
     }
 
-    fn unregister(&mut self, topic: Atom) -> Result<()> {
+    fn unregister(&self, topic: Atom) -> Result<()> {
         self.unset_topic_meta(topic);
         Ok(())
     }

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use mqtt3;
 
 use pi_base::util::{compress, CompressLevel};
@@ -101,7 +103,7 @@ impl Env for Session {
         let attr = self.client.get_attributes();
         let attr = attr.read().unwrap();
         if let Some(v) = attr.get(&key) {
-            return Some(GenType::ArcBin(v.clone()));
+            return Some(GenType::Pointer(Arc::into_raw(v.clone())));
         };
         None
     }
@@ -110,9 +112,9 @@ impl Env for Session {
         let attr = self.client.get_attributes();
         let mut attr = attr.write().unwrap();
         match value {
-            GenType::ArcBin(v) => {
-                if let Some(old) = attr.insert(key, v.clone()) {
-                    return Some(GenType::ArcBin(old));
+            GenType::Pointer(v) => {
+                if let Some(old) = attr.insert(key, Arc::from(v)) {
+                    return Some(GenType::Pointer(Arc::into_raw(old.clone())));
                 };
                 None
             }
@@ -124,7 +126,7 @@ impl Env for Session {
         let attr = self.client.get_attributes();
         let mut attr = attr.write().unwrap();
         if let Some(v) = attr.remove(&key) {
-            return Some(GenType::ArcBin(v));
+            return Some(GenType::Pointer(Arc::into_raw(v.clone())));
         }
         None
     }

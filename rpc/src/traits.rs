@@ -8,7 +8,7 @@ use std::sync::Arc;
 pub trait RPCClientTraits {
     // 最终变为：$r，payload: params
     fn request(
-        &mut self,
+        &self,
         topic: Atom,
         msg: Vec<u8>,
         resp: Box<Fn(Result<Arc<Vec<u8>>>)>,
@@ -24,7 +24,7 @@ pub trait RPCServerTraits {
     // 最终变为：$q，payload; 返回值, $r/$id
     //
     fn register(
-        &mut self,
+        &self,
         topic: Atom,
         sync: bool,
         handle: Arc<
@@ -44,7 +44,7 @@ pub trait RPCServerTraits {
 
     // fn register_async(func_name: Atom, fn: Box<Fn(&[u8], Arc<Fn(&[u8])>>));
 
-    fn unregister(&mut self, topic: Atom) -> Result<()>;
+    fn unregister(&self, topic: Atom) -> Result<()>;
 }
 
 // sub($q/$id, function () {
