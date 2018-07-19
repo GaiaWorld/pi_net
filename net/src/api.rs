@@ -1,9 +1,14 @@
 use std::thread;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
+use std::io::Cursor;
+use std::io::Read;
 
 use data::{Config, ListenerFn, NetHandler, SendClosureFn, Socket};
 use net::{handle_bind, handle_close, handle_connect, handle_net, handle_send};
+use websocket::ws::Sender as SenderT;
+use websocket::sender::{Sender as WsSender};
+use websocket::OwnedMessage;
 
 pub struct NetManager {
     net_sender: Sender<SendClosureFn>,
@@ -45,11 +50,25 @@ impl NetManager {
 impl Socket {
     /// call by logic thread
     pub fn send(&self, buf: Arc<Vec<u8>>) {
+        let mut sender = WsSender::new(false);
+        let mut reader = Cursor::new(vec![]);
+        let buf  = Vec::from(buf.as_slice());
+        let message = OwnedMessage::Binary(buf);
+        sender.send_dataframe(&mut reader, &message).is_ok();
+        let buf = Arc::new(reader.into_inner());
         let socket = self.socket;
         let data = Box::new(move |handler: &mut NetHandler| {
             handle_send(handler, socket, buf);
         });
 
+        self.sender.send(data).unwrap();
+    }
+
+    pub fn send_bin(&self, buf: Arc<Vec<u8>>) {
+        let socket = self.socket;
+        let data = Box::new(move |handler: &mut NetHandler| {
+            handle_send(handler, socket, buf);
+        });
         self.sender.send(data).unwrap();
     }
 

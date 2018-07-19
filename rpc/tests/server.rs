@@ -1,3 +1,8 @@
+extern crate mqtt;
+extern crate mqtt3;
+extern crate net;
+extern crate pi_lib;
+extern crate rpc;
 
 use std::io::Result;
 use std::net::SocketAddr;
@@ -81,6 +86,7 @@ fn handle_bind(
         mqtt.set_close_callback(s, Box::new(|id, reason| handle_close(id, reason)));
         s.set_send_buf_size(1024 * 1024);
         s.set_recv_timeout(500 * 1000);
+        s.set_socket(socket.clone());
     }
 
     mqtt.add_stream(socket, stream);
@@ -88,7 +94,7 @@ fn handle_bind(
     let topic_handle = Handle::new();
     //通过rpc注册topic
     rpc.register(
-        Atom::from(String::from("a/b/c").as_str()),
+        Atom::from(String::from("examples/testrpc/player.s.setName").as_str()),
         true,
         Arc::new(topic_handle),
     ).is_ok();

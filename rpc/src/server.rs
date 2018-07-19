@@ -2,8 +2,8 @@ use std::io::Result;
 /**
  * RPC传输协议：
  * 消息体：1字节表示压缩和版本,4字节消息ID，1字节超时时长（0表示不超时), 剩下的BonBuffer ,
- * 第一字节：前3位表示压缩算法，后5位表示版本（灰度）
- * 压缩算法：0：不压缩，1：rsync, 2:LZ4 BLOCK, 3:LZ4 SEREAM, 4、5、6、7预留
+ * 第一字节：前2位表示压缩算法,第3位表示差异比较，后5位表示版本（灰度）
+ * 压缩算法：0：不压缩，1：lz4, 2:zstd
  */
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
@@ -78,7 +78,7 @@ impl RPCServerTraits for RPCServer {
             let data = r.unwrap();
             let header = data[0];
             //压缩版本
-            let compress = (&header >> 5) as u8;
+            let compress = (&header >> 6) as u8;
             //消息版本
             let vsn = &header & 0b11111;
             let uid = data[1..4].as_ptr();

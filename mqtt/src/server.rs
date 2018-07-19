@@ -262,28 +262,28 @@ fn handle_recv(
     }
 
     //设置keep_alive定时器
-    {
-        let node = &mut node.lock().unwrap();
-        let clients = node.clients.get(&socket.socket).unwrap();
-        let keep_alive = clients.keep_alive;
-        if keep_alive > 0 {
-            let stream = st.clone();
-            let stream = stream.read().unwrap();
-            let mut timers = stream.net_timers.write().unwrap();
-            let socket = socket.clone();
-            //mqtt协议要求keep_alive的1.5倍超时关闭连接
-            let keep_alive = (keep_alive as f32) * 1.5;
-            timers.set_timeout(
-                Atom::from(String::from("handle_recv") + &socket.socket.to_string()),
-                Duration::from_secs(keep_alive as u64),
-                Box::new(move |_src: Atom| {
-                    println!("keep_alive timeout con close!!!!!!!!!!!!");
-                    //关闭连接
-                    socket.close(true);
-                }),
-            )
-        }
-    }
+    // {
+    //     let node = &mut node.lock().unwrap();
+    //     let clients = node.clients.get(&socket.socket).unwrap();
+    //     let keep_alive = clients.keep_alive;
+    //     if keep_alive > 0 {
+    //         let stream = st.clone();
+    //         let stream = stream.read().unwrap();
+    //         let mut timers = stream.net_timers.write().unwrap();
+    //         let socket = socket.clone();
+    //         //mqtt协议要求keep_alive的1.5倍超时关闭连接
+    //         let keep_alive = (keep_alive as f32) * 1.5;
+    //         timers.set_timeout(
+    //             Atom::from(String::from("handle_recv") + &socket.socket.to_string()),
+    //             Duration::from_secs(keep_alive as u64),
+    //             Box::new(move |_src: Atom| {
+    //                 println!("keep_alive timeout con close!!!!!!!!!!!!");
+    //                 //关闭连接
+    //                 socket.close(true);
+    //             }),
+    //         )
+    //     }
+    // }
 
     {
         let s = st.clone();
@@ -305,7 +305,8 @@ fn recv_connect(
     connect: mqtt3::Connect,
 ) {
     let mut code = mqtt3::ConnectReturnCode::Accepted;
-    if connect.protocol != mqtt3::Protocol::MQTT(4) {
+    println!("connect.protocol = {:?}", connect.protocol);
+    if connect.protocol != mqtt3::Protocol::MQTT(4) && connect.protocol != mqtt3::Protocol::MQIsdp(3) {
         code = mqtt3::ConnectReturnCode::RefusedProtocolVersion;
     } else {
         // TODO: 验证 client_id 是否合法
@@ -501,18 +502,21 @@ fn recv_unsub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) {
 }
 
 fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish, socket: &Socket) {
+    println!("mqtt server!!!!!!!!!!!!!!!!!");
     if publish.qos != mqtt3::QoS::AtMostOnce {
         return;
     }
-
+    println!("&publish.topic_name = {:?}", &publish.topic_name);
     let topic = mqtt3::TopicPath::from_str(&publish.topic_name);
     if topic.is_err() {
         return;
     }
     let topic = topic.unwrap();
+    println!("topic = {:?}", topic);
     let node = &mut node.lock().unwrap();
     for (_, meta) in node.metas.iter() {
         if meta.topic.is_match(&topic) {
+            println!("mqtt server !!!!!!! topic = {:?}", topic);
             let client_stub = node.clients.get(&socket.socket).unwrap();
             let client_stub = &*client_stub.clone();
             (meta.publish_func)(client_stub.clone(), Ok(publish.payload.clone()));

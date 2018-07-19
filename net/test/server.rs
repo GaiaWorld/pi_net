@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 
 use net::{Config, NetManager, Protocol, Socket, Stream};
+use net::net::recv;
 
 fn handle_close(stream_id: usize, reason: Result<()>) {
     println!(
@@ -13,6 +14,7 @@ fn handle_close(stream_id: usize, reason: Result<()>) {
 
 fn handle_recv(socket: Socket, stream: Arc<RwLock<Stream>>, begin: usize, end: usize) {
     let s = stream.clone();
+    let stream2 = stream.clone();
     println!("server, request recv [{}, {}]", begin, end);
 
     let func = Box::new(move |data: Result<Arc<Vec<u8>>>| {
@@ -45,7 +47,7 @@ fn handle_recv(socket: Socket, stream: Arc<RwLock<Stream>>, begin: usize, end: u
         handle_recv(socket, s, end, new_end);
     });
 
-    let r = stream.write().unwrap().recv(end - begin, func);
+    let r = recv(stream2.clone(), end - begin, func);
     if let Some((func, data)) = r {
         func(data);
     }
@@ -62,6 +64,7 @@ fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketA
         s.set_close_callback(Box::new(|id, reason| handle_close(id, reason)));
         s.set_send_buf_size(1024 * 1024);
         s.set_recv_timeout(5 * 1000);
+        s.set_socket(socket.clone());
     }
 
     handle_recv(socket, stream, 0, 1 * 1024);

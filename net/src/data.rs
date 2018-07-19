@@ -40,6 +40,12 @@ pub struct Config {
     pub addr: SocketAddr,
 }
 
+#[derive(Clone)]
+pub enum Websocket {
+    None,
+    Bin(usize, usize), //offset, size
+}
+
 // all size's unit is byte
 pub struct Stream {
     pub state: State,
@@ -68,6 +74,12 @@ pub struct Stream {
     pub close_callback: Option<CloseFn>,
 
     pub net_timers: Arc<RwLock<NetTimers<TimerCallback>>>,
+
+    //websocket
+    pub websocket: Websocket,
+    pub websocket_buf: Vec<u8>,
+    //socket
+    pub socket: Option<Socket>,
 }
 
 pub enum State {

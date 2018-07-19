@@ -1,3 +1,9 @@
+extern crate mqtt;
+extern crate mqtt3;
+extern crate net;
+extern crate pi_lib;
+extern crate rpc;
+
 use rpc::client::RPCClient;
 use rpc::traits::RPCClientTraits;
 

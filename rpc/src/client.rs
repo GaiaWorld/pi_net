@@ -59,7 +59,7 @@ impl RPCClient {
             let (socket, data) = r.unwrap();
             let header = data[0];
             //压缩版本
-            let compress = (&header >> 5) as u8;
+            let compress = (&header >> 6) as u8;
             //消息版本
             let _vsn = &header & 0b11111;
             let msg_id = u32::from_be(unsafe { *((data[1..4].as_ptr()) as *mut u32) });
@@ -136,7 +136,7 @@ impl RPCClientTraits for RPCClient {
         }
         println!("pi_net rpc client request 00000000000000");
         //第一字节：3位压缩版本、5位消息版本 TODO 消息版本以后定义
-        buff.push(((compress_vsn << 5) | 0) as u8);
+        buff.push(((compress_vsn << 6) | 0) as u8);
         let b1: u8 = ((msg_id >> 24) & 0xff) as u8;
         let b2: u8 = ((msg_id >> 16) & 0xff) as u8;
         let b3: u8 = ((msg_id >> 8) & 0xff) as u8;

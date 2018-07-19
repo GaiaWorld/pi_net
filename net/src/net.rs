@@ -1,6 +1,6 @@
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
-use std::io::{Error, ErrorKind, Read, Result, Write};
+use std::io::{Error, ErrorKind, Read, Result, Write, Cursor};
 use std::time::{Duration};
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
@@ -9,11 +9,15 @@ use std::net::{Shutdown};
 use mio::{Events, Poll, PollOpt, Ready, Token};
 use mio::net::{TcpListener, TcpStream};
 use timer::{NetTimer, NetTimers, TimerCallback};
+use ws::{read_header as http_read_header, read_ws_header as ws_read_header, get_send_buf};
+
+use websocket::OwnedMessage;
+use websocket::server::upgrade::sync::Upgrade;
 
 use slab::Slab;
 
 use data::{CloseFn, Config, ListenerFn, NetData, NetHandler, Protocol, RecvFn, SendClosureFn,
-           Socket, State, Stream};
+           Socket, State, Stream, Websocket};
 
 const MAX_RECV_SIZE: usize = 16 * 1024;
 
@@ -184,40 +188,73 @@ fn stream_recv(stream: &mut Stream, mio: &mut TcpStream) -> Option<Result<(RecvF
     let mut r: Option<Result<(RecvFn, Range<usize>)>> = None;
     if stream.temp_recv_buf.is_none() {
         let would_block = loop {
-            let begin = stream.recv_buf_offset;
-            let end = stream.recv_callback_offset + stream.recv_size;
-            match mio.read(&mut stream.recv_buf[begin..end]) {
-                Ok(size) => {
-                    stream.recv_buf_offset += size;
-                    if stream.recv_buf_offset == end {
+            if stream.recv_size == 0 {
+                let begin = stream.recv_buf_offset;
+                match mio.read(&mut stream.recv_buf[begin..]) {
+                    Ok(0) => {},
+                    Ok(size) => {
+                        stream.recv_buf_offset += size;
                         break Ok(());
+                    }
+                    Err(err) => {
+                        if let ErrorKind::WouldBlock = err.kind() {
+                            println!(
+                                "{:?} recv wouldblock, offset = {}",
+                                stream.token, stream.recv_buf_offset
+                            );
+                            break Ok(());
+                        }
+                        break Err(err);
                     }
                 }
-                Err(err) => {
-                    if let ErrorKind::WouldBlock = err.kind() {
-                        println!(
-                            "{:?} recv wouldblock, offset = {}",
-                            stream.token, stream.recv_buf_offset
-                        );
-                        break Ok(());
+            } else {
+                let begin = stream.recv_buf_offset;
+                let end = stream.recv_callback_offset + stream.recv_size;
+                match mio.read(&mut stream.recv_buf[begin..end]) {
+                    Ok(size) => {
+                        stream.recv_buf_offset += size;
+                        if stream.recv_buf_offset == end {
+                            break Ok(());
+                        }
                     }
-                    break Err(err);
+                    Err(err) => {
+                        if let ErrorKind::WouldBlock = err.kind() {
+                            println!(
+                                "{:?} recv wouldblock, offset = {}",
+                                stream.token, stream.recv_buf_offset
+                            );
+                            break Ok(());
+                        }
+                        break Err(err);
+                    }
                 }
             }
+            
         };
 
         match would_block {
             Ok(_) => {
-                assert!(stream.recv_buf_offset - stream.recv_callback_offset <= stream.recv_size);
-
-                if stream.recv_buf_offset - stream.recv_callback_offset == stream.recv_size {
+                if stream.recv_size == 0 && stream.recv_buf_offset > stream.recv_callback_offset {
                     let start = stream.recv_callback_offset;
-                    let end = start + stream.recv_size;
+                    let end = stream.recv_buf_offset;
                     let func = stream.recv_callback.take().unwrap();
                     r = Some(Ok((func, start..end)));
+                    
+                    let size2 = end - start;
+                    stream.recv_callback_offset += size2;
+                } else {
+                    assert!(stream.recv_buf_offset - stream.recv_callback_offset <= stream.recv_size);
 
-                    stream.recv_callback_offset += stream.recv_size;
+                    if stream.recv_buf_offset - stream.recv_callback_offset == stream.recv_size && stream.recv_size != 0 {
+                        let start = stream.recv_callback_offset;
+                        let end = start + stream.recv_size;
+                        let func = stream.recv_callback.take().unwrap();
+                        r = Some(Ok((func, start..end)));
+
+                        stream.recv_callback_offset += stream.recv_size;
+                    }
                 }
+                
             }
             Err(err) => {
                 r = Some(Err(err));
@@ -270,9 +307,6 @@ fn stream_send(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream) -> boo
         let buf = stream.send_bufs.pop_front();
         if None == buf {
             mio.flush().unwrap();
-
-            println!("stream send finish!!!!!!!!");
-
             stream.interest.remove(Ready::writable());
 
             println!(
@@ -552,6 +586,9 @@ impl Stream {
             close_callback: None,
 
             net_timers: net_timers,
+            websocket: Websocket::None,
+            websocket_buf: vec![],
+            socket: None,
         }
     }
 
@@ -569,8 +606,12 @@ impl Stream {
         self.recv_timeout = Some(Duration::from_millis(time as u64));
     }
 
+    pub fn set_socket(&mut self, socket: Socket) {
+        self.socket = Some(socket);
+    }
+
     /// size's unit: byte
-    pub fn recv(&mut self, size: usize, func: RecvFn) -> Option<(RecvFn, Result<Arc<Vec<u8>>>)> {
+    pub fn recv_handle(&mut self, size: usize, func: RecvFn) -> Option<(RecvFn, Result<Arc<Vec<u8>>>)> {
         if !self.recv_callback.is_none() {
             return Some((func, Err(Error::new(
                 ErrorKind::Other,
@@ -583,8 +624,15 @@ impl Stream {
 
         let cb_offset = self.recv_callback_offset;
         let buf_offset = self.recv_buf_offset;
-
-        if size <= buf_offset - cb_offset {
+        if size == 0 && buf_offset > cb_offset {
+            let param = self.recv_buf[cb_offset..buf_offset]
+                .iter()
+                .cloned()
+                .collect();
+            let size2 = buf_offset - cb_offset;
+            self.recv_callback_offset += size2;
+            return Some((func, Ok(Arc::new(param))));
+        } else if size < buf_offset - cb_offset {
             let param = self.recv_buf[cb_offset..cb_offset + size]
                 .iter()
                 .cloned()
@@ -619,6 +667,110 @@ impl Stream {
         return None;
     }
 }
+
+
+/// websocket
+pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(RecvFn, Result<Arc<Vec<u8>>>)> {
+    let stream2 = stream.clone();
+    let websocket;
+    let websocket_buf;
+    {   
+        websocket = stream.read().unwrap().websocket.clone();
+        websocket_buf = stream.read().unwrap().websocket_buf.clone();
+    }
+    //是否已完成HTTP握手
+    match websocket {
+        Websocket::None => {
+            let stream2 = stream.clone();
+            let http_func = Box::new(move |r: Result<Upgrade<Cursor<Vec<u8>>>>| {
+                let stream = stream2.clone();
+                let mut ws = r.unwrap();
+                {   
+                    let socket2;
+                    {
+                        let stream = &stream.read().unwrap();
+                        socket2 = stream.socket.clone();
+                    }
+                    //发送回应包
+                    let send_buf = get_send_buf(&mut ws).unwrap();
+                    socket2.unwrap().send_bin(Arc::new(send_buf));
+                }
+                
+                //修改握手状态
+                stream.write().unwrap().websocket = Websocket::Bin(0, 0);
+                recv(stream2.clone(), size, func);
+                
+            });
+            //请求握手包
+            http_read_header(stream, vec![], http_func);
+        },
+        Websocket::Bin(offset, len) => {
+            //判断缓存中是否取完
+            if len >= size {
+                let stream = stream2.clone();
+                //从缓存中取数据
+                let end = offset + size;
+                let buf = websocket_buf.clone();
+                let v = &websocket_buf[offset..end];
+                let v = Vec::from(v);
+                //写入ws缓存
+                stream.write().unwrap().websocket = Websocket::Bin(offset + size, len - size);
+                return Some((func, Ok(Arc::new(v))));
+            } else {
+                let ws_func = Box::new(move |r: Result<OwnedMessage>| {
+                    let stream = stream2.clone();
+                    let o_msg = r.unwrap();
+                    match o_msg {
+                        OwnedMessage::Binary(buf) => {
+                            if buf.len() >= size {
+                                let v = Vec::from(&buf[0..size]);
+                                let len = buf.len();
+                                //写入ws缓存
+                                stream.write().unwrap().websocket = Websocket::Bin(size, len - size);
+                                stream.write().unwrap().websocket_buf = buf;
+                                func(Ok(Arc::new(v)))
+                            }
+                        }
+                        OwnedMessage::Text(body) => {
+                            func(Err(Error::new(ErrorKind::Other, "not bin")));
+                        }
+                        OwnedMessage::Close(close) => {
+                        }
+                        _ => {
+                            //TODO ping包等数据包
+                            func(Err(Error::new(ErrorKind::Other, "not bin")));
+                        }
+                    }
+                    
+                    
+                });
+                //从网络中等待websocket包
+                ws_read_header(stream, vec![], ws_func);
+            }
+        },
+    }
+    None
+}
+
+// pub fn get_websocket_buf(stream: Arc<RwLock<Stream>>, pack: Vec<u8>, size: usize, func: Box<FnBox(Result<Arc<Vec<u8>>>)>) {
+//     let func2;
+//     {
+//         let stream = stream.clone();
+//         func2 = Box::new(move |data: Result<Arc<Vec<u8>>>| {
+//             let mut pack = vec![];
+//             pack.extend_from_slice(data.unwrap().as_slice());
+//             let size = 1;
+//             //取到数据后返回
+
+//             get_websocket_buf(stream, pack, size, func);
+//         });
+//     }
+
+//     let r = stream.write().unwrap().recv(size, func2);
+//     if let Some((func, data)) = r {
+//         func(data);
+//     }
+// }
 
 impl Socket {
     pub fn new(id: usize, sender: Sender<SendClosureFn>) -> Self {

@@ -1,3 +1,8 @@
+extern crate mqtt;
+extern crate mqtt3;
+extern crate net;
+extern crate pi_lib;
+
 use std::io::Result;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
@@ -21,7 +26,7 @@ fn handle_close(stream_id: usize, reason: Result<()>) {
 }
 
 fn handle_publish(server: &mut ServerNode) {
-    sleep(Duration::from_secs(3));
+    sleep(Duration::from_secs(10));
     println!("发布订阅消息1");
     server.publish(
         false,
@@ -55,6 +60,7 @@ fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketA
         server.set_close_callback(s, Box::new(|id, reason| handle_close(id, reason)));
         s.set_send_buf_size(1024 * 1024);
         s.set_recv_timeout(500 * 1000);
+        s.set_socket(socket.clone());
     }
 
     server.add_stream(socket, stream);
@@ -80,11 +86,9 @@ pub fn start_server() -> NetManager {
     let mgr = NetManager::new();
     let config = Config {
         protocol: Protocol::TCP,
-        server_addr: None,
+        addr: "127.0.0.1:1234".parse().unwrap(),
     };
-    let addr = "127.0.0.1:1234".parse().unwrap();
     mgr.bind(
-        addr,
         config,
         Box::new(move |peer, addr| handle_bind(peer, addr)),
     );

@@ -9,7 +9,7 @@ use server::ClientStub;
 use util;
 
 //LZ4_BLOCK 压缩
-pub const LZ4_BLOCK: u8 = 2;
+pub const LZ4_BLOCK: u8 = 1;
 //不压缩
 pub const UNCOMPRESS: u8 = 0;
 
@@ -36,7 +36,7 @@ pub fn encode(msg_id: u32, timeout: u8, msg: Vec<u8>) -> Vec<u8> {
         body = msg;
     }
     //第一字节：3位压缩版本、5位消息版本 TODO 消息版本以后定义
-    buff.push(((compress_vsn << 5) | 0) as u8);
+    buff.push(((compress_vsn << 6) | 0) as u8);
     let b1: u8 = ((msg_id >> 24) & 0xff) as u8;
     let b2: u8 = ((msg_id >> 16) & 0xff) as u8;
     let b3: u8 = ((msg_id >> 8) & 0xff) as u8;
@@ -79,8 +79,10 @@ impl Session {
     //回应消息
     pub fn respond(&self, _topic: Atom, msg: Vec<u8>) {
         if self.seq {
+            println!("respond 111111111 msg = {:?}", msg);
             self.send(Atom::from("$r"), msg);
         } else {
+            println!("respond 2222222 msg = {:?}", msg);
             self.client.queue_pop();
             self.send(Atom::from("$r"), msg);
             //检查队列中是否还有未处理的handle

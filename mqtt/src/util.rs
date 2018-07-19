@@ -6,6 +6,7 @@ use rand::{self, Rng};
 use mqtt3::{self, MqttRead, MqttWrite, Packet, PacketIdentifier, QoS};
 
 use net::{Socket, Stream};
+use net::net::recv;
 
 type MqttRecvCallback = Box<FnMut(Result<Packet>)>;
 
@@ -124,7 +125,7 @@ fn gen_client_id() -> String {
 
 fn recv_header(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
     const FIXTED_LEN: usize = 1;
-
+    let stream2 = stream.clone();
     let handle_header;
     {
         let mut pack = vec![];
@@ -137,7 +138,7 @@ fn recv_header(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
         });
     }
 
-    let r = stream.write().unwrap().recv(FIXTED_LEN, handle_header);
+    let r = recv(stream2, FIXTED_LEN, handle_header);
     if let Some((func, data)) = r {
         func(data);
     }
@@ -145,6 +146,7 @@ fn recv_header(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
 
 fn recv_header2(stream: Arc<RwLock<Stream>>, packs: Vec<u8>, func: MqttRecvCallback) {
     const FIXTED_LEN: usize = 1;
+    let stream2 = stream.clone();
     let handle_header2;
     {
         let mut pack = vec![];
@@ -163,7 +165,10 @@ fn recv_header2(stream: Arc<RwLock<Stream>>, packs: Vec<u8>, func: MqttRecvCallb
             }
         })
     }
-    stream.write().unwrap().recv(FIXTED_LEN, handle_header2);
+    let r = recv(stream2, FIXTED_LEN, handle_header2);
+    if let Some((func, data)) = r {
+        func(data);
+    }
 }
 
 fn recv_pack(
@@ -172,6 +177,7 @@ fn recv_pack(
     recv_size: usize,
     mut func: MqttRecvCallback,
 ) {
+    let stream2 = stream.clone();
     let handler_pack;
     {
         handler_pack = Box::new(move |data: Result<Arc<Vec<u8>>>| {
@@ -182,7 +188,7 @@ fn recv_pack(
         });
     }
 
-    let r = stream.write().unwrap().recv(recv_size, handler_pack);
+    let r = recv(stream2, recv_size, handler_pack);
     if let Some((func, data)) = r {
         func(data);
     }
