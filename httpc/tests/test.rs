@@ -13,19 +13,19 @@ use pi_lib::atom::Atom;
 use pi_base::worker_pool::WorkerPool;
 use pi_base::pi_base_impl::EXT_TASK_POOL;
 
-use httpc::{HttpClientOptions, SharedHttpc, SharedHttpClient, HttpClientBody, HttpClientResponse};
+use httpc::{HttpClientOptions, SharedHttpc, SharedHttpClient, HttpClient, HttpClientBody, HttpClientResponse};
 
 #[test]
 fn test_httpc_basic() {
     let worker_pool = Box::new(WorkerPool::new(10, 1024 * 1024, 30000));
     worker_pool.run(EXT_TASK_POOL.clone());
 
-    let r = SharedHttpClient::create(HttpClientOptions::Default);
+    let r = HttpClient::create(HttpClientOptions::Default);
     assert!(r.is_ok());
-    let client = r.unwrap();
+    let mut client = r.unwrap();
 
     let body = HttpClientBody::body("asdfasdfasf".to_string());
-    client.get(Atom::from("http://www.baidu.com"), body, Box::new(move |_client: SharedHttpClient, result: Result<HttpClientResponse>| {
+    HttpClient::get(&mut client, Atom::from("http://www.baidu.com"), body, Box::new(move |_client: SharedHttpClient, result: Result<HttpClientResponse>| {
         match result {
             Err(s) => println!("!!!!!!reason: {}", s),
             Ok(mut resp) => {
@@ -50,7 +50,7 @@ fn test_httpc_basic() {
     }));
 
     let body = HttpClientBody::body(vec![10, 10, 10]);
-    client.get(Atom::from("http://www.baidu.com"), body, Box::new(move |_client: SharedHttpClient, result: Result<HttpClientResponse>| {
+    HttpClient::get(&mut client, Atom::from("http://www.baidu.com"), body, Box::new(move |_client: SharedHttpClient, result: Result<HttpClientResponse>| {
         match result {
             Err(s) => println!("!!!!!!reason: {}", s),
             Ok(mut resp) => {
@@ -65,7 +65,7 @@ fn test_httpc_basic() {
     assert!(r.is_ok());
     let file = r.unwrap();
     let body = HttpClientBody::body(file);
-    client.get(Atom::from("http://www.baidu.com"), body, Box::new(move |_client: SharedHttpClient, result: Result<HttpClientResponse>| {
+    HttpClient::get(&mut client, Atom::from("http://www.baidu.com"), body, Box::new(move |_client: SharedHttpClient, result: Result<HttpClientResponse>| {
         match result {
             Err(s) => println!("!!!!!!reason: {}", s),
             Ok(mut resp) => {
@@ -78,7 +78,7 @@ fn test_httpc_basic() {
 
     let mut json = HttpClientBody::json(Atom::from("x"), "Hello".to_string());
     json.add_json_kv(Atom::from("y"), "Hello".to_string());
-    client.get(Atom::from("http://www.baidu.com"), json, Box::new(move |client: SharedHttpClient, result: Result<HttpClientResponse>| {
+    HttpClient::get(&mut client, Atom::from("http://www.baidu.com"), json, Box::new(move |client: SharedHttpClient, result: Result<HttpClientResponse>| {
         match result {
             Err(s) => println!("!!!!!!reason: {}", s),
             Ok(mut resp) => {
@@ -92,7 +92,7 @@ fn test_httpc_basic() {
     let mut form = HttpClientBody::form(Atom::from("x"), "Hello".to_string());
     form = form.add_form_kv(Atom::from("fileName"), "test.txt".to_string())
         .add_form_file(Atom::from("fileData"), r"E:\rust\git\pi_net\test.txt").unwrap();
-    client.get(Atom::from("http://www.baidu.com"), form, Box::new(move |client: SharedHttpClient, result: Result<HttpClientResponse>| {
+    HttpClient::get(&mut client, Atom::from("http://www.baidu.com"), form, Box::new(move |client: SharedHttpClient, result: Result<HttpClientResponse>| {
         match result {
             Err(s) => println!("!!!!!!reason: {}", s),
             Ok(mut resp) => {

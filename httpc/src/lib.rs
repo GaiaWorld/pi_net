@@ -141,26 +141,24 @@ impl<T: GenHttpClientBody> HttpClientBody<T> {
 * 共享http客户端
 */
 pub trait SharedHttpc {
-    type T;
-
     //构建http客户端
-    fn create(options: HttpClientOptions) -> Result<Arc<Self::T>>;
+    fn create(options: HttpClientOptions) -> Result<Arc<Self>>;
+    //增加指定关键字的http头条目，返回头条目数量，一个关键字可以有多个条目
+    fn add_header(client: &mut SharedHttpClient, key: Atom, value: Atom) -> usize;
+    //移除指定关键字的http头条目，返回头条目数量
+    fn remove_header(client: &mut SharedHttpClient, key: Atom) -> usize;
+    //清空http头条目
+    fn clear_headers(client: &mut SharedHttpClient);
+    //异步发送get请求
+    fn get<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self>, Result<HttpClientResponse>)>);
+    //异步发送post请求
+    fn post<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self>, Result<HttpClientResponse>)>);
     //获取当前http头条目数量
     fn headers_size(&self) -> usize;
     //获取所有http头条目关键字
     fn headers_keys(&self) -> Option<Vec<Atom>>;
     //获取指定关键字的http头条目，一个关键字可以有多个条目
     fn get_header(&self, key: Atom) -> Option<Vec<Atom>>;
-    //增加指定关键字的http头条目，返回头条目数量，一个关键字可以有多个条目
-    fn add_header(&mut self, key: Atom, value: Atom) -> usize;
-    //移除指定关键字的http头条目，返回头条目数量
-    fn remove_header(&mut self, key: Atom) -> usize;
-    //清空http头条目
-    fn clear_headers(&mut self);
-    //异步发送get请求
-    fn get<T: GenHttpClientBody>(&self, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self::T>, Result<HttpClientResponse>)>);
-    //异步发送post请求
-    fn post<T: GenHttpClientBody>(&self, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self::T>, Result<HttpClientResponse>)>);
 }
 
 /*
@@ -177,10 +175,8 @@ pub struct HttpClient {
     headers: Headers,   //请求头
 }
 
-impl SharedHttpc for SharedHttpClient {
-    type T = HttpClient;
-
-    fn create(options: HttpClientOptions) -> Result<Arc<Self::T>> {
+impl SharedHttpc for HttpClient {
+    fn create(options: HttpClientOptions) -> Result<Arc<Self>> {
         match options {
             HttpClientOptions::Default => {
                 ClientBuilder::new()
@@ -279,6 +275,38 @@ impl SharedHttpc for SharedHttpClient {
         })
     }
 
+    fn add_header(client: &mut SharedHttpClient, key: Atom, value: Atom) -> usize {
+        Arc::make_mut(client).headers.append_raw((*key).clone(), (*value).as_str());
+        client.headers.len()
+    }
+
+    fn remove_header(client: &mut SharedHttpClient, key: Atom) -> usize {
+        Arc::make_mut(client).headers.remove_raw((*key).as_str());
+        client.headers.len()
+    }
+
+    fn clear_headers(client: &mut SharedHttpClient) {
+        Arc::make_mut(client).headers.clear();
+    }
+
+    fn get<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self>, Result<HttpClientResponse>)>) {
+        let copy = client.clone();
+        let func = move || {
+            let get = &mut copy.inner.get((*url).as_str());
+            request(copy, get, body, callback);
+        };
+        cast_ext_task(TaskType::Sync, 10000000, Box::new(func), Atom::from("httpc normal get request task"));
+    }
+
+    fn post<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self>, Result<HttpClientResponse>)>) {
+        let copy = client.clone();
+        let func = move || {
+            let post = &mut copy.inner.post((*url).as_str());
+            request(copy, post, body, callback);
+        };
+        cast_ext_task(TaskType::Sync, 10000000, Box::new(func), Atom::from("httpc normal post request task"));
+    }
+
     fn headers_size(&self) -> usize {
         self.headers.len()
     }
@@ -305,38 +333,6 @@ impl SharedHttpc for SharedHttpClient {
             }
             Some(vec)
         })
-    }
-
-    fn add_header(&mut self, key: Atom, value: Atom) -> usize {
-        Arc::make_mut(self).headers.append_raw((*key).clone(), (*value).as_str());
-        self.headers.len()
-    }
-
-    fn remove_header(&mut self, key: Atom) -> usize {
-        Arc::make_mut(self).headers.remove_raw((*key).as_str());
-        self.headers.len()
-    }
-
-    fn clear_headers(&mut self) {
-        Arc::make_mut(self).headers.clear();
-    }
-
-    fn get<T: GenHttpClientBody>(&self, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self::T>, Result<HttpClientResponse>)>) {
-        let copy = self.clone();
-        let func = move || {
-            let get = &mut copy.inner.get((*url).as_str());
-            request(copy, get, body, callback);
-        };
-        cast_ext_task(TaskType::Sync, 10000000, Box::new(func), Atom::from("httpc normal get request task"));
-    }
-
-    fn post<T: GenHttpClientBody>(&self, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self::T>, Result<HttpClientResponse>)>) {
-        let copy = self.clone();
-        let func = move || {
-            let post = &mut copy.inner.post((*url).as_str());
-            request(copy, post, body, callback);
-        };
-        cast_ext_task(TaskType::Sync, 10000000, Box::new(func), Atom::from("httpc normal get request task"));
     }
 }
 
