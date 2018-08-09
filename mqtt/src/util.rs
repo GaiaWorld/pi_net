@@ -115,6 +115,7 @@ fn send_packet(socket: &Socket, packet: Packet) {
     let mut stream = Cursor::new(Vec::new());
     stream.write_packet(&packet).unwrap();
     socket.send(Arc::new(stream.into_inner()));
+    //socket.send_bin(Arc::new(stream.into_inner()));
 }
 
 fn gen_client_id() -> String {

@@ -85,7 +85,7 @@ pub fn read_ws_header(stream: Arc<RwLock<Stream>>, buf: Vec<u8>, func: Box<FnBox
 
 pub fn get_send_buf(ws: &mut Upgrade<Cursor<Vec<u8>>>) -> Result<Vec<u8>> {
     let mut headers = Headers::new();
-    headers.set_raw("Sec-WebSocket-Protocol", vec![Vec::from("mqtt")]);
+    headers.set_raw("Sec-WebSocket-Protocol", vec![Vec::from("mqttv3.1")]);
     let status = ws.prepare_headers(Some(&headers));
     let mut send_buf = vec![];
     write!(&mut send_buf, "{} {}\r\n", ws.request.version, status).is_ok();

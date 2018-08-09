@@ -9,6 +9,7 @@ extern crate fnv;
 extern crate magnetic;
 extern crate pi_base;
 extern crate pi_lib;
+extern crate rustc_serialize;
 
 pub mod client;
 pub mod data;

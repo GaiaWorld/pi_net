@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use std::mem::transmute;
+
 use mqtt3;
 
 use pi_base::util::{compress, CompressLevel};
@@ -28,15 +30,7 @@ pub fn encode(msg_id: u32, timeout: u8, msg: Vec<u8>) -> Vec<u8> {
     let mut buff: Vec<u8> = vec![];
     let msg_size = msg.len();
     let mut compress_vsn = UNCOMPRESS;
-    let mut body = vec![];
-    if msg_size > 64 {
-        compress_vsn = LZ4_BLOCK;
-        compress(msg.as_slice(), &mut body, CompressLevel::High).is_ok();
-    } else {
-        body = msg;
-    }
-    //第一字节：3位压缩版本、5位消息版本 TODO 消息版本以后定义
-    buff.push(((compress_vsn << 6) | 0) as u8);
+
     let b1: u8 = ((msg_id >> 24) & 0xff) as u8;
     let b2: u8 = ((msg_id >> 16) & 0xff) as u8;
     let b3: u8 = ((msg_id >> 8) & 0xff) as u8;
@@ -45,8 +39,27 @@ pub fn encode(msg_id: u32, timeout: u8, msg: Vec<u8>) -> Vec<u8> {
     buff.extend_from_slice(&[b1, b2, b3, b4]);
     //一字节超时时长（秒）
     buff.push(timeout as u8);
+    buff.extend_from_slice(msg.as_slice());
+    
+    //暂不处理解压问题
+    // if msg_size > 64 {
+    //     println!("LZ4_BLOCK=-------------------------------------------");
+    //     compress_vsn = LZ4_BLOCK;
+        // let body = vec![];
+        // body.extend_from_slice(&unsafe{transmute::<u32, [u8; 4]>(len as u32)});
+    //     compress(buff.as_slice(), &mut body, CompressLevel::High).is_ok();
+        // buff = body;
+    // } else {
+        
+    // }
+
+    //let len = buff.len();
+
+    //第一字节：3位压缩版本、5位消息版本 TODO 消息版本以后定义
+    buff.insert(0, ((compress_vsn << 6) | 0) as u8);
     //剩下的消息体
-    buff.extend_from_slice(body.as_slice());
+    
+    //println!("encode--------------------{:?}", &buff);
     return buff;
 }
 
@@ -79,10 +92,10 @@ impl Session {
     //回应消息
     pub fn respond(&self, _topic: Atom, msg: Vec<u8>) {
         if self.seq {
-            println!("respond 111111111 msg = {:?}", msg);
+            //println!("respond 111111111 msg = {:?}", msg);
             self.send(Atom::from("$r"), msg);
         } else {
-            println!("respond 2222222 msg = {:?}", msg);
+            //println!("respond 2222222 msg = {:?}", msg);
             self.client.queue_pop();
             self.send(Atom::from("$r"), msg);
             //检查队列中是否还有未处理的handle
@@ -109,22 +122,37 @@ impl Env for Session {
         };
         None
     }
-    //设置属性，返回上个属性值
-    fn set_attr(&mut self, key: Atom, value: GenType) -> Option<GenType> {
+    //设置属性，返回上个属性值, 属性只支持GenType::Bin and GenType::ArcBin, GenType::Pointer三种类型的值
+    fn set_attr(&self, key: Atom, value: GenType) -> Option<GenType> {
         let attr = self.client.get_attributes();
         let mut attr = attr.write().unwrap();
         match value {
+            GenType::Bin(v) => {
+                if let Some(old) = attr.insert(key, Arc::new(v)) {
+                    return Some(GenType::Bin(old.downcast_ref::<Vec<u8>>().unwrap().clone()));
+                };
+                None
+            },
+            GenType::ArcBin(v) => {
+                if let Some(old) = attr.insert(key, v) {
+                    return Some(GenType::ArcBin(Arc::new(old.downcast_ref::<Vec<u8>>().unwrap().clone())));
+                };
+                None
+            },
             GenType::Pointer(v) => {
                 if let Some(old) = attr.insert(key, Arc::from(v)) {
                     return Some(GenType::Pointer(Arc::into_raw(old.clone())));
                 };
                 None
             }
-            _ => None,
+            _ => {
+                println!("mqttSession set_attr fail, value only support GenType::Bin and GenType::ArcBin and GenType::Pointer");
+                None
+            },
         }
     }
     //移除属性
-    fn remove_attr(&mut self, key: Atom) -> Option<GenType> {
+    fn remove_attr(&self, key: Atom) -> Option<GenType> {
         let attr = self.client.get_attributes();
         let mut attr = attr.write().unwrap();
         if let Some(v) = attr.remove(&key) {

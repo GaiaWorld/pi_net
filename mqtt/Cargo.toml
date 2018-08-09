@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["moyy <moyy@yineng.com>"]
 
 [dependencies]
+rustc-serialize = "0.3"
 rand = "0.4.2"
 mqtt3 = { git = "https://github.com/tekjar/mqtt3" }
 fnv = "1.0.6"
