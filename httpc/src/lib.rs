@@ -275,17 +275,17 @@ impl SharedHttpc for HttpClient {
         })
     }
 
-    fn add_header(client: &mut SharedHttpClient, key: Atom, value: Atom) -> usize {
+    fn add_header(client: &mut Arc<HttpClient>, key: Atom, value: Atom) -> usize {
         Arc::make_mut(client).headers.append_raw((*key).clone(), (*value).as_str());
         client.headers.len()
     }
 
-    fn remove_header(client: &mut SharedHttpClient, key: Atom) -> usize {
+    fn remove_header(client: &mut Arc<HttpClient>, key: Atom) -> usize {
         Arc::make_mut(client).headers.remove_raw((*key).as_str());
         client.headers.len()
     }
 
-    fn clear_headers(client: &mut SharedHttpClient) {
+    fn clear_headers(client: &mut Arc<HttpClient>) {
         Arc::make_mut(client).headers.clear();
     }
 

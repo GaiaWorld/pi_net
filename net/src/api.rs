@@ -56,6 +56,7 @@ impl Socket {
         let message = OwnedMessage::Binary(buf);
         sender.send_dataframe(&mut reader, &message).is_ok();
         let buf = Arc::new(reader.into_inner());
+        println!("send------------------------{:?}", buf);
         let socket = self.socket;
         let data = Box::new(move |handler: &mut NetHandler| {
             handle_send(handler, socket, buf);
@@ -66,6 +67,7 @@ impl Socket {
 
     pub fn send_bin(&self, buf: Arc<Vec<u8>>) {
         let socket = self.socket;
+        println!("send_bin-------------------------{:?}", buf);
         let data = Box::new(move |handler: &mut NetHandler| {
             handle_send(handler, socket, buf);
         });

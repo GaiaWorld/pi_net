@@ -10,6 +10,7 @@ use magnetic::buffer::dynamic::DynamicBuffer;
 use magnetic::mpsc::mpsc_queue;
 use magnetic::mpsc::{MPSCConsumer, MPSCProducer};
 use magnetic::{Consumer, Producer};
+use rustc_serialize::hex::ToHex;
 
 use data::{Server, SetAttrFun};
 use fnv::FnvHashMap;
@@ -345,12 +346,13 @@ fn recv_connect(
 fn recv_sub(node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket, sub: mqtt3::Subscribe) {
     let mut codes = Vec::with_capacity(sub.topics.len());
     let node = &mut node.lock().unwrap();
-
+    
     for mqtt3::SubscribeTopic {
         qos,
         topic_path: path,
     } in sub.topics.iter()
-    {
+    {   
+        // 目前仅支持qos = 0
         if *qos != mqtt3::QoS::AtMostOnce {
             codes.push(mqtt3::SubscribeReturnCodes::Failure);
             continue;
@@ -388,7 +390,7 @@ fn recv_sub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) -> mqtt3::Su
     }
 
     let topic_atom;
-    {
+    {   
         let meta = node.metas.get(&name);
         if meta.is_none() {
             return mqtt3::SubscribeReturnCodes::Failure;
@@ -411,10 +413,8 @@ fn recv_sub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) -> mqtt3::Su
             let att = c.attributes.read().unwrap();
             let attr = att.get(key).unwrap();
             let attr: &Vec<u8> = attr.downcast_ref().unwrap();
-
-            use std::str;
-            let attr = str::from_utf8(attr).unwrap();
-            name = name + attr;
+            let attr = attr.to_hex();
+            name = name + attr.as_str();
         }
         topic_atom = Atom::from(name.as_str());
         node.sub_topics.insert(
@@ -553,7 +553,6 @@ fn publish_impl(
     if qos != mqtt3::QoS::AtMostOnce {
         return Err(Error::new(ErrorKind::Other, "publish impl, invalid qos"));
     }
-
     let t = mqtt3::TopicPath::from_str((*topic).clone().as_str());
     if t.is_err() {
         return Err(Error::new(ErrorKind::Other, "publish impl, invalid topic"));
