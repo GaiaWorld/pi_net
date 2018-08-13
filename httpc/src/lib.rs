@@ -171,7 +171,7 @@ pub type SharedHttpClient = Arc<HttpClient>;
 */
 #[derive(Clone)]
 pub struct HttpClient {
-    inner: Client,      //内部客户端
+    inner: Client,      //内部客户端，因为Client依赖的mio有一个在windows下无法正常关闭socket的bug，至今未解决，所以尽量复用同一个Client，详见https://github.com/seanmonstar/reqwest/issues?utf8=%E2%9C%93&q=close 和 https://github.com/carllerche/mio/issues/776
     headers: Headers,   //请求头
 }
 
