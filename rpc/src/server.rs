@@ -134,7 +134,7 @@ impl RPCServerTraits for RPCServer {
             topic,
             true,
             true,
-            None,
+            //None,
             Box::new(move |c, r| rpc_handle(c, r)),
         ) {
             Ok(_) => Ok(()),

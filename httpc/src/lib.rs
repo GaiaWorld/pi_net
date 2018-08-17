@@ -175,6 +175,12 @@ pub struct HttpClient {
     headers: Headers,   //请求头
 }
 
+// impl Drop for HttpClient{
+//     fn drop(&mut self){
+//         println!("66666666666666666666666ggggggggggggggggggghhhhhhhhhhhhhhhhhhhhhhhhh" );
+//     }
+// }
+
 impl SharedHttpc for HttpClient {
     fn create(options: HttpClientOptions) -> Result<Arc<Self>> {
         match options {
