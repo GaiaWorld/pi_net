@@ -1,12 +1,11 @@
-use std::sync::Arc;
-
-use std::mem::transmute;
+//use std::sync::Arc;
+//use std::mem::transmute;
 
 use mqtt3;
 
-use pi_base::util::{compress, CompressLevel};
+//use pi_base::util::{compress, CompressLevel};
 use pi_lib::atom::Atom;
-use pi_lib::handler::{Env, GenType};
+use pi_lib::gray::GrayVersion;
 use server::ClientStub;
 use util;
 
@@ -17,10 +16,10 @@ pub const UNCOMPRESS: u8 = 0;
 
 #[derive(Clone, Debug)]
 pub struct Session {
-    client: ClientStub,
-    msg_id: u32,
-    seq: bool,
-    timeout: (usize, u8), //(系统当前时间, 超时时长)
+    pub client: ClientStub,
+    pub msg_id: u32,
+    pub seq: bool,
+    pub timeout: (usize, u8), //(系统当前时间, 超时时长)
 }
 
 unsafe impl Sync for Session {}
@@ -28,8 +27,8 @@ unsafe impl Send for Session {}
 
 pub fn encode(msg_id: u32, timeout: u8, msg: Vec<u8>) -> Vec<u8> {
     let mut buff: Vec<u8> = vec![];
-    let msg_size = msg.len();
-    let mut compress_vsn = UNCOMPRESS;
+    //let msg_size = msg.len();
+    let compress_vsn = UNCOMPRESS;
 
     let b1: u8 = ((msg_id >> 24) & 0xff) as u8;
     let b2: u8 = ((msg_id >> 16) & 0xff) as u8;
@@ -107,57 +106,18 @@ impl Session {
     pub fn close(&self) {
         self.client.get_socket().close(true)
     }
+
     pub fn set_timeout(&mut self, systime: usize, timeout: u8) {
         self.timeout = (systime, timeout);
     }
 }
 
-impl Env for Session {
-    //获取属性
-    fn get_attr(&self, key: Atom) -> Option<GenType> {
-        let attr = self.client.get_attributes();
-        let attr = attr.read().unwrap();
-        if let Some(v) = attr.get(&key) {
-            return Some(GenType::Pointer(Arc::into_raw(v.clone())));
-        };
-        None
+impl GrayVersion for Session {
+    fn get_gray(&self) -> &Option<usize>{
+        &self.client.gray
     }
-    //设置属性，返回上个属性值, 属性只支持GenType::Bin and GenType::ArcBin, GenType::Pointer三种类型的值
-    fn set_attr(&self, key: Atom, value: GenType) -> Option<GenType> {
-        let attr = self.client.get_attributes();
-        let mut attr = attr.write().unwrap();
-        match value {
-            GenType::Bin(v) => {
-                if let Some(old) = attr.insert(key, Arc::new(v)) {
-                    return Some(GenType::Bin(old.downcast_ref::<Vec<u8>>().unwrap().clone()));
-                };
-                None
-            },
-            GenType::ArcBin(v) => {
-                if let Some(old) = attr.insert(key, v) {
-                    return Some(GenType::ArcBin(Arc::new(old.downcast_ref::<Vec<u8>>().unwrap().clone())));
-                };
-                None
-            },
-            GenType::Pointer(v) => {
-                if let Some(old) = attr.insert(key, Arc::from(v)) {
-                    return Some(GenType::Pointer(Arc::into_raw(old.clone())));
-                };
-                None
-            }
-            _ => {
-                println!("mqttSession set_attr fail, value only support GenType::Bin and GenType::ArcBin and GenType::Pointer");
-                None
-            },
-        }
-    }
-    //移除属性
-    fn remove_attr(&self, key: Atom) -> Option<GenType> {
-        let attr = self.client.get_attributes();
-        let mut attr = attr.write().unwrap();
-        if let Some(v) = attr.remove(&key) {
-            return Some(GenType::Pointer(Arc::into_raw(v.clone())));
-        }
-        None
+
+    fn set_gray(&mut self, gray: Option<usize>){
+        self.client.gray = gray;
     }
 }

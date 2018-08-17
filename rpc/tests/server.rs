@@ -12,7 +12,8 @@ use mqtt::data::Server;
 use mqtt::server::ServerNode;
 use mqtt::session::Session;
 use net::{Config, NetManager, Protocol, Socket, Stream};
-use pi_lib::handler::{Args, Env, Handler};
+use pi_lib::handler::{Args, Handler};
+use pi_lib::gray::GrayVersion;
 use rpc::server::RPCServer;
 use rpc::traits::RPCServerTraits;
 
@@ -41,7 +42,7 @@ impl Handler for Handle {
     type HandleResult = ();
     fn handle(
         &self,
-        session: Arc<dyn Env>,
+        session: Arc<dyn GrayVersion>,
         atom: Atom,
         args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>,
     ) -> Self::HandleResult {

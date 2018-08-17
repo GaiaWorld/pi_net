@@ -3,14 +3,11 @@ use std::fmt::{Debug, Formatter, Result as DebugResult};
 use std::io::{Error, ErrorKind, Result};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
-use std::any::Any;
 
 use magnetic::buffer::dynamic::DynamicBuffer;
 use magnetic::mpsc::mpsc_queue;
 use magnetic::mpsc::{MPSCConsumer, MPSCProducer};
 use magnetic::{Consumer, Producer};
-use rustc_serialize::hex::ToHex;
 
 use data::{Server, SetAttrFun};
 use fnv::FnvHashMap;
@@ -32,7 +29,7 @@ pub struct TopicMeta {
     // 该主题是否可以订阅
     can_subscribe: bool,
     // 如果有唯一键，需要到ClientStub去找值
-    only_one_key: Option<Atom>,
+    //only_one_key: Option<Atom>,
     // 对应的应用层回调
     publish_func: Box<Fn(ClientStub, Result<Arc<Vec<u8>>>)>,
 }
@@ -60,12 +57,12 @@ pub struct ClientStub {
     socket: Socket,
     keep_alive: u16,
     last_will: Arc<RwLock<Option<mqtt3::LastWill>>>,
-    attributes: Arc<RwLock<FnvHashMap<Atom, Arc<Any>>>>,
     queue: Arc<(
         MPSCProducer<Box<FnBox()>, DynamicBuffer<Box<FnBox()>>>,
         MPSCConsumer<Box<FnBox()>, DynamicBuffer<Box<FnBox()>>>,
     )>,
     queue_size: Arc<AtomicUsize>,
+    pub gray: Option<usize>,
 }
 
 impl Debug for ClientStub {
@@ -114,10 +111,6 @@ impl ClientStub {
     //获取连接
     pub fn get_socket(&self) -> Socket {
         self.socket.clone()
-    }
-    //获取会话表
-    pub fn get_attributes(&self) -> Arc<RwLock<FnvHashMap<Atom, Arc<Any>>>> {
-        self.attributes.clone()
     }
 
     //修改遗言
@@ -196,7 +189,7 @@ impl Server for ServerNode {
         name: Atom,
         can_publish: bool,
         can_subscribe: bool,
-        only_one_key: Option<Atom>,
+        //only_one_key: Option<Atom>,
         handler: Box<Fn(ClientStub, Result<Arc<Vec<u8>>>)>,
     ) -> Result<()> {
         let node = &mut self.0.lock().unwrap();
@@ -214,7 +207,7 @@ impl Server for ServerNode {
                 topic,
                 can_publish,
                 can_subscribe,
-                only_one_key,
+                //only_one_key,
                 publish_func: handler,
             }),
         );
@@ -323,9 +316,9 @@ fn recv_connect(
         let s = socket.clone();
         let client_stub = Arc::new(ClientStub {
             socket: s,
+            gray: None,
             keep_alive: connect.keep_alive,
             last_will: Arc::new(RwLock::new(connect.last_will)),
-            attributes: Arc::new(RwLock::new(att)),
             queue: Arc::new(mpsc_queue(DynamicBuffer::new(32).unwrap())),
             queue_size: Arc::new(AtomicUsize::new(0)),
         });
@@ -400,22 +393,22 @@ fn recv_sub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) -> mqtt3::Su
             return mqtt3::SubscribeReturnCodes::Failure;
         }
 
-        let mut name = meta.topic.path.clone();
-        if meta.only_one_key.is_some() {
-            if let Ok(t) = mqtt3::TopicPath::from_str(&name) {
-                if t.wildcards {
-                    return mqtt3::SubscribeReturnCodes::Failure;
-                }
-            }
+        let name = meta.topic.path.clone();
+        // if meta.only_one_key.is_some() {
+        //     if let Ok(t) = mqtt3::TopicPath::from_str(&name) {
+        //         if t.wildcards {
+        //             return mqtt3::SubscribeReturnCodes::Failure;
+        //         }
+        //     }
 
-            let key = meta.only_one_key.as_ref().unwrap();
-            let c = node.clients.get(&cid).unwrap();
-            let att = c.attributes.read().unwrap();
-            let attr = att.get(key).unwrap();
-            let attr: &Vec<u8> = attr.downcast_ref().unwrap();
-            let attr = attr.to_hex();
-            name = name + attr.as_str();
-        }
+        //     let key = meta.only_one_key.as_ref().unwrap();
+        //     let c = node.clients.get(&cid).unwrap();
+        //     let att = c.attributes.read().unwrap();
+        //     let attr = att.get(key).unwrap();
+        //     let attr: &Vec<u8> = attr.downcast_ref().unwrap();
+        //     let attr = attr.to_hex();
+        //     name = name + attr.as_str();
+        // }
         topic_atom = Atom::from(name.as_str());
         node.sub_topics.insert(
             topic_atom.clone(),
@@ -478,24 +471,24 @@ fn recv_unsub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) {
             return;
         }
 
-        let mut name = meta.topic.path.clone();
-        if meta.only_one_key.is_some() {
-            if let Ok(t) = mqtt3::TopicPath::from_str(&name) {
-                if t.wildcards {
-                    return;
-                }
-            }
+        let name = meta.topic.path.clone();
+        // if meta.only_one_key.is_some() {
+        //     if let Ok(t) = mqtt3::TopicPath::from_str(&name) {
+        //         if t.wildcards {
+        //             return;
+        //         }
+        //     }
 
-            let key = meta.only_one_key.as_ref().unwrap();
-            let c = node.clients.get(&cid).unwrap();
-            let att = c.attributes.read().unwrap();
-            let attr = att.get(key).unwrap();
-            let attr: &Vec<u8> = attr.downcast_ref().unwrap();
+        //     let key = meta.only_one_key.as_ref().unwrap();
+        //     let c = node.clients.get(&cid).unwrap();
+        //     let att = c.attributes.read().unwrap();
+        //     let attr = att.get(key).unwrap();
+        //     let attr: &Vec<u8> = attr.downcast_ref().unwrap();
 
-            use std::str;
-            let attr = str::from_utf8(attr).unwrap();
-            name = name + attr;
-        }
+        //     use std::str;
+        //     let attr = str::from_utf8(attr).unwrap();
+        //     name = name + attr;
+        // }
         let atom = Atom::from(name.as_str());
         node.sub_topics.remove(&atom);
     }

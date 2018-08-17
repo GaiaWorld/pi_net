@@ -68,7 +68,7 @@ fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketA
         Atom::from(String::from("a/b/c").as_str()),
         true,
         true,
-        None,
+        //None,
         Box::new(|c, r| println!("a/b/c  publish ok!!! r:{:?}", r.unwrap())),
     );
     //遗言
@@ -76,7 +76,7 @@ fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketA
         Atom::from(String::from("$last_will").as_str()),
         true,
         true,
-        None,
+        //None,
         Box::new(|c, r| println!("last_will  publish 遗言 ok!!! r:{:?}", r.unwrap())),
     );
     thread::spawn(move || handle_publish(&mut server));

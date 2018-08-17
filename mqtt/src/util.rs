@@ -133,6 +133,7 @@ fn recv_header(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
         let stream = stream.clone();
         handle_header = Box::new(move |data: Result<Arc<Vec<u8>>>| {
             pack.extend_from_slice(data.unwrap().as_slice());
+            println!("recv_header------------------------------------------------{:?}", pack);
             // let size = get_recv_size(pack.as_slice()).unwrap();
             // recv_pack(stream, pack, size, func);
             recv_header2(stream, pack, func);
@@ -160,6 +161,7 @@ fn recv_header2(stream: Arc<RwLock<Stream>>, packs: Vec<u8>, func: MqttRecvCallb
                     recv_header2(stream.clone(), pack, func);
                 },
                 Ok(size) => {
+                    println!("!!!!!!!!!recv_pack_size:{}", size);
                     recv_pack(stream.clone(), pack, size as usize, func);
                 },
                 Err(e) => println!("recv_header error: {}", e)
@@ -185,6 +187,7 @@ fn recv_pack(
             pack.extend_from_slice(data.unwrap().as_slice());
             let mut cursor = Cursor::new(pack);
             let packet = cursor.read_packet().unwrap();
+            println!("!!!!!!!!!!!!recv_pack!!!!!!!packet:{:?}", packet);
             func(Ok(packet));
         });
     }
@@ -225,6 +228,10 @@ fn recv_pack(
 // }
 
 fn if_ack_size(pack: &[u8]) -> Result<isize> {
+    if pack[pack.len() - 1] != 0 {
+        return Ok(-1);
+    }
+    println!("!!!!!!!!!!ack_size pack:{:?}", pack);
     let mut mult: usize = 1;
     let mut len: usize = 0;
     let mut done = false;
