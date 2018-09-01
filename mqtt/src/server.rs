@@ -9,11 +9,12 @@ use magnetic::mpsc::mpsc_queue;
 use magnetic::mpsc::{MPSCConsumer, MPSCProducer};
 use magnetic::{Consumer, Producer};
 
+use pi_lib::atom::Atom;
+use pi_lib::gray::GrayVersion;
 use data::{Server, SetAttrFun};
 use fnv::FnvHashMap;
 use mqtt3::{self, Packet};
 use net::{CloseFn, Socket, Stream};
-use pi_lib::atom::Atom;
 use session;
 use util;
 
@@ -62,7 +63,20 @@ pub struct ClientStub {
         MPSCConsumer<Box<FnBox()>, DynamicBuffer<Box<FnBox()>>>,
     )>,
     queue_size: Arc<AtomicUsize>,
-    pub gray: Option<usize>,
+}
+
+impl GrayVersion for ClientStub {
+    fn get_gray(&self) -> &Option<usize>{
+        &self.socket.get_gray()
+    }
+
+    fn set_gray(&mut self, gray: Option<usize>){
+        &self.socket.set_gray(gray);
+    }
+
+    fn get_id(&self) -> usize {
+        self.socket.get_id()
+    }
 }
 
 impl Debug for ClientStub {
@@ -316,7 +330,6 @@ fn recv_connect(
         let s = socket.clone();
         let client_stub = Arc::new(ClientStub {
             socket: s,
-            gray: None,
             keep_alive: connect.keep_alive,
             last_will: Arc::new(RwLock::new(connect.last_will)),
             queue: Arc::new(mpsc_queue(DynamicBuffer::new(32).unwrap())),

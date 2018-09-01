@@ -114,10 +114,14 @@ impl Session {
 
 impl GrayVersion for Session {
     fn get_gray(&self) -> &Option<usize>{
-        &self.client.gray
+        &self.client.get_gray()
     }
 
     fn set_gray(&mut self, gray: Option<usize>){
-        self.client.gray = gray;
+        self.client.set_gray(gray);
+    }
+
+    fn get_id(&self) -> usize {
+        self.client.get_id()
     }
 }

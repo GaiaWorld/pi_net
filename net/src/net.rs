@@ -11,6 +11,7 @@ use mio::net::{TcpListener, TcpStream};
 use timer::{NetTimer, NetTimers, TimerCallback};
 use ws::{read_header as http_read_header, read_ws_header as ws_read_header, get_send_buf};
 
+use pi_lib::gray::GrayVersion;
 use websocket::OwnedMessage;
 use websocket::server::upgrade::sync::Upgrade;
 
@@ -704,6 +705,7 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
             //请求握手包
             http_read_header(stream, vec![], http_func);
         },
+        
         Websocket::Bin(offset, len) => {
             //判断缓存中是否取完
             if len >= size {
@@ -777,6 +779,7 @@ impl Socket {
         Self {
             socket: id,
             sender: sender,
+            gray: None,
         }
     }
 }
@@ -791,5 +794,19 @@ fn move_vec(v: &mut Vec<u8>, src_offset: usize, dst_offset: usize, size: usize) 
         let v = v.as_mut_ptr();
         v.wrapping_offset(src_offset as isize)
             .copy_to(v.wrapping_offset(dst_offset as isize), size);
+    }
+}
+
+impl GrayVersion for Socket {
+    fn get_gray(&self) -> &Option<usize>{
+        &self.gray
+    }
+
+    fn set_gray(&mut self, gray: Option<usize>){
+        self.gray = gray;
+    }
+
+    fn get_id(&self) -> usize{
+        self.socket
     }
 }

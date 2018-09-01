@@ -133,7 +133,6 @@ fn recv_header(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
         let stream = stream.clone();
         handle_header = Box::new(move |data: Result<Arc<Vec<u8>>>| {
             pack.extend_from_slice(data.unwrap().as_slice());
-            println!("recv_header------------------------------------------------{:?}", pack);
             // let size = get_recv_size(pack.as_slice()).unwrap();
             // recv_pack(stream, pack, size, func);
             recv_header2(stream, pack, func);
