@@ -15,7 +15,6 @@ use mqtt3::LastWill;
 
 use mqtt::client::ClientNode;
 use mqtt::data::{Client, ClientCallback};
-use mqtt::session::{LZ4_BLOCK, UNCOMPRESS};
 use mqtt::util;
 
 use net::{Socket, Stream};
@@ -65,8 +64,8 @@ impl RPCClient {
             let msg_id = u32::from_be(unsafe { *((data[1..4].as_ptr()) as *mut u32) });
             let mut rdata = Vec::new();
             match compress {
-                UNCOMPRESS => rdata.extend_from_slice(&data[6..]),
-                LZ4_BLOCK => {
+                util::UNCOMPRESS => rdata.extend_from_slice(&data[6..]),
+                util::LZ4_BLOCK => {
                     let mut vec_ = Vec::new();
                     uncompress(&data[6..], &mut vec_).is_ok();
                     rdata.extend_from_slice(&vec_[..]);
@@ -126,10 +125,10 @@ impl RPCClientTraits for RPCClient {
         let msg_size = msg.len();
         println!("pi_net rpc client request 00000000000000");
         let msg_id = *self.msg_id.lock().unwrap();
-        let mut compress_vsn = UNCOMPRESS;
+        let mut compress_vsn = util::UNCOMPRESS;
         let mut body = vec![];
         if msg_size > 64 {
-            compress_vsn = LZ4_BLOCK;
+            compress_vsn = util::LZ4_BLOCK;
             compress(msg.as_slice(), &mut body, CompressLevel::High).is_ok();
         } else {
             body = msg;

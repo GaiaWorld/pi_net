@@ -3,6 +3,7 @@ use std::fmt::{Debug, Formatter, Result as DebugResult};
 use std::io::{Error, ErrorKind, Result};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
 use magnetic::buffer::dynamic::DynamicBuffer;
 use magnetic::mpsc::mpsc_queue;
@@ -270,28 +271,28 @@ fn handle_recv(
     }
 
     //设置keep_alive定时器
-    // {
-    //     let node = &mut node.lock().unwrap();
-    //     let clients = node.clients.get(&socket.socket).unwrap();
-    //     let keep_alive = clients.keep_alive;
-    //     if keep_alive > 0 {
-    //         let stream = st.clone();
-    //         let stream = stream.read().unwrap();
-    //         let mut timers = stream.net_timers.write().unwrap();
-    //         let socket = socket.clone();
-    //         //mqtt协议要求keep_alive的1.5倍超时关闭连接
-    //         let keep_alive = (keep_alive as f32) * 1.5;
-    //         timers.set_timeout(
-    //             Atom::from(String::from("handle_recv") + &socket.socket.to_string()),
-    //             Duration::from_secs(keep_alive as u64),
-    //             Box::new(move |_src: Atom| {
-    //                 println!("keep_alive timeout con close!!!!!!!!!!!!");
-    //                 //关闭连接
-    //                 socket.close(true);
-    //             }),
-    //         )
-    //     }
-    // }
+    {
+        let node = &mut node.lock().unwrap();
+        let clients = node.clients.get(&socket.socket).unwrap();
+        let keep_alive = clients.keep_alive;
+        if keep_alive > 0 {
+            let stream = st.clone();
+            let stream = stream.read().unwrap();
+            let mut timers = stream.net_timers.write().unwrap();
+            let socket = socket.clone();
+            //mqtt协议要求keep_alive的1.5倍超时关闭连接
+            let keep_alive = (keep_alive as f32) * 1.5;
+            timers.set_timeout(
+                Atom::from(String::from("handle_recv") + &socket.socket.to_string()),
+                Duration::from_secs(keep_alive as u64),
+                Box::new(move |_src: Atom| {
+                    println!("keep_alive timeout con close!!!!!!!!!!!!");
+                    //关闭连接
+                    socket.close(true);
+                }),
+            )
+        }
+    }
 
     {
         let s = st.clone();
@@ -340,9 +341,10 @@ fn recv_connect(
         let name = Atom::from(String::from("$open"));
         if let Some(meta) = node.metas.get(&name) {
             let client_stub = &*client_stub.clone();
+            let new_ms = util::encode(session::encode_reps(0, 10, vec![]));
             (meta.publish_func)(
                 client_stub.clone(),
-                Ok(Arc::new(session::encode(0, 10, vec![]))),
+                Ok(Arc::new(new_ms)),
             );
         }
     }
@@ -542,9 +544,11 @@ fn recv_disconnect(node: Arc<Mutex<ServerNodeImpl>>, cid: usize) {
     if let Some(meta) = node.metas.get(&name) {
         let client_stub = node.clients.get(&cid).unwrap();
         let client_stub = &*client_stub.clone();
+        let new_ms = util::encode(session::encode_reps(0, 10, vec![]));
+
         (meta.publish_func)(
             client_stub.clone(),
-            Ok(Arc::new(session::encode(0, 10, vec![]))),
+            Ok(Arc::new(new_ms)),
         );
     }
 }
@@ -566,6 +570,7 @@ fn publish_impl(
     let t = t.unwrap();
     let node = &mut node.lock().unwrap();
 
+    let payload = util::encode(payload);
     if retain {
         let atom = Atom::from(t.path.as_str());
         let has_topic = node.retain_topics.contains_key(&atom);

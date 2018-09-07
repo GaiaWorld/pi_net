@@ -335,8 +335,9 @@ fn stream_send(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream) -> boo
                     println!("send would block: size = {}", stream.send_buf_offset);
                     break;
                 } else {
-                    panic!("Send Error: {:?}", err);
-                    // return true;
+                    println!("Send Error: {:?}", err);
+                    //panic!("Send Error: {:?}", err);
+                    return true;
                 }
             }
         }

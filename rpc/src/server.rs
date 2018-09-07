@@ -12,7 +12,8 @@ use pi_lib::atom::Atom;
 
 use mqtt::data::{Server, SetAttrFun};
 use mqtt::server::{ClientStub, ServerNode};
-use mqtt::session::{LZ4_BLOCK, Session, UNCOMPRESS};
+use mqtt::session::Session;
+use mqtt::util;
 
 use pi_base::util::uncompress;
 use pi_lib::handler::{Args, Handler};
@@ -94,8 +95,8 @@ impl RPCServerTraits for RPCServer {
             session.set_timeout(now as usize, data[5]);
             let mut rdata = Vec::new();
             match compress {
-                UNCOMPRESS => rdata.extend_from_slice(&data[6..]),
-                LZ4_BLOCK => {
+                util::UNCOMPRESS => rdata.extend_from_slice(&data[6..]),
+                util::LZ4_BLOCK => {
                     let mut vec_ = Vec::new();
                     uncompress(&data[6..], &mut vec_).is_ok();
                     rdata.extend_from_slice(&vec_[..]);
