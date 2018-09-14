@@ -11,6 +11,7 @@ use mio::net::{TcpListener, TcpStream};
 use timer::{NetTimer, NetTimers, TimerCallback};
 use ws::{read_header as http_read_header, read_ws_header as ws_read_header, get_send_buf};
 
+use pi_lib::gray::GrayVersion;
 use websocket::OwnedMessage;
 use websocket::server::upgrade::sync::Upgrade;
 
@@ -181,6 +182,7 @@ fn tcp_event(mio: &mut TcpListener, recv_comings: Arc<RwLock<Vec<Token>>>, net_t
 
 // return bool indicate that should close the net imm;
 fn stream_recv(stream: &mut Stream, mio: &mut TcpStream) -> Option<Result<(RecvFn, Range<usize>)>> {
+    println!("stream_recv-------------------------------------------------------" );
     if stream.recv_callback.is_none() {
         panic!("stream_recv failed, stream.recv_callback == None");
     }
@@ -334,8 +336,9 @@ fn stream_send(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream) -> boo
                     println!("send would block: size = {}", stream.send_buf_offset);
                     break;
                 } else {
-                    panic!("Send Error: {:?}", err);
-                    // return true;
+                    println!("Send Error: {:?}", err);
+                    //panic!("Send Error: {:?}", err);
+                    return true;
                 }
             }
         }
@@ -344,6 +347,7 @@ fn stream_send(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream) -> boo
 }
 
 pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureFn>) {
+    println!("handle_net-------------------------------------------");
     let mut handler = NetHandler {
         sender: sender,
         slab: Slab::<NetData>::new(),
@@ -452,7 +456,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                                     }
                                 }
                             } else {
-                                println!("stream_recv: return None!");
+                                //println!("stream_recv: return None!");
                             }
 
                             if is_close {
@@ -704,6 +708,7 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
             //请求握手包
             http_read_header(stream, vec![], http_func);
         },
+        
         Websocket::Bin(offset, len) => {
             //判断缓存中是否取完
             if len >= size {
@@ -713,6 +718,7 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                 let buf = websocket_buf.clone();
                 let v = &websocket_buf[offset..end];
                 let v = Vec::from(v);
+                println!("stream websocket1-------------------------------{}, {}, {}, {}",offset, size, len, len - size);
                 //写入ws缓存
                 stream.write().unwrap().websocket = Websocket::Bin(offset + size, len - size);
                 return Some((func, Ok(Arc::new(v))));
@@ -725,8 +731,10 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                             if buf.len() >= size {
                                 let v = Vec::from(&buf[0..size]);
                                 let len = buf.len();
+                               
                                 //写入ws缓存
                                 stream.write().unwrap().websocket = Websocket::Bin(size, len - size);
+                                println!("stream websocket-------------------------------{}, {}, {}",len, size, len - size);
                                 stream.write().unwrap().websocket_buf = buf;
                                 func(Ok(Arc::new(v)))
                             }
@@ -777,6 +785,7 @@ impl Socket {
         Self {
             socket: id,
             sender: sender,
+            gray: None,
         }
     }
 }
@@ -791,5 +800,19 @@ fn move_vec(v: &mut Vec<u8>, src_offset: usize, dst_offset: usize, size: usize) 
         let v = v.as_mut_ptr();
         v.wrapping_offset(src_offset as isize)
             .copy_to(v.wrapping_offset(dst_offset as isize), size);
+    }
+}
+
+impl GrayVersion for Socket {
+    fn get_gray(&self) -> &Option<usize>{
+        &self.gray
+    }
+
+    fn set_gray(&mut self, gray: Option<usize>){
+        self.gray = gray;
+    }
+
+    fn get_id(&self) -> usize{
+        self.socket
     }
 }

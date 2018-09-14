@@ -26,6 +26,7 @@ pub type ListenerFn = Box<Fn(Result<(Socket, Arc<RwLock<Stream>>)>, Result<Socke
 pub struct Socket {
     pub socket: usize,
     pub sender: Sender<SendClosureFn>,
+    pub gray: Option<usize>,
 }
 
 unsafe impl Sync for Socket {}

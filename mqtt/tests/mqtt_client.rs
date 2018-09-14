@@ -39,6 +39,65 @@ fn handle_mqtt(client: &mut ClientNode) {
         Ok(_) => println!("client subscribe ok!!!!!!!!!!!!"),
         Err(e) => println!("client subscribe err!!!!!!!!!!!!e:{}", e),
     };
+
+    //测试多次订阅
+    subscribe_publish(client);
+}
+
+fn subscribe_publish(client: &mut ClientNode) {
+    client.set_topic_handler(
+        Atom::from(String::from("testTopic1").as_str()),
+        Box::new(|r| println!("onmessage ok!!!!!!! r:{:?}", r.unwrap().1)),
+    );
+    client.set_topic_handler(
+        Atom::from(String::from("testTopic2").as_str()),
+        Box::new(|r| println!("onmessage ok!!!!!!! r:{:?}", r.unwrap().1)),
+    );
+    client.set_topic_handler(
+        Atom::from(String::from("testTopic3").as_str()),
+        Box::new(|r| println!("onmessage ok!!!!!!! r:{:?}", r.unwrap().1)),
+    );
+    client.set_topic_handler(
+        Atom::from(String::from("testTopic4").as_str()),
+        Box::new(|r| println!("onmessage ok!!!!!!! r:{:?}", r.unwrap().1)),
+    );
+    //订阅主题
+    match client.subscribe(
+        vec![(String::from("testTopic1"), QoS::AtMostOnce)],
+        Some(Box::new(|_r| println!("subscribe ok##############"))),
+    ) {
+        Ok(_) => println!("client subscribe ok!!!!!!!!!!!!"),
+        Err(e) => println!("client subscribe err!!!!!!!!!!!!e:{}", e),
+    };
+    //订阅主题
+    match client.subscribe(
+        vec![(String::from("testTopic2"), QoS::AtMostOnce)],
+        Some(Box::new(|_r| println!("subscribe ok##############"))),
+    ) {
+        Ok(_) => println!("client subscribe ok!!!!!!!!!!!!"),
+        Err(e) => println!("client subscribe err!!!!!!!!!!!!e:{}", e),
+    };
+    //订阅主题
+    match client.subscribe(
+        vec![(String::from("testTopic3"), QoS::AtMostOnce)],
+        Some(Box::new(|_r| println!("subscribe ok##############"))),
+    ) {
+        Ok(_) => println!("client subscribe ok!!!!!!!!!!!!"),
+        Err(e) => println!("client subscribe err!!!!!!!!!!!!e:{}", e),
+    };
+    //订阅主题
+    match client.subscribe(
+        vec![(String::from("testTopic4"), QoS::AtMostOnce)],
+        Some(Box::new(|_r| println!("subscribe ok##############"))),
+    ) {
+        Ok(_) => println!("client subscribe ok!!!!!!!!!!!!"),
+        Err(e) => println!("client subscribe err!!!!!!!!!!!!e:{}", e),
+    };
+
+    client.publish(false,  QoS::AtMostOnce, Atom::from("testTopic1"), vec![1]);
+    client.publish(false,  QoS::AtMostOnce, Atom::from("testTopic2"), vec![2]);
+    client.publish(false,  QoS::AtMostOnce, Atom::from("testTopic3"), vec![3]);
+    client.publish(false,  QoS::AtMostOnce, Atom::from("testTopic4"), vec![4]);
 }
 
 fn handle_connect(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketAddr>) {

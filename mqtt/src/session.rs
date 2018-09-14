@@ -9,11 +9,6 @@ use pi_lib::gray::GrayVersion;
 use server::ClientStub;
 use util;
 
-//LZ4_BLOCK 压缩
-pub const LZ4_BLOCK: u8 = 1;
-//不压缩
-pub const UNCOMPRESS: u8 = 0;
-
 #[derive(Clone, Debug)]
 pub struct Session {
     pub client: ClientStub,
@@ -25,11 +20,8 @@ pub struct Session {
 unsafe impl Sync for Session {}
 unsafe impl Send for Session {}
 
-pub fn encode(msg_id: u32, timeout: u8, msg: Vec<u8>) -> Vec<u8> {
+pub fn encode_reps(msg_id: u32, timeout: u8, msg: Vec<u8>) -> Vec<u8> {
     let mut buff: Vec<u8> = vec![];
-    //let msg_size = msg.len();
-    let compress_vsn = UNCOMPRESS;
-
     let b1: u8 = ((msg_id >> 24) & 0xff) as u8;
     let b2: u8 = ((msg_id >> 16) & 0xff) as u8;
     let b3: u8 = ((msg_id >> 8) & 0xff) as u8;
@@ -39,27 +31,7 @@ pub fn encode(msg_id: u32, timeout: u8, msg: Vec<u8>) -> Vec<u8> {
     //一字节超时时长（秒）
     buff.push(timeout as u8);
     buff.extend_from_slice(msg.as_slice());
-    
-    //暂不处理解压问题
-    // if msg_size > 64 {
-    //     println!("LZ4_BLOCK=-------------------------------------------");
-    //     compress_vsn = LZ4_BLOCK;
-        // let body = vec![];
-        // body.extend_from_slice(&unsafe{transmute::<u32, [u8; 4]>(len as u32)});
-    //     compress(buff.as_slice(), &mut body, CompressLevel::High).is_ok();
-        // buff = body;
-    // } else {
-        
-    // }
-
-    //let len = buff.len();
-
-    //第一字节：3位压缩版本、5位消息版本 TODO 消息版本以后定义
-    buff.insert(0, ((compress_vsn << 6) | 0) as u8);
-    //剩下的消息体
-    
-    //println!("encode--------------------{:?}", &buff);
-    return buff;
+    buff
 }
 
 //会话
@@ -77,7 +49,7 @@ impl Session {
     pub fn send(&self, topic: Atom, msg: Vec<u8>) {
         let msg_id = self.msg_id;
         let timeout = self.timeout.1;
-        let buff = encode(msg_id, timeout, msg);
+        let buff =  util::encode(encode_reps(msg_id, timeout, msg));
         let t = mqtt3::TopicPath::from_str((*topic).as_str());
         //发送数据
         util::send_publish(
@@ -114,10 +86,14 @@ impl Session {
 
 impl GrayVersion for Session {
     fn get_gray(&self) -> &Option<usize>{
-        &self.client.gray
+        &self.client.get_gray()
     }
 
     fn set_gray(&mut self, gray: Option<usize>){
-        self.client.gray = gray;
+        self.client.set_gray(gray);
+    }
+
+    fn get_id(&self) -> usize {
+        self.client.get_id()
     }
 }

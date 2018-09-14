@@ -8,6 +8,11 @@ use mqtt3::{self, MqttRead, MqttWrite, Packet, PacketIdentifier, QoS};
 use net::{Socket, Stream};
 use net::net::recv;
 
+//LZ4_BLOCK 压缩
+pub const LZ4_BLOCK: u8 = 1;
+//不压缩
+pub const UNCOMPRESS: u8 = 0;
+
 type MqttRecvCallback = Box<FnMut(Result<Packet>)>;
 
 pub fn send_connect(socket: &Socket, keep_alive: u16, last_will: Option<mqtt3::LastWill>) {
@@ -133,7 +138,6 @@ fn recv_header(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
         let stream = stream.clone();
         handle_header = Box::new(move |data: Result<Arc<Vec<u8>>>| {
             pack.extend_from_slice(data.unwrap().as_slice());
-            println!("recv_header------------------------------------------------{:?}", pack);
             // let size = get_recv_size(pack.as_slice()).unwrap();
             // recv_pack(stream, pack, size, func);
             recv_header2(stream, pack, func);
@@ -161,7 +165,7 @@ fn recv_header2(stream: Arc<RwLock<Stream>>, packs: Vec<u8>, func: MqttRecvCallb
                     recv_header2(stream.clone(), pack, func);
                 },
                 Ok(size) => {
-                    println!("!!!!!!!!!recv_pack_size:{}", size);
+                    //println!("!!!!!!!!!recv_pack_size:{}", size);
                     recv_pack(stream.clone(), pack, size as usize, func);
                 },
                 Err(e) => println!("recv_header error: {}", e)
@@ -187,7 +191,7 @@ fn recv_pack(
             pack.extend_from_slice(data.unwrap().as_slice());
             let mut cursor = Cursor::new(pack);
             let packet = cursor.read_packet().unwrap();
-            println!("!!!!!!!!!!!!recv_pack!!!!!!!packet:{:?}", packet);
+            //println!("!!!!!!!!!!!!recv_pack!!!!!!!packet:{:?}", packet);
             func(Ok(packet));
         });
     }
@@ -196,6 +200,33 @@ fn recv_pack(
     if let Some((func, data)) = r {
         func(data);
     }
+}
+
+pub fn encode(msg: Vec<u8>) -> Vec<u8> {
+    let  mut msg = msg;
+    //let msg_size = msg.len();
+    let compress_vsn = UNCOMPRESS;
+    
+    //暂不处理解压问题
+    // if msg_size > 64 {
+    //     println!("LZ4_BLOCK=-------------------------------------------");
+    //     compress_vsn = LZ4_BLOCK;
+        // let body = vec![];
+        // body.extend_from_slice(&unsafe{transmute::<u32, [u8; 4]>(len as u32)});
+    //     compress(buff.as_slice(), &mut body, CompressLevel::High).is_ok();
+        // buff = body;
+    // } else {
+        
+    // }
+
+    //let len = buff.len();
+
+    //第一字节：3位压缩版本、5位消息版本 TODO 消息版本以后定义
+    msg.insert(0, ((compress_vsn << 6) | 0) as u8);
+    //剩下的消息体
+    
+    //println!("encode--------------------{:?}", &buff);
+    return msg;
 }
 
 // fn get_recv_size(pack: &[u8]) -> Result<usize> {
@@ -231,7 +262,7 @@ fn if_ack_size(pack: &[u8]) -> Result<isize> {
     if pack[pack.len() - 1] != 0 {
         return Ok(-1);
     }
-    println!("!!!!!!!!!!ack_size pack:{:?}", pack);
+    //println!("!!!!!!!!!!ack_size pack:{:?}", pack);
     let mut mult: usize = 1;
     let mut len: usize = 0;
     let mut done = false;
