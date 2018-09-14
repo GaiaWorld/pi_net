@@ -26,12 +26,10 @@ pub fn encode_reps(msg_id: u32, timeout: u8, msg: Vec<u8>) -> Vec<u8> {
     let b2: u8 = ((msg_id >> 16) & 0xff) as u8;
     let b3: u8 = ((msg_id >> 8) & 0xff) as u8;
     let b4: u8 = (msg_id & 0xff) as u8;
-    println!("msg_id-------------------------------------{}", msg_id);
     //4字节消息ID
     buff.extend_from_slice(&[b1, b2, b3, b4]);
     //一字节超时时长（秒）
     buff.push(timeout as u8);
-    println!("timeout-------------------------------------{}", timeout);
     buff.extend_from_slice(msg.as_slice());
     buff
 }

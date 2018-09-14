@@ -99,7 +99,6 @@ pub fn send_pingreq(socket: &Socket) {
 }
 
 pub fn send_publish(socket: &Socket, retain: bool, _qos: QoS, topic: &str, payload: Vec<u8>) {
-    println!("send_publish------------------------");
     send_packet(
         socket,
         Packet::Publish(mqtt3::Publish {
@@ -166,7 +165,7 @@ fn recv_header2(stream: Arc<RwLock<Stream>>, packs: Vec<u8>, func: MqttRecvCallb
                     recv_header2(stream.clone(), pack, func);
                 },
                 Ok(size) => {
-                    println!("!!!!!!!!!recv_pack_size:{}", size);
+                    //println!("!!!!!!!!!recv_pack_size:{}", size);
                     recv_pack(stream.clone(), pack, size as usize, func);
                 },
                 Err(e) => println!("recv_header error: {}", e)
@@ -192,7 +191,7 @@ fn recv_pack(
             pack.extend_from_slice(data.unwrap().as_slice());
             let mut cursor = Cursor::new(pack);
             let packet = cursor.read_packet().unwrap();
-            println!("!!!!!!!!!!!!recv_pack!!!!!!!packet:{:?}", packet);
+            //println!("!!!!!!!!!!!!recv_pack!!!!!!!packet:{:?}", packet);
             func(Ok(packet));
         });
     }
@@ -263,7 +262,7 @@ fn if_ack_size(pack: &[u8]) -> Result<isize> {
     if pack[pack.len() - 1] != 0 {
         return Ok(-1);
     }
-    println!("!!!!!!!!!!ack_size pack:{:?}", pack);
+    //println!("!!!!!!!!!!ack_size pack:{:?}", pack);
     let mut mult: usize = 1;
     let mut len: usize = 0;
     let mut done = false;

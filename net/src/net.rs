@@ -182,6 +182,7 @@ fn tcp_event(mio: &mut TcpListener, recv_comings: Arc<RwLock<Vec<Token>>>, net_t
 
 // return bool indicate that should close the net imm;
 fn stream_recv(stream: &mut Stream, mio: &mut TcpStream) -> Option<Result<(RecvFn, Range<usize>)>> {
+    println!("stream_recv-------------------------------------------------------" );
     if stream.recv_callback.is_none() {
         panic!("stream_recv failed, stream.recv_callback == None");
     }
@@ -346,6 +347,7 @@ fn stream_send(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream) -> boo
 }
 
 pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureFn>) {
+    println!("handle_net-------------------------------------------");
     let mut handler = NetHandler {
         sender: sender,
         slab: Slab::<NetData>::new(),
@@ -454,7 +456,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                                     }
                                 }
                             } else {
-                                println!("stream_recv: return None!");
+                                //println!("stream_recv: return None!");
                             }
 
                             if is_close {
@@ -716,6 +718,7 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                 let buf = websocket_buf.clone();
                 let v = &websocket_buf[offset..end];
                 let v = Vec::from(v);
+                println!("stream websocket1-------------------------------{}, {}, {}, {}",offset, size, len, len - size);
                 //写入ws缓存
                 stream.write().unwrap().websocket = Websocket::Bin(offset + size, len - size);
                 return Some((func, Ok(Arc::new(v))));
@@ -728,8 +731,10 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                             if buf.len() >= size {
                                 let v = Vec::from(&buf[0..size]);
                                 let len = buf.len();
+                               
                                 //写入ws缓存
                                 stream.write().unwrap().websocket = Websocket::Bin(size, len - size);
+                                println!("stream websocket-------------------------------{}, {}, {}",len, size, len - size);
                                 stream.write().unwrap().websocket_buf = buf;
                                 func(Ok(Arc::new(v)))
                             }

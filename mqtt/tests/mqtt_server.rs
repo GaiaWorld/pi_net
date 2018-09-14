@@ -3,13 +3,12 @@ extern crate mqtt3;
 extern crate net;
 extern crate pi_lib;
 
-use std::io::Result;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use std::thread;
 
 use mqtt::data::Server;
-use mqtt::server::ServerNode;
+use mqtt::server::{ServerNode, ClientStub};
 use mqtt3::QoS;
 use net::{Config, NetManager, Protocol, Socket, Stream};
 
@@ -17,8 +16,9 @@ use pi_lib::atom::Atom;
 
 use std::thread::sleep;
 use std::time::Duration;
+use std::io::Result as IOResult;
 
-fn handle_close(stream_id: usize, reason: Result<()>) {
+fn handle_close(stream_id: usize, reason: IOResult<()>) {
     println!(
         "server handle_close, stream_id = {}, reason = {:?}",
         stream_id, reason
@@ -44,7 +44,7 @@ fn handle_publish(server: &mut ServerNode) {
     );
 }
 
-fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketAddr>) {
+fn handle_bind(peer: IOResult<(Socket, Arc<RwLock<Stream>>)>, addr: IOResult<SocketAddr>) {
     let (socket, stream) = peer.unwrap();
     println!(
         "server handle_bind: addr = {:?}, socket:{}",
@@ -79,14 +79,41 @@ fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketA
         //None,
         Box::new(|c, r| println!("last_will  publish 遗言 ok!!! r:{:?}", r.unwrap())),
     );
+
+    set_mqtt_topic(&server, "testTopic1".to_string(), true, true);
+    set_mqtt_topic(&server, "testTopic2".to_string(), true, true);
+    set_mqtt_topic(&server, "testTopic3".to_string(), true, true);
+    set_mqtt_topic(&server, "testTopic4".to_string(), true, true);
     thread::spawn(move || handle_publish(&mut server));
+}
+
+fn set_mqtt_topic(server_node: &ServerNode, topic: String, can_publish: bool, can_subscribe: bool) -> Result<bool, String> {
+    let topic = Atom::from(topic);
+    let server_node1 = server_node.clone();
+    match server_node.set_topic_meta(topic.clone(), can_publish,can_subscribe, Box::new(move |_c:ClientStub, r:IOResult<Arc<Vec<u8>>>| {
+        println!("vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv");
+        match r {
+            Ok(v) => {
+                match server_node1.publish(false, mqtt3::QoS::AtMostOnce, topic.clone(),Vec::from(v.as_slice())) {
+                    Ok(_) => (),
+                    Err(s) => {println!("{}, topic:{}", s.to_string(), topic.as_str());},
+                }
+            },
+            Err(s) => {
+                println!("{}, topic:{}", s.to_string(), topic.as_str());
+            },
+        }
+    })) {
+        Ok(_) => Ok(true),
+        Err(s) => Err(s.to_string()),
+    } 
 }
 
 pub fn start_server() -> NetManager {
     let mgr = NetManager::new();
     let config = Config {
         protocol: Protocol::TCP,
-        addr: "127.0.0.1:1234".parse().unwrap(),
+        addr: "0.0.0.0:1234".parse().unwrap(),
     };
     mgr.bind(
         config,

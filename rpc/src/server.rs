@@ -13,9 +13,7 @@ use pi_lib::atom::Atom;
 use mqtt::data::{Server, SetAttrFun};
 use mqtt::server::{ClientStub, ServerNode};
 use mqtt::session::Session;
-use mqtt::util;
 
-use pi_base::util::uncompress;
 use pi_lib::handler::{Args, Handler};
 use traits::RPCServerTraits;
 
@@ -76,13 +74,8 @@ impl RPCServerTraits for RPCServer {
     ) -> Result<()> {
         let topic2 = topic.clone();
         let rpc_handle = move |client: ClientStub, r: Result<Arc<Vec<u8>>>| {
-            let data = r.unwrap();
-            let header = data[0];
-            //压缩版本
-            let compress = (&header >> 6) as u8;
-            //消息版本
-            let vsn = &header & 0b11111;
-            let uid = data[1..4].as_ptr();
+            let rdata = r.unwrap();
+            let uid = rdata[0..3].as_ptr();
             let mut session = Session::new(
                 client.clone(),
                 sync,
@@ -92,23 +85,12 @@ impl RPCServerTraits for RPCServer {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_secs();
-            session.set_timeout(now as usize, data[5]);
-            let mut rdata = Vec::new();
-            match compress {
-                util::UNCOMPRESS => rdata.extend_from_slice(&data[6..]),
-                util::LZ4_BLOCK => {
-                    let mut vec_ = Vec::new();
-                    uncompress(&data[6..], &mut vec_).is_ok();
-                    rdata.extend_from_slice(&vec_[..]);
-                }
-                _ => session.close(),
-            }
+            session.set_timeout(now as usize, rdata[4]);
             let session = Arc::new(session);
             let rdata = Arc::new(rdata);
             let handle_func;
             {
                 let topic2 = topic2.clone();
-                let vsn = vsn;
                 let rdata = rdata.clone();
                 let session = session.clone();
                 let handle = handle.clone();
@@ -116,7 +98,7 @@ impl RPCServerTraits for RPCServer {
                     handle.clone().handle(
                         session.clone(),
                         topic2.clone(),
-                        Args::TwoArgs(vsn, rdata),
+                        Args::TwoArgs(0, Arc::new(Vec::from(&rdata[5..]))),
                     )
                 });
             }
@@ -125,7 +107,7 @@ impl RPCServerTraits for RPCServer {
             } else if client.get_queue_size() == 0 {
                 handle
                     .clone()
-                    .handle(session.clone(), topic2.clone(), Args::TwoArgs(vsn, rdata));
+                    .handle(session.clone(), topic2.clone(), Args::TwoArgs(0, Arc::new(Vec::from(&rdata[5..]))));
                 client.queue_push(handle_func);
             } else {
                 client.queue_push(handle_func);

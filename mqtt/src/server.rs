@@ -12,6 +12,7 @@ use magnetic::{Consumer, Producer};
 
 use pi_lib::atom::Atom;
 use pi_lib::gray::GrayVersion;
+use pi_base::util::uncompress;
 use data::{Server, SetAttrFun};
 use fnv::FnvHashMap;
 use mqtt3::{self, Packet};
@@ -256,6 +257,7 @@ fn handle_recv(
     stream: Arc<RwLock<Stream>>,
     packet: Result<Packet>,
 ) {
+    println!("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
     let n = node.clone();
     let st = stream.clone();
     if let Ok(packet) = packet {
@@ -510,25 +512,49 @@ fn recv_unsub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) {
 }
 
 fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish, socket: &Socket) {
-    println!("mqtt server!!!!!!!!!!!!!!!!!");
+    //println!("mqtt server!!!!!!!!!!!!!!!!!");
     if publish.qos != mqtt3::QoS::AtMostOnce {
         return;
     }
-    println!("&publish.topic_name = {:?}", &publish.topic_name);
+    //println!("&publish.topic_name = {:?}", &publish.topic_name);
     let topic = mqtt3::TopicPath::from_str(&publish.topic_name);
     if topic.is_err() {
         return;
     }
     let topic = topic.unwrap();
-    println!("topic = {:?}", topic);
-    let node = &mut node.lock().unwrap();
-    for (_, meta) in node.metas.iter() {
-        if meta.topic.is_match(&topic) {
-            println!("mqtt server !!!!!!! topic = {:?}", topic);
-            let client_stub = node.clients.get(&socket.socket).unwrap();
-            let client_stub = &*client_stub.clone();
-            (meta.publish_func)(client_stub.clone(), Ok(publish.payload.clone()));
+    //println!("topic = {:?}", topic);
+    let mut r = None;
+    {
+        let node = &mut node.lock().unwrap();
+        for (_, meta) in node.metas.iter() {
+            if meta.topic.is_match(&topic) {
+                r = Some((node.clients.get(&socket.socket).unwrap().clone(), meta.clone()));
+                break;
+            }
         }
+    };
+
+    match r {
+        Some(v) => {
+            let data = &publish.payload;
+            let header = data[0];
+            //压缩版本
+            let compress = (&header >> 6) as u8;
+            //消息版本
+            //let vsn = &header & 0b11111;
+            let r = match compress {
+                util::UNCOMPRESS => Vec::from(&data[1..]),
+                util::LZ4_BLOCK => {
+                    let mut vec_ = Vec::new();
+                    uncompress(&data[1..], &mut vec_).is_ok();
+                    vec_
+                }
+                _ => {println!("Compression mode does not support, topic:{}", &publish.topic_name); return;},
+            };
+            //println!("mqtt server !!!!!!! topic = {:?}, payload={:?}", topic, publish.payload.as_slice());
+            (v.1.publish_func)((&*v.0).clone(), Ok(Arc::new(r)));
+        },
+        None => (),
     }
 }
 
@@ -563,6 +589,7 @@ fn publish_impl(
     if qos != mqtt3::QoS::AtMostOnce {
         return Err(Error::new(ErrorKind::Other, "publish impl, invalid qos"));
     }
+    
     let t = mqtt3::TopicPath::from_str((*topic).clone().as_str());
     if t.is_err() {
         return Err(Error::new(ErrorKind::Other, "publish impl, invalid topic"));
