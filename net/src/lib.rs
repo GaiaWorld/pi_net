@@ -3,6 +3,7 @@
 #![feature(fnbox)]
 #![feature(pointer_methods)]
 #![feature(fn_traits)]
+#![feature(proc_macro)]
 
 extern crate mio;
 extern crate slab;
