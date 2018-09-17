@@ -21,7 +21,7 @@ use mount::OriginalUrl;
 use file_path::RequestedPath;
 use modifiers::{Redirect, mime_for_path};
 use headers;
-use handler::{HttpsResult, Handler};
+use handler::{HttpsError, HttpsResult, Handler};
 
 use HttpResponse;
 
@@ -74,7 +74,8 @@ impl Set for StaticFile {}
 impl Handler for StaticFile {
     fn handle(&self, req: Request, res: Response) -> Option<(Request, Response, HttpsResult<()>)> {
         let requested_path = RequestedPath::new(&self.root, &req);
-        let metadata = match fs::metadata(&requested_path.path) {
+        let path = &requested_path.path.clone();
+        let metadata = match fs::metadata(path) {
             Ok(meta) => meta,
             Err(e) => {
                 let status = match e.kind() {
@@ -82,7 +83,9 @@ impl Handler for StaticFile {
                     io::ErrorKind::PermissionDenied => StatusCode::FORBIDDEN,   //禁止访问文件
                     _ => StatusCode::INTERNAL_SERVER_ERROR, //服务器内部错误
                 };
-                return Some((req, res.set(status), Ok(())));
+                return Some((req, res.set(status), 
+                            Err(HttpsError::new(io::Error::new(e.kind(), 
+                                format!("load file error, path: {:?}, e: {}", path, e.to_string()))))));
             },
         };
 
@@ -103,7 +106,9 @@ impl Handler for StaticFile {
         }
 
         match requested_path.get_file(&metadata) {
-            None => Some((req, res.set(StatusCode::NOT_FOUND), Ok(()))),    //文件未找到
+            None => Some((req, res.set(StatusCode::NOT_FOUND), 
+                            Err(HttpsError::new(io::Error::new(io::ErrorKind::NotFound, 
+                                format!("load file error, get file metadata failed, path: {:?}", path)))))),    //文件未找到
             Some(path) => {
                 //异步加载指定文件
                 async_load_file(req, res, path);
@@ -131,7 +136,7 @@ fn async_load_file(req: Request, mut res: Response, file_path: PathBuf) {
             Err(e) => {
                 //打开失败
                 match res.receiver.as_ref().unwrap().consume() {
-                    Err(_) => println!("https async open file task wakeup failed, task id: {}, e: {:?}", req.uid, e),
+                    Err(_) => println!("!!!> Https Async Open File Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
                     Ok(waker) => {
                         let sender = res.sender.as_ref().unwrap().clone();
                         let mut http_res = HttpResponse::<Body>::new(Body::empty());
@@ -151,7 +156,7 @@ fn async_load_file(req: Request, mut res: Response, file_path: PathBuf) {
                         Err(e) => {
                             //读失败
                             match res.receiver.as_ref().unwrap().consume() {
-                                Err(_) => println!("https async read file task wakeup failed, task id: {}, e: {:?}", req.uid, e),
+                                Err(_) => println!("!!!> Https Async Read File Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
                                 Ok(waker) => {
                                     let sender = res.sender.as_ref().unwrap().clone();
                                     let mut http_res = HttpResponse::<Body>::new(Body::empty());
@@ -165,7 +170,7 @@ fn async_load_file(req: Request, mut res: Response, file_path: PathBuf) {
                         Ok(data) => {
                             //读成功
                             match res.receiver.as_ref().unwrap().consume() {
-                                Err(e) => println!("https async open file task wakeup failed, task id: {}, e: {:?}", req.uid, e),
+                                Err(e) => println!("!!!> Https Async Open File Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
                                 Ok(waker) => {
                                     let sender = res.sender.as_ref().unwrap().clone();
                                     let mut http_res = HttpResponse::<Body>::new(Body::empty());
