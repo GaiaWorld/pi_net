@@ -66,7 +66,7 @@ impl Handler for StaticFileBatch {
                 return Some((req, res, Err(HttpsError::new(IOError::new(ErrorKind::NotFound, desc)))));
             },
             Ok(_) => {
-                decode_dir(&mut dirs, &self.root, &mut dir_vec);
+                decode_dir(self.parse_files, &mut dirs, &self.root, &mut dir_vec);
             },
         }
         match decode(&mut fs.chars(), &mut vec![], &mut vec![], &mut files, 0) {
@@ -289,26 +289,27 @@ fn decode_path(chars: &mut Chars, stack: &mut Vec<String>, result: &mut Vec<Stri
 }
 
 //解析指定目录下指定后缀的文件，没有后缀即目录下所有文件
-fn decode_dir(dirs: &mut Vec<String>, root: &PathBuf, result: &mut Vec<(u64, PathBuf)>) {
-    for dir in dirs {
-        let path = root.join(dir);
-        if !path.is_file() && !path.is_dir() {
-            //解析目录下指定后缀的文件
-            if let Some(s) = path.file_name() {
-                if let Some(str) = s.to_str() {
-                    let vec: Vec<&str> = str.split(".").collect();
-                    if vec.len() > 1 {
-                        disk_files(Some(&OsStr::new(vec[1])), &path.parent().unwrap().to_path_buf(), result);
-                        continue;
+fn decode_dir(parse_files: fn(Option<&OsStr>, path: &PathBuf, result: &mut Vec<(u64, PathBuf)>), 
+    dirs: &mut Vec<String>, root: &PathBuf, result: &mut Vec<(u64, PathBuf)>) {
+        for dir in dirs {
+            let path = root.join(dir);
+            if !path.is_file() && !path.is_dir() {
+                //解析目录下指定后缀的文件
+                if let Some(s) = path.file_name() {
+                    if let Some(str) = s.to_str() {
+                        let vec: Vec<&str> = str.split(".").collect();
+                        if vec.len() > 1 {
+                            parse_files(Some(&OsStr::new(vec[1])), &path.parent().unwrap().to_path_buf(), result);
+                            continue;
+                        }
                     }
                 }
+                parse_files(None, &path.parent().unwrap().to_path_buf(), result);
+            } else {
+                //解析目录下所有文件
+                parse_files(None, &path, result);
             }
-            disk_files(None, &path.parent().unwrap().to_path_buf(), result);
-        } else {
-            //解析目录下所有文件
-            disk_files(None, &path, result);
         }
-    }
 }
 
 //从硬盘上递归读取文件名和大小
