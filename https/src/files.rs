@@ -3,13 +3,11 @@ use std::str::Chars;
 use std::ffi::OsStr;
 use std::fs::DirEntry;
 use std::path::{Path, PathBuf};
-use std::io::Result as IOResult;
+use std::io::{Error as IOError, Result as IOResult, ErrorKind};
 
-use url;
 use http::StatusCode;
 use hyper::body::Body;
 use modifier::Set;
-use modifier::Modifier;
 
 use pi_base::file::{AsynFileOptions, Shared, AsyncFile, SharedFile};
 
@@ -17,12 +15,9 @@ use mime;
 use Plugin;
 use headers;
 use HttpResponse;
-use request::{Url, Request};
+use request::Request;
 use response::Response;
-use mount::OriginalUrl;
-use file_path::RequestedPath;
-use modifiers::{Redirect, mime_for_path};
-use handler::{HttpsResult, Handler};
+use handler::{HttpsError, HttpsResult, Handler};
 use params::{Params, Value};
 use file::{HTTPS_ASYNC_OPEN_FILE_FAILED_STATUS, HTTPS_ASYNC_READ_FILE_FAILED_STATUS};
 
@@ -41,7 +36,8 @@ impl Handler for StaticFileBatch {
     fn handle(&self, mut req: Request, res: Response) -> Option<(Request, Response, HttpsResult<()>)> {
         if req.url.path().len() > 1 || req.url.path()[0] != "" {
             //无效的路径，则忽略
-            return Some((req, res, Ok(())));
+            return Some((req, res, 
+                        Err(HttpsError::new(IOError::new(ErrorKind::NotFound, "load batch file error, invalid file path")))));
         }
 
         let mut ds = "";
@@ -65,9 +61,9 @@ impl Handler for StaticFileBatch {
         let mut file_vec: Vec<(u64, PathBuf)>;
         let mut files: Vec<String> = Vec::new();
         match decode(&mut ds.chars(), &mut vec![], &mut vec![], &mut dirs, 0) {
-            Err(pos) => {
-                println!("!!>load batch file error, decode dir failed, dir: {}, pos: {}", ds, pos);
-                return Some((req, res, Ok(())));
+            Err(pos) => {            
+                let desc = format!("load batch file error, decode dir failed, dir: {}, pos: {}", ds, pos);
+                return Some((req, res, Err(HttpsError::new(IOError::new(ErrorKind::NotFound, desc)))));
             },
             Ok(_) => {
                 decode_dir(&mut dirs, &self.root, &mut dir_vec);
@@ -75,8 +71,8 @@ impl Handler for StaticFileBatch {
         }
         match decode(&mut fs.chars(), &mut vec![], &mut vec![], &mut files, 0) {
             Err(pos) => {
-                println!("!!>load batch file error, decode file failed, file: {}, pos: {}", fs, pos);
-                return Some((req, res, Ok(())));
+                let desc = format!("load batch file error, decode file failed, file: {}, pos: {}", fs, pos);
+                return Some((req, res, Err(HttpsError::new(IOError::new(ErrorKind::NotFound, desc)))));
             },
             Ok(_) => {
                 file_vec = files.into_iter().map(|file| {
@@ -376,7 +372,7 @@ fn async_load_files(req: Request, mut res: Response, files: Vec<(u64, PathBuf)>,
     } else {
         //加载完成，则回应
         match res.receiver.as_ref().unwrap().consume() {
-            Err(e) => println!("https async open file task wakeup failed, task id: {}, e: {:?}", req.uid, e),
+            Err(e) => println!("!!!> Https Async Open File Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
             Ok(waker) => {
                 let sender = res.sender.as_ref().unwrap().clone();
                 let mut http_res = HttpResponse::<Body>::new(Body::empty());
@@ -397,7 +393,7 @@ fn async_load_files(req: Request, mut res: Response, files: Vec<(u64, PathBuf)>,
             Err(e) => {
                 //打开失败
                 match res.receiver.as_ref().unwrap().consume() {
-                    Err(_) => println!("https async open file task wakeup failed, task id: {}, e: {:?}", req.uid, e),
+                    Err(_) => println!("!!!> Https Async Open File Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
                     Ok(waker) => {
                         let sender = res.sender.as_ref().unwrap().clone();
                         let mut http_res = HttpResponse::<Body>::new(Body::empty());
@@ -416,7 +412,7 @@ fn async_load_files(req: Request, mut res: Response, files: Vec<(u64, PathBuf)>,
                         Err(e) => {
                             //读失败
                             match res.receiver.as_ref().unwrap().consume() {
-                                Err(_) => println!("https async read file task wakeup failed, task id: {}, e: {:?}", req.uid, e),
+                                Err(_) => println!("!!!> Https Async Read File Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
                                 Ok(waker) => {
                                     let sender = res.sender.as_ref().unwrap().clone();
                                     let mut http_res = HttpResponse::<Body>::new(Body::empty());

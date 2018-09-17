@@ -128,7 +128,7 @@ impl<H: Handler> Service for HttpsHandler<H> {
                                     receiver: Arc<Consumer<task::Task>>, uid: usize| {
             let func = Box::new(move || {
                 match Request::from_http(executor, request, addr, &proto, uid) {
-                    Err(e) => println!("https service task parse request failed, e: {}", e),
+                    Err(e) => println!("Https Service Task Parse Request Failed, e: {}", e),
                     Ok(req) => {
                         {
                             //测试
@@ -151,14 +151,26 @@ impl<H: Handler> Service for HttpsHandler<H> {
                             Some((r, q, reply)) => {
                                 //同步处理请求
                                 match reply {
-                                    Err(e) => println!("https service task handle failed, e: {:?}", e),
-                                    Ok(_) => {
+                                    Err(e) => {
+                                        println!("!!!> Https Service Task Handle Failed, e: {:?}", e);
                                         match q.receiver.as_ref().unwrap().consume() {
-                                            Err(_) => println!("https service task wakeup failed, task id: {}", r.uid),
+                                            Err(_) => println!("!!!> Https Service Task Wakeup Failed, task id: {}", r.uid),
                                             Ok(waker) => {
                                                 let sender_ = q.sender.as_ref().unwrap().clone();
                                                 let mut http_res = HttpResponse::<Body>::new(Body::empty());
                                                 *http_res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                                                q.write_back(&mut http_res);
+                                                sender_.produce(Ok(http_res)).is_ok();
+                                                waker.notify();
+                                            }
+                                        }
+                                    },
+                                    Ok(_) => {
+                                        match q.receiver.as_ref().unwrap().consume() {
+                                            Err(_) => println!("!!!> Https Service Task Wakeup Failed, task id: {}", r.uid),
+                                            Ok(waker) => {
+                                                let sender_ = q.sender.as_ref().unwrap().clone();
+                                                let mut http_res = HttpResponse::<Body>::new(Body::empty());
                                                 q.write_back(&mut http_res);
                                                 sender_.produce(Ok(http_res)).is_ok();
                                                 waker.notify();
