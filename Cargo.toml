@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "httpc",
+  "https",
   "net",
   "mqtt",
   "rpc",
