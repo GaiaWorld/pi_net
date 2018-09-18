@@ -94,7 +94,7 @@ impl NetTimers<TimerCallback> {
 #[cfg(test)]
 mod test {
     use pi_lib::atom::Atom;
-    use std::sync::Arc;
+    //use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
     use timer::NetTimers;

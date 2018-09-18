@@ -2,7 +2,6 @@ use std::thread;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::io::Cursor;
-use std::io::Read;
 
 use data::{Config, ListenerFn, NetHandler, SendClosureFn, Socket};
 use net::{handle_bind, handle_close, handle_connect, handle_net, handle_send};

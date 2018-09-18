@@ -257,7 +257,6 @@ fn handle_recv(
     stream: Arc<RwLock<Stream>>,
     packet: Result<Packet>,
 ) {
-    println!("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
     let n = node.clone();
     let st = stream.clone();
     if let Ok(packet) = packet {

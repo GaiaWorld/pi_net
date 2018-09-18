@@ -91,7 +91,6 @@ fn set_mqtt_topic(server_node: &ServerNode, topic: String, can_publish: bool, ca
     let topic = Atom::from(topic);
     let server_node1 = server_node.clone();
     match server_node.set_topic_meta(topic.clone(), can_publish,can_subscribe, Box::new(move |_c:ClientStub, r:IOResult<Arc<Vec<u8>>>| {
-        println!("vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv");
         match r {
             Ok(v) => {
                 match server_node1.publish(false, mqtt3::QoS::AtMostOnce, topic.clone(),Vec::from(v.as_slice())) {
