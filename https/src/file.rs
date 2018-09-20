@@ -5,15 +5,19 @@ use std::sync::Arc;
 use std::error::Error;
 use std::time::Duration;
 use std::path::PathBuf;
-use std::io::Result as IOResult;
+use std::io::{Error as IOError, Result as IOResult};
 
 use url;
 use http::StatusCode;
 use hyper::body::Body;
 use modifier::Set;
 use modifier::Modifier;
+use npnc::ConsumeError;
 
+use pi_base::task::TaskType;
+use pi_base::pi_base_impl::cast_store_task;
 use pi_base::file::{AsynFileOptions, Shared, AsyncFile, SharedFile};
+use pi_lib::atom::Atom;
 
 use request::{Url, Request};
 use response::Response;
@@ -129,23 +133,13 @@ impl StaticFile {
 }
 
 //异步加载指定文件，并设置回应
-fn async_load_file(req: Request, mut res: Response, file_path: PathBuf) {
+fn async_load_file(req: Request, res: Response, file_path: PathBuf) {
     let path = file_path.clone();
     let open = Box::new(move |f: IOResult<AsyncFile>| {
         match f {
             Err(e) => {
                 //打开失败
-                match res.receiver.as_ref().unwrap().consume() {
-                    Err(_) => println!("!!!> Https Async Open File Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
-                    Ok(waker) => {
-                        let sender = res.sender.as_ref().unwrap().clone();
-                        let mut http_res = HttpResponse::<Body>::new(Body::empty());
-                        res = res.set(StatusCode::from_u16(HTTPS_ASYNC_OPEN_FILE_FAILED_STATUS).ok().unwrap());
-                        res.write_back(&mut http_res);
-                        sender.produce(Ok(http_res)).is_ok();
-                        waker.notify();
-                    },
-                }
+                async_load_file_error(req, res, e, HTTPS_ASYNC_OPEN_FILE_FAILED_STATUS);
             }
             Ok(r) => {
                 //打开成功
@@ -155,35 +149,11 @@ fn async_load_file(req: Request, mut res: Response, file_path: PathBuf) {
                     match result {
                         Err(e) => {
                             //读失败
-                            match res.receiver.as_ref().unwrap().consume() {
-                                Err(_) => println!("!!!> Https Async Read File Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
-                                Ok(waker) => {
-                                    let sender = res.sender.as_ref().unwrap().clone();
-                                    let mut http_res = HttpResponse::<Body>::new(Body::empty());
-                                    res = res.set(StatusCode::from_u16(HTTPS_ASYNC_READ_FILE_FAILED_STATUS).ok().unwrap());
-                                    res.write_back(&mut http_res);
-                                    sender.produce(Ok(http_res)).is_ok();
-                                    waker.notify();
-                                },
-                            }
+                            async_load_file_error(req, res, e, HTTPS_ASYNC_READ_FILE_FAILED_STATUS);
                         },
                         Ok(data) => {
                             //读成功
-                            match res.receiver.as_ref().unwrap().consume() {
-                                Err(e) => println!("!!!> Https Async Open File Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
-                                Ok(waker) => {
-                                    let sender = res.sender.as_ref().unwrap().clone();
-                                    let mut http_res = HttpResponse::<Body>::new(Body::empty());
-                                    res = res.set(StatusCode::OK);
-                                    let mime = mime_for_path(path.as_path());
-                                    res.set_mut(mime);
-                                    res.headers.insert(headers::CONTENT_LENGTH, size.into());
-                                    res.body = Some(Box::new(data));
-                                    res.write_back(&mut http_res);
-                                    sender.produce(Ok(http_res)).is_ok();
-                                    waker.notify();
-                                },
-                            }
+                            async_load_file_ok(req, res, path, size, data);
                         },
                     }
                 });
@@ -192,4 +162,60 @@ fn async_load_file(req: Request, mut res: Response, file_path: PathBuf) {
         }
     });
     AsyncFile::open(file_path, AsynFileOptions::OnlyRead(1), open);
+}
+
+//异步加载文件错误
+fn async_load_file_error(req: Request, mut res: Response, err: IOError, err_no: u16) {
+    let func = Box::new(move || {
+        match res.receiver.as_ref().unwrap().consume() {
+            Err(e) => {
+                match e {
+                    ConsumeError::Empty => {
+                        //未准备好，则继续等待
+                        return async_load_file_error(req, res, err, err_no);
+                    },
+                    _ => println!("!!!> Https Async Load File Failed Task Wakeup Failed, task id: {}, err: {:?}, e: {:?}", req.uid, err, e),
+                }
+            },
+            Ok(waker) => {
+                let sender = res.sender.as_ref().unwrap().clone();
+                let mut http_res = HttpResponse::<Body>::new(Body::empty());
+                res = res.set(StatusCode::from_u16(err_no).ok().unwrap());
+                res.write_back(&mut http_res);
+                sender.produce(Ok(http_res)).is_ok();
+                waker.notify();
+            },
+        }
+    });
+    cast_store_task(TaskType::Sync, 1000000, func, Atom::from("async load file failed task"));
+}
+
+//异步加载文件成功
+fn async_load_file_ok(req: Request, mut res: Response, path: PathBuf, size: u64, data: Vec<u8>) {
+    let func = Box::new(move || {
+        match res.receiver.as_ref().unwrap().consume() {
+            Err(e) => {
+                match e {
+                    ConsumeError::Empty => {
+                        //未准备好，则继续等待
+                        return async_load_file_ok(req, res, path, size, data);
+                    },
+                    _ => println!("!!!> Https Async Load File Ok Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
+                }
+            },
+            Ok(waker) => {
+                let sender = res.sender.as_ref().unwrap().clone();
+                let mut http_res = HttpResponse::<Body>::new(Body::empty());
+                res = res.set(StatusCode::OK);
+                let mime = mime_for_path(path.as_path());
+                res.set_mut(mime);
+                res.headers.insert(headers::CONTENT_LENGTH, size.into());
+                res.body = Some(Box::new(data));
+                res.write_back(&mut http_res);
+                sender.produce(Ok(http_res)).is_ok();
+                waker.notify();
+            },
+        }
+    });
+    cast_store_task(TaskType::Sync, 1000000, func, Atom::from("async load file ok task"));
 }
