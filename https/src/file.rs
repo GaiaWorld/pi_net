@@ -166,56 +166,56 @@ fn async_load_file(req: Request, res: Response, file_path: PathBuf) {
 
 //异步加载文件错误
 fn async_load_file_error(req: Request, mut res: Response, err: IOError, err_no: u16) {
-    let func = Box::new(move || {
-        match res.receiver.as_ref().unwrap().consume() {
-            Err(e) => {
-                match e {
-                    ConsumeError::Empty => {
-                        //未准备好，则继续等待
-                        return async_load_file_error(req, res, err, err_no);
-                    },
-                    _ => println!("!!!> Https Async Load File Failed Task Wakeup Failed, task id: {}, err: {:?}, e: {:?}", req.uid, err, e),
-                }
-            },
-            Ok(waker) => {
-                let sender = res.sender.as_ref().unwrap().clone();
-                let mut http_res = HttpResponse::<Body>::new(Body::empty());
-                res = res.set(StatusCode::from_u16(err_no).ok().unwrap());
-                res.write_back(&mut http_res);
-                sender.produce(Ok(http_res)).is_ok();
-                waker.notify();
-            },
-        }
-    });
-    cast_store_task(TaskType::Sync, 1000000, func, Atom::from("async load file failed task"));
+    match res.receiver.as_ref().unwrap().consume() {
+        Err(e) => {
+            match e {
+                ConsumeError::Empty => {
+                    //未准备好，则继续等待
+                    let func = Box::new(move || {
+                        async_load_file_error(req, res, err, err_no);
+                    });
+                    cast_store_task(TaskType::Sync, 1000000, func, Atom::from("async load file failed task"));
+                },
+                _ => println!("!!!> Https Async Load File Failed Task Wakeup Failed, task id: {}, err: {:?}, e: {:?}", req.uid, err, e),
+            }
+        },
+        Ok(waker) => {
+            let sender = res.sender.as_ref().unwrap().clone();
+            let mut http_res = HttpResponse::<Body>::new(Body::empty());
+            res = res.set(StatusCode::from_u16(err_no).ok().unwrap());
+            res.write_back(&mut http_res);
+            sender.produce(Ok(http_res)).is_ok();
+            waker.notify();
+        },
+    }
 }
 
 //异步加载文件成功
 fn async_load_file_ok(req: Request, mut res: Response, path: PathBuf, size: u64, data: Vec<u8>) {
-    let func = Box::new(move || {
-        match res.receiver.as_ref().unwrap().consume() {
-            Err(e) => {
-                match e {
-                    ConsumeError::Empty => {
-                        //未准备好，则继续等待
-                        return async_load_file_ok(req, res, path, size, data);
-                    },
-                    _ => println!("!!!> Https Async Load File Ok Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
-                }
-            },
-            Ok(waker) => {
-                let sender = res.sender.as_ref().unwrap().clone();
-                let mut http_res = HttpResponse::<Body>::new(Body::empty());
-                res = res.set(StatusCode::OK);
-                let mime = mime_for_path(path.as_path());
-                res.set_mut(mime);
-                res.headers.insert(headers::CONTENT_LENGTH, size.into());
-                res.body = Some(Box::new(data));
-                res.write_back(&mut http_res);
-                sender.produce(Ok(http_res)).is_ok();
-                waker.notify();
-            },
-        }
-    });
-    cast_store_task(TaskType::Sync, 1000000, func, Atom::from("async load file ok task"));
+    match res.receiver.as_ref().unwrap().consume() {
+        Err(e) => {
+            match e {
+                ConsumeError::Empty => {
+                    //未准备好，则继续异步等待返回成功
+                    let func = Box::new(move || {
+                        async_load_file_ok(req, res, path, size, data);
+                    });
+                    cast_store_task(TaskType::Sync, 1000000, func, Atom::from("async load file ok task"));
+                },
+                _ => println!("!!!> Https Async Load File Ok Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
+            }
+        },
+        Ok(waker) => {
+            let sender = res.sender.as_ref().unwrap().clone();
+            let mut http_res = HttpResponse::<Body>::new(Body::empty());
+            res = res.set(StatusCode::OK);
+            let mime = mime_for_path(path.as_path());
+            res.set_mut(mime);
+            res.headers.insert(headers::CONTENT_LENGTH, size.into());
+            res.body = Some(Box::new(data));
+            res.write_back(&mut http_res);
+            sender.produce(Ok(http_res)).is_ok();
+            waker.notify();
+        },
+    }
 }
