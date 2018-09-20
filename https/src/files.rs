@@ -10,7 +10,10 @@ use hyper::body::Body;
 use modifier::Set;
 use npnc::ConsumeError;
 
+use pi_base::task::TaskType;
+use pi_base::pi_base_impl::cast_store_task;
 use pi_base::file::{AsynFileOptions, Shared, AsyncFile, SharedFile};
+use pi_lib::atom::Atom;
 
 use mime;
 use Plugin;
@@ -360,7 +363,7 @@ fn filter_file(suffix: Option<&OsStr>, entry: DirEntry, result: &mut Vec<(u64, P
 }
 
 //异步加载批量文件，并设置回应
-fn async_load_files(req: Request, mut res: Response, files: Vec<(u64, PathBuf)>, index: usize, mut data: Vec<u8>, mut size: u64) {
+fn async_load_files(req: Request, res: Response, files: Vec<(u64, PathBuf)>, index: usize, mut data: Vec<u8>, mut size: u64) {
     let file_len: u64;
     let file_path: PathBuf;
     if let Some((len, file)) = files.get(index) {
@@ -373,28 +376,7 @@ fn async_load_files(req: Request, mut res: Response, files: Vec<(u64, PathBuf)>,
         file_path = file.clone();
     } else {
         //加载完成，则回应
-        match res.receiver.as_ref().unwrap().consume() {
-            Err(e) => {
-                match e {
-                    ConsumeError::Empty => {
-                        //未准备好，则继续等待
-                        return async_load_files(req, res, files, index, data, size);
-                    },
-                    _ => println!("!!!> Https Async Open File Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
-                }
-            },
-            Ok(waker) => {
-                let sender = res.sender.as_ref().unwrap().clone();
-                let mut http_res = HttpResponse::<Body>::new(Body::empty());
-                res = res.set(StatusCode::OK);
-                res.set_mut(mime::APPLICATION_OCTET_STREAM);
-                res.headers.insert(headers::CONTENT_LENGTH, size.into());
-                res.body = Some(Box::new(data));
-                res.write_back(&mut http_res);
-                sender.produce(Ok(http_res)).is_ok();
-                waker.notify();
-            },
-        }
+        async_load_files_ok(req, res, size, data);
         return;
     }
 
@@ -402,17 +384,7 @@ fn async_load_files(req: Request, mut res: Response, files: Vec<(u64, PathBuf)>,
         match f {
             Err(e) => {
                 //打开失败
-                match res.receiver.as_ref().unwrap().consume() {
-                    Err(_) => println!("!!!> Https Async Open File Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
-                    Ok(waker) => {
-                        let sender = res.sender.as_ref().unwrap().clone();
-                        let mut http_res = HttpResponse::<Body>::new(Body::empty());
-                        res = res.set(StatusCode::from_u16(HTTPS_ASYNC_OPEN_FILE_FAILED_STATUS).ok().unwrap());
-                        res.write_back(&mut http_res);
-                        sender.produce(Ok(http_res)).is_ok();
-                        waker.notify();
-                    },
-                }
+                async_load_files_error(req, res, e, HTTPS_ASYNC_OPEN_FILE_FAILED_STATUS);
             }
             Ok(r) => {
                 //打开成功
@@ -421,17 +393,7 @@ fn async_load_files(req: Request, mut res: Response, files: Vec<(u64, PathBuf)>,
                     match result {
                         Err(e) => {
                             //读失败
-                            match res.receiver.as_ref().unwrap().consume() {
-                                Err(_) => println!("!!!> Https Async Read File Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
-                                Ok(waker) => {
-                                    let sender = res.sender.as_ref().unwrap().clone();
-                                    let mut http_res = HttpResponse::<Body>::new(Body::empty());
-                                    res = res.set(StatusCode::from_u16(HTTPS_ASYNC_READ_FILE_FAILED_STATUS).ok().unwrap());
-                                    res.write_back(&mut http_res);
-                                    sender.produce(Ok(http_res)).is_ok();
-                                    waker.notify();
-                                },
-                            }
+                            async_load_files_error(req, res, e, HTTPS_ASYNC_READ_FILE_FAILED_STATUS);
                         },
                         Ok(mut bin) => {
                             //读成功，则继续异步加载下一个文件
@@ -446,4 +408,59 @@ fn async_load_files(req: Request, mut res: Response, files: Vec<(u64, PathBuf)>,
         }
     });
     AsyncFile::open(file_path, AsynFileOptions::OnlyRead(1), open);
+}
+
+//异步加载文件错误
+fn async_load_files_error(req: Request, mut res: Response, err: IOError, err_no: u16) {
+    let func = Box::new(move || {
+        match res.receiver.as_ref().unwrap().consume() {
+            Err(e) => {
+                match e {
+                    ConsumeError::Empty => {
+                        //未准备好，则继续等待
+                        return async_load_files_error(req, res, err, err_no);
+                    },
+                    _ => println!("!!!> Https Async Load Files Failed Task Wakeup Failed, task id: {}, err: {:?}, e: {:?}", req.uid, err, e),
+                }
+            },
+            Ok(waker) => {
+                let sender = res.sender.as_ref().unwrap().clone();
+                let mut http_res = HttpResponse::<Body>::new(Body::empty());
+                res = res.set(StatusCode::from_u16(err_no).ok().unwrap());
+                res.write_back(&mut http_res);
+                sender.produce(Ok(http_res)).is_ok();
+                waker.notify();
+            },
+        }
+    });
+    cast_store_task(TaskType::Sync, 1000000, func, Atom::from("async load files failed task"));
+}
+
+//异步加载文件成功
+fn async_load_files_ok(req: Request, mut res: Response, size: u64, data: Vec<u8>) {
+    let func = Box::new(move || {
+        match res.receiver.as_ref().unwrap().consume() {
+            Err(e) => {
+                match e {
+                    ConsumeError::Empty => {
+                        //未准备好，则继续等待
+                        return async_load_files_ok(req, res, size, data);
+                    },
+                    _ => println!("!!!> Https Async Load Files Ok Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
+                }
+            },
+            Ok(waker) => {
+                let sender = res.sender.as_ref().unwrap().clone();
+                let mut http_res = HttpResponse::<Body>::new(Body::empty());
+                res = res.set(StatusCode::OK);
+                res.set_mut(mime::APPLICATION_OCTET_STREAM);
+                res.headers.insert(headers::CONTENT_LENGTH, size.into());
+                res.body = Some(Box::new(data));
+                res.write_back(&mut http_res);
+                sender.produce(Ok(http_res)).is_ok();
+                waker.notify();
+            },
+        }
+    });
+    cast_store_task(TaskType::Sync, 1000000, func, Atom::from("async load files ok task"));
 }
