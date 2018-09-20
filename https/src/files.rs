@@ -8,7 +8,7 @@ use std::io::{Error as IOError, Result as IOResult, ErrorKind};
 use http::StatusCode;
 use hyper::body::Body;
 use modifier::Set;
-use npnc::ConsumerError;
+use npnc::ConsumeError;
 
 use pi_base::file::{AsynFileOptions, Shared, AsyncFile, SharedFile};
 
@@ -376,7 +376,7 @@ fn async_load_files(req: Request, mut res: Response, files: Vec<(u64, PathBuf)>,
         match res.receiver.as_ref().unwrap().consume() {
             Err(e) => {
                 match e {
-                    ConsumerError::Empty => {
+                    ConsumeError::Empty => {
                         //未准备好，则继续等待
                         return async_load_files(req, res, files, index, data, size);
                     },
