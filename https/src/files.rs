@@ -304,14 +304,17 @@ fn decode_dir(parse_files: fn(Option<&OsStr>, path: &PathBuf, result: &mut Vec<(
                         let vec: Vec<&str> = str.split(".").collect();
                         if vec.len() > 1 {
                             parse_files(Some(&OsStr::new(vec[1])), &path.parent().unwrap().to_path_buf().join(vec[0]), result);
+                            result.sort_by(|(_, x), (_, y)| x.cmp(y));
                             continue;
                         }
                     }
                 }
                 parse_files(None, &path.parent().unwrap().to_path_buf(), result);
+                result.sort_by(|(_, x), (_, y)| x.cmp(y));
             } else {
                 //解析目录下所有文件，形如*/
                 parse_files(None, &path, result);
+                result.sort_by(|(_, x), (_, y)| x.cmp(y));
             }
         }
 }
