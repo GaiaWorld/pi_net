@@ -51,9 +51,14 @@ impl StdError for UrlDecodingError {
     }
 }
 
-/// Hashmap mapping strings to vectors of strings.
+/*
+* 查询参数表
+*/
 pub type QueryMap = HashMap<String, Vec<String>>;
-/// Result type for decoding query parameters.
+
+/*
+* 查询结果
+*/
 pub type QueryResult = Result<QueryMap, UrlDecodingError>;
 
 impl Key for UrlEncodedBody {

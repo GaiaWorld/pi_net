@@ -39,9 +39,9 @@ impl Set for StaticFileBatch {}
 impl Handler for StaticFileBatch {
     fn handle(&self, mut req: Request, res: Response) -> Option<(Request, Response, HttpsResult<()>)> {
         if req.url.path().len() > 1 || req.url.path()[0] != "" {
-            //无效的路径，则忽略
+            //无效的url路径，则忽略
             return Some((req, res, 
-                        Err(HttpsError::new(IOError::new(ErrorKind::NotFound, "load batch file error, invalid file path")))));
+                        Err(HttpsError::new(IOError::new(ErrorKind::NotFound, "load batch file error, invalid path")))));
         }
 
         let mut ds = "";
@@ -298,19 +298,19 @@ fn decode_dir(parse_files: fn(Option<&OsStr>, path: &PathBuf, result: &mut Vec<(
         for dir in dirs {
             let path = root.join(dir);
             if !path.is_file() && !path.is_dir() {
-                //解析目录下指定后缀的文件
+                //解析目录下指定后缀的文件，形如*/.*和*/*.*
                 if let Some(s) = path.file_name() {
                     if let Some(str) = s.to_str() {
                         let vec: Vec<&str> = str.split(".").collect();
                         if vec.len() > 1 {
-                            parse_files(Some(&OsStr::new(vec[1])), &path.parent().unwrap().to_path_buf(), result);
+                            parse_files(Some(&OsStr::new(vec[1])), &path.parent().unwrap().to_path_buf().join(vec[0]), result);
                             continue;
                         }
                     }
                 }
                 parse_files(None, &path.parent().unwrap().to_path_buf(), result);
             } else {
-                //解析目录下所有文件
+                //解析目录下所有文件，形如*/
                 parse_files(None, &path, result);
             }
         }
@@ -419,9 +419,9 @@ fn async_load_files_error(req: Request, mut res: Response, err: IOError, err_no:
                     let func = Box::new(move || {
                         async_load_files_error(req, res, err, err_no);
                     });
-                    cast_store_task(TaskType::Sync, 1000000, func, Atom::from("async load files failed task"));
+                    cast_store_task(TaskType::Sync, 3000001, func, Atom::from("async load files failed task"));
                 },
-                _ => println!("!!!> Https Async Load Files Failed Task Wakeup Failed, task id: {}, err: {:?}, e: {:?}", req.uid, err, e),
+                _ => println!("!!!> Https Async Load Files Error, task wakeup failed, task id: {}, err: {:?}, e: {:?}", req.uid, err, e),
             }
         },
         Ok(waker) => {
@@ -445,9 +445,9 @@ fn async_load_files_ok(req: Request, mut res: Response, size: u64, data: Vec<u8>
                     let func = Box::new(move || {
                         async_load_files_ok(req, res, size, data);
                     });
-                    cast_store_task(TaskType::Sync, 1000000, func, Atom::from("async load files ok task"));
+                    cast_store_task(TaskType::Sync, 3000001, func, Atom::from("async load files ok task"));
                 },
-                _ => println!("!!!> Https Async Load Files Ok Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
+                _ => println!("!!!> Https Async Load Files Ok, task wakeup failed, task id: {}, e: {:?}", req.uid, e),
             }
         },
         Ok(waker) => {
