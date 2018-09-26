@@ -170,13 +170,13 @@ fn async_load_file_error(req: Request, mut res: Response, err: IOError, err_no: 
         Err(e) => {
             match e {
                 ConsumeError::Empty => {
-                    //未准备好，则继续等待
+                    //未准备好，则继续异步等待返回错误
                     let func = Box::new(move || {
                         async_load_file_error(req, res, err, err_no);
                     });
-                    cast_store_task(TaskType::Sync, 1000000, func, Atom::from("async load file failed task"));
+                    cast_store_task(TaskType::Sync, 3000000, func, Atom::from("async load file failed task"));
                 },
-                _ => println!("!!!> Https Async Load File Failed Task Wakeup Failed, task id: {}, err: {:?}, e: {:?}", req.uid, err, e),
+                _ => println!("!!!> Https Async Load File Error, task wakeup failed, task id: {}, err: {:?}, e: {:?}", req.uid, err, e),
             }
         },
         Ok(waker) => {
@@ -200,9 +200,9 @@ fn async_load_file_ok(req: Request, mut res: Response, path: PathBuf, size: u64,
                     let func = Box::new(move || {
                         async_load_file_ok(req, res, path, size, data);
                     });
-                    cast_store_task(TaskType::Sync, 1000000, func, Atom::from("async load file ok task"));
+                    cast_store_task(TaskType::Sync, 3000000, func, Atom::from("async load file ok task"));
                 },
-                _ => println!("!!!> Https Async Load File Ok Task Wakeup Failed, task id: {}, e: {:?}", req.uid, e),
+                _ => println!("!!!> Https Async Load File Ok, task wakeup failed, task id: {}, e: {:?}", req.uid, e),
             }
         },
         Ok(waker) => {
