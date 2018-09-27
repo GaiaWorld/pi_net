@@ -92,6 +92,7 @@ impl Handler for StaticFileBatch {
 
         //合并解析的所有文件，并异步加载所有文件
         dir_vec.append(&mut file_vec);
+        // println!("!!!!!!files: {:?}", dir_vec.to_vec().iter_mut().map(|(_, x)| x).collect::<Vec<&mut PathBuf>>());
         async_load_files(req, res, dir_vec, 0, Vec::new(), 0);
         None
     }
@@ -308,7 +309,7 @@ fn decode_dir(parse_files: fn(Option<&OsStr>, path: &PathBuf, result: &mut Vec<(
                             index = result.len();
                             parse_files(Some(&OsStr::new(vec[1])), &path.parent().unwrap().to_path_buf().join(vec[0]), result);
                             len = result.len();
-                            result[index..len].sort_by(|(_, x), (_, y)| x.cmp(y));
+                            result[index..len].sort_by(|(_, x), (_, y)| x.to_str().as_ref().unwrap().cmp(y.to_str().as_ref().unwrap()));
                             continue;
                         }
                     }
@@ -316,13 +317,13 @@ fn decode_dir(parse_files: fn(Option<&OsStr>, path: &PathBuf, result: &mut Vec<(
                 index = result.len();
                 parse_files(None, &path.parent().unwrap().to_path_buf(), result);
                 len = result.len();
-                result[index..len].sort_by(|(_, x), (_, y)| x.cmp(y));
+                result[index..len].sort_by(|(_, x), (_, y)| x.to_str().as_ref().unwrap().cmp(y.to_str().as_ref().unwrap()));
             } else {
                 //解析目录下所有文件，形如*/
                 index = result.len();
                 parse_files(None, &path, result);
                 len = result.len();
-                result[index..len].sort_by(|(_, x), (_, y)| x.cmp(y));
+                result[index..len].sort_by(|(_, x), (_, y)| x.to_str().as_ref().unwrap().cmp(y.to_str().as_ref().unwrap()));
             }
         }
 }
@@ -354,13 +355,27 @@ fn filter_file(suffix: Option<&OsStr>, entry: DirEntry, result: &mut Vec<(u64, P
         //过滤指定后缀名的文件
         match Path::new(&entry.file_name()).extension() {
             Some(s1) if s0 == s1 => {
-                //后缀名相同
+                //后缀名相同，形如*.*的文件
                 if let Ok(meta) = entry.metadata() {
                     result.push((meta.len(), entry.path()));
                 } else {
                     result.push((0, entry.path()));
                 }
             },
+            None => {
+                //继续检查以确认是否有后缀名
+                let mut path = PathBuf::new();
+                path.push(&entry.file_name().to_os_string());
+                let vec: Vec<&str> = path.to_str().as_ref().unwrap().split(".").collect();
+                if vec.len() > 1 && s0 == vec[1] {
+                    //后缀名相同，形如.*的文件
+                    if let Ok(meta) = entry.metadata() {
+                        result.push((meta.len(), entry.path()));
+                    } else {
+                        result.push((0, entry.path()));
+                    }
+                }
+            }
             _ => (), //后缀名不同，则忽略
         }
     } else {
