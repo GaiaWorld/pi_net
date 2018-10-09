@@ -27,6 +27,7 @@ time = "*"
 filetime = "*"
 tempdir = "*"
 void = "*"
+twoway= "*"
 
 pi_lib = { path = "../../pi_lib" }
 pi_base = { path = "../../pi_base" }
