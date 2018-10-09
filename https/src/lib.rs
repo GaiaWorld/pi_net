@@ -52,6 +52,7 @@ extern crate filetime;
 extern crate tempdir;
 extern crate void;
 extern crate twoway;
+extern crate path_absolutize;
 
 extern crate pi_lib;
 extern crate pi_base;
