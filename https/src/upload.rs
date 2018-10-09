@@ -32,7 +32,7 @@ pub struct FileUpload {
 impl Handler for FileUpload {
     fn handle(&self, mut req: Request, res: Response) -> Option<(Request, Response, HttpsResult<()>)> {
         if req.url.path().len() > 1 || req.url.path()[0] != "" {
-            //无效的url路径，则忽略
+            //无效的url路径
             return Some((req, res, 
                         Err(HttpsError::new(IOError::new(ErrorKind::NotFound, "upload file error, invalid url path")))));
         }
@@ -54,7 +54,7 @@ impl Handler for FileUpload {
 
         let file_path = PathBuf::from(&file);
         if !file_path.is_relative() {
-            //不是相对路径，则返回错误
+            //不是相对路径
             return Some((req, res, 
                         Err(HttpsError::new(IOError::new(ErrorKind::NotFound, "upload file error, invalid relative path")))));
         }
@@ -63,7 +63,7 @@ impl Handler for FileUpload {
         if let Some(dir) = path.parent() {
             if let Ok(p) = dir.absolutize() {
                 if !p.starts_with(PathBuf::from(&self.root).absolutize().ok().unwrap()) {
-                    //标准化后根路径被改变，则返回错误
+                    //标准化后根路径被改变
                     return Some((req, res, 
                                 Err(HttpsError::new(IOError::new(ErrorKind::Other, "upload file error, absolute path overflow")))));
                 }
@@ -113,7 +113,7 @@ fn async_save_file(req: Request, res: Response, path: PathBuf, content: Vec<u8>)
             },
         }
     });
-    AsyncFile::open(path, AsynFileOptions::OnlyAppend(1), open);
+    AsyncFile::open(path, AsynFileOptions::OnlyWrite(1), open);
 }
 
 //异步存储文件错误
