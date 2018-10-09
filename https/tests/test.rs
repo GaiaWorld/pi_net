@@ -26,6 +26,7 @@ use https::handler::{HttpsResult, Handler, Chain};
 use https::mount::Mount;
 use https::file::StaticFile;
 use https::files::StaticFileBatch;
+use https::upload::FileUpload;
 use https::params::{Params, Value};
 
 #[test]
@@ -60,6 +61,7 @@ fn test_https() {
     let mut mount = Mount::new();
     mount.mount("/fs", StaticFileBatch::new("./app/"));
     mount.mount("/test", Test); //只支持前缀匹配，/表示匹配所有
+    mount.mount("/upload", FileUpload::new("./upload/"));
     mount.mount("/", StaticFile::new("./htdocs/"));
     mount.mount("/app", StaticFile::new("./app/"));
     start_http(mount, Atom::from("0.0.0.0"), 80, 5000, 10000);

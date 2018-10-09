@@ -8,18 +8,56 @@ use std::error::Error as StdError;
 
 use num::NumCast;
 use typemap::Key;
-use tempdir::TempDir;
 use serde_json::value::Value as JsonValue;
-use multipart::server::{Multipart, MultipartData, MultipartField};
-use multipart::server::save::{SaveDir, SavedData};
+use twoway::find_bytes;
 
 use Plugin;
-use plugin::Extensible;
 use headers;
 use mime::{self, Mime};
 use request::Request;
 use parser::{BodyError, Json};
 use url_encode::{UrlDecodingError, UrlEncodedQuery, UrlEncodedBody, QueryMap};
+use util::split_bytes;
+
+/*
+* http换行符，\r\n
+*/
+const HTTP_LINE_BREAK: &[u8] = &[13, 10];
+
+/*
+* form换行符，\r\n\r\n
+*/
+const FORM_LINE_BREAK: &[u8] = &[13, 10, 13, 10];
+
+/*
+* form结尾符，--\r\n
+*/
+const FORM_TAIL: &[u8] = &[45, 45, 13, 10];
+
+/*
+* boundary前缀
+*/
+const BOUNDARY_PREFIX: &str = "--";
+
+/*
+* 表单数据头一级分隔符，;
+*/
+const FORM_DATA_HEAD_FIRST_SPLIT_CHAR: &[u8] = &[59];
+
+/*
+* 表单数据头二级分隔符
+*/
+const FORM_DATA_HEAD_SECOND_SPLIT_CHAR: &str = "=";
+
+/*
+* 表单数据头
+*/
+const FORM_DATA_HEAD: &str = "content-disposition: form-data";
+
+/*
+* 默认文件名关键字
+*/
+const FORM_DATA_FILE_KEY: &str = "$file_name";
 
 /*
 * 假值字符串
@@ -166,6 +204,7 @@ pub enum ParamsError {
     CannotAppend,                       //在非数组参数值上append
     CannotInsert,                       //在非表参数值上插入
     NotJsonObject,                      //在非根json对象上构建表
+    InvalidForm,                        //无效的表单
     InvalidFile,                        //无效的上传文件
 }
 
@@ -181,10 +220,11 @@ impl StdError for ParamsError {
             ParamsError::BodyError(ref err) => err.description(),
             ParamsError::UrlDecodingError(ref err) => err.description(),
             ParamsError::IoError(ref err) => err.description(),
-            ParamsError::InvalidPath => "Invalid parameter path.",
-            ParamsError::CannotAppend => "Cannot append to a non-array value.",
-            ParamsError::CannotInsert => "Cannot insert into a non-map value.",
-            ParamsError::NotJsonObject => "Tried to make a `Map` from a non-object root JSON value.",
+            ParamsError::InvalidPath => "Invalid parameter path",
+            ParamsError::CannotAppend => "Cannot append to a non-array value",
+            ParamsError::CannotInsert => "Cannot insert into a non-map value",
+            ParamsError::NotJsonObject => "Tried to make a `Map` from a non-object root JSON value",
+            ParamsError::InvalidForm => "Invalid form part",
             ParamsError::InvalidFile => "Save upload file failed",
         }
     }
@@ -367,6 +407,7 @@ pub enum Value {
     U64(u64),
     F64(f64),
     String(String),
+    Bin(Vec<u8>),
     File(File),
     Array(Vec<Value>),
     Map(Map),
@@ -381,6 +422,7 @@ impl fmt::Debug for Value {
             Value::U64(value) => value.fmt(f),
             Value::F64(value) => value.fmt(f),
             Value::String(ref value) => value.fmt(f),
+            Value::Bin(ref value) => value.fmt(f),
             Value::File(ref value) => value.fmt(f),
             Value::Array(ref value) => value.fmt(f),
             Value::Map(ref value) => value.fmt(f),
@@ -506,23 +548,6 @@ impl ToParams for JsonValue {
 }
 
 /*
-* Body封装
-*/
-struct Body<'a>(&'a mut Request);
-
-impl<'a> Read for Body<'a> {
-    fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
-        match self.0.get_body_contents() {
-            Err(err) => Err(IOError::new(io::ErrorKind::Other, err.to_string())),
-            Ok(body) => {
-                //获取请求body成功
-                body.as_slice().read(buf)
-            },
-        }
-    }
-}
-
-/*
 * 参数列表，支持以下参数类型，基本上除了text/xml都支持
 * JSON data (`Content-Type: application/json`)
 * URL-encoded GET parameters
@@ -541,10 +566,7 @@ impl<'a, 'b> plugin::Plugin<Request> for Params {
     fn eval(req: &mut Request) -> Result<Map, ParamsError> {
         let mut map = try!(try_parse_json_into_map(req));
         let has_json_body = !map.is_empty(); //是否是json数据
-        // if let Some(dir) = try!(try_parse_multipart(req, &mut map)) {
-        //     //保存上传文件
-        //     append_multipart_save_dir(req, dir);
-        // }
+        try!(try_parse_multipart(req, &mut map)); //解析分段表单
         try!(try_parse_url_encode::<UrlEncodedQuery>(req, &mut map));  //解析query string
         if !has_json_body {
             try!(try_parse_url_encode::<UrlEncodedBody>(req, &mut map)); //解析body
@@ -586,87 +608,131 @@ fn try_parse_json_into_map(req: &mut Request) -> Result<Map, ParamsError> {
 }
 
 //尝试分析分段表单
-// fn try_parse_multipart(req: &mut Request, map: &mut Map) -> Result<Option<SaveDir>, ParamsError>
-// {
-//     //http分段表单请求
-//     struct MultipartHttpsRequest<'a>(&'a mut Request);
+fn try_parse_multipart(req: &mut Request, map: &mut Map) -> Result<(), ParamsError>
+{
+    if let Some(boundary) = multipart_boundary(req) {
+        let mut data = Vec::new();
+        match read_form(req, &mut data) {
+            Err(e) => Err(ParamsError::IoError(e)),
+            Ok(0) => Ok(()), //表单长度为0，则忽略
+            Ok(_len) => {
+                let _size = try!(parse_multipart(boundary.as_str(), &data[..], map));
+                Ok(())
+            },
+        }
+    } else {
+        //没有边界，则忽略
+        Ok(())
+    }
+}
 
-//     impl<'a> multipart::server::HttpRequest for MultipartHttpsRequest<'a> {
-//         type Body = Body<'a>;
+//获取分段表单边界
+fn multipart_boundary(req: &Request) -> Option<String> {
+    match req.headers.get(headers::CONTENT_TYPE) {
+        None => None,
+        Some(content) if content.is_empty() => None,
+        Some(content) => {
+            //http headers中有content type，且有值
+            let contents: Vec<&str> = content.to_str().ok().unwrap().split(",").collect();
+            match contents[0].parse::<mime::Mime>() {
+                Ok(m) => {
+                    if (mime::MULTIPART_FORM_DATA.type_() == m.type_()) && (mime::MULTIPART_FORM_DATA.subtype() == m.subtype()) {
+                        //如果是分段表单数据，则获取分段边界
+                        m.get_param("boundary").map(|b| BOUNDARY_PREFIX.to_string() + b.as_str() )
+                    } else {
+                        None
+                    }
+                },
+                _ => None,
+            }
+        }
+    }
+}
 
-//         fn multipart_boundary(&self) -> Option<&str> {
-//             match self.0.headers.get(headers::CONTENT_TYPE) {
-//                 None => None,
-//                 Some(val) if val.is_empty() => None,
-//                 Some(val) => {
-//                     //http headers中有content type，且有值
-//                     let vals: Vec<&str> = val.to_str().ok().unwrap().split(",").collect();
-//                     match vals[0].parse::<mime::Mime>() {
-//                         Ok(m) => {
-//                             if (mime::MULTIPART_FORM_DATA.type_() == m.type_()) && (mime::MULTIPART_FORM_DATA.subtype() == m.subtype()) {
-//                                 //如果是分段表单数据，则获取分段边界
-//                                 m.get_param("boundary").map(|b| b.as_str())
-//                             } else {
-//                                 None
-//                             }
-//                         },
-//                         _ => None,
-//                     }
-//                 }
-//             }
-//         }
+//读取表单和长度
+fn read_form(req: &mut Request, buf: &mut Vec<u8>) -> IOResult<usize> {
+    match req.get_body_contents() {
+        Err(err) => Err(IOError::new(io::ErrorKind::Other, err.to_string())),
+        Ok(body) => {
+            //获取请求body成功
+            buf.resize(body.len(), 0);
+            body.as_slice().read(&mut buf[..])
+        },
+    }
+}
 
-//         fn body(self) -> Self::Body {
-//             Body(self.0)
-//         }
-//     }
+//分析表单数据
+fn parse_multipart(boundary: &str, data: &[u8], map: &mut Map) -> Result<(), ParamsError> {
+    for part in split_bytes(data, boundary.as_bytes()) {
+        if part == FORM_TAIL {
+            //忽略结尾符
+            continue;
+        }
+        
+        if let Some(pos) = find_bytes(part, FORM_LINE_BREAK) {
+            let (prefix, content) = part.split_at(pos + 4);
+            let fields = split_bytes(prefix, HTTP_LINE_BREAK);
+            let len = fields.len();
+            if len == 2 {
+                try!(parse_form_text(fields[0], content, map));
+            } else if len == 3 {
+                let (slice, _) = content.split_at(content.len() - 2);
+                try!(parse_form_binary(fields[0], fields[1], slice, map));
+            } else {
+                return Err(ParamsError::InvalidForm);
+            }
+        } else {
+            return Err(ParamsError::InvalidForm);
+        }
+    }
+    Ok(())
+}
 
-//     let mut multipart = match Multipart::from_request(MultipartHttpsRequest(req)) {
-//         Ok(multipart) => multipart,
-//         Err(_) => return Ok(None),
-//     };
-//     let mut temp_dir = None;
-//     while let Some(mut field) = try!(multipart.read_entry()) {
-//         if field.is_text() {
-//             //表单字段为文本
-//             let mut value = String::new();
-//             field.data.read_to_string(&mut value);
-//             try!(map.assign(&field.headers.name, Value::String(value)));
-//         } else {
-//             //表单字段为文件
-//             if temp_dir.is_none() {
-//                 temp_dir = Some(try!(TempDir::new("multipart")));
-//             }
-//             let save_dir = temp_dir.as_ref().unwrap().path();
-//             match try!(field.data.save().with_dir(save_dir).into_result_strict()) {
-//                 SavedData::File(path, size) => {
-//                     try!(map.assign(&field.headers.name, Value::File(File {
-//                         path: path,
-//                         filename: field.headers.filename,
-//                         size: size,
-//                         content_type: mime::TEXT_PLAIN, //因为兼容性问题，暂时修改为字面量，原值为file.content_type
-//                     })));
-//                 },
-//                 _ => return Err(ParamsError::InvalidFile),
-//             }
-//         }
-//     }
-//     Ok(temp_dir.map(SaveDir::Temp))
-// }
-
-//将上传文件保存到指定目录下
-fn append_multipart_save_dir(req: &mut Request, dir: SaveDir) {
-    struct SaveDirExt;
-
-    impl Key for SaveDirExt {
-        type Value = Vec<SaveDir>;
+//分析表单文本数据
+fn parse_form_text(prefix: &[u8], value: &[u8], map: &mut Map) -> Result<(), ParamsError> {
+    let vec = split_bytes(prefix, FORM_DATA_HEAD_FIRST_SPLIT_CHAR);
+    if vec.len() != 2 {
+        return Err(ParamsError::InvalidForm);
     }
 
-    let extensions = req.extensions_mut();
-    if !extensions.contains::<SaveDirExt>() {
-        extensions.insert::<SaveDirExt>(vec![]);
+    if let Ok(h) = String::from_utf8(Vec::from(vec[0])) {
+        if let FORM_DATA_HEAD = h.trim().to_lowercase().as_str() {
+            //分析头正确
+            if let Ok(k) = String::from_utf8(Vec::from(vec[1])) {
+                let key = k.trim().split(FORM_DATA_HEAD_SECOND_SPLIT_CHAR).collect::<Vec<&str>>()[1].trim_matches('\"');
+                if let Ok(v) = String::from_utf8(Vec::from(&value[0..(value.len() - 2)])) {
+                    return map.assign(key, Value::String(v));
+                }
+            }
+        }
     }
-    extensions.get_mut::<SaveDirExt>().unwrap().push(dir);
+    Err(ParamsError::InvalidForm)
+}
+
+//分析表单二进制数据
+fn parse_form_binary(prefix: &[u8], content_type: &[u8], value: &[u8], map: &mut Map) -> Result<(), ParamsError> {
+    let vec = split_bytes(prefix, FORM_DATA_HEAD_FIRST_SPLIT_CHAR);
+    if vec.len() != 3 {
+        return Err(ParamsError::InvalidForm);
+    }
+
+    if let Ok(h) = String::from_utf8(Vec::from(vec[0])) {
+        if let FORM_DATA_HEAD = h.trim().to_lowercase().as_str() {
+            //分析头正确
+            if let Ok(k) = String::from_utf8(Vec::from(vec[1])) {
+                let key = k.trim().split(FORM_DATA_HEAD_SECOND_SPLIT_CHAR).collect::<Vec<&str>>()[1].trim_matches('\"');
+                try!(map.assign(key, Value::Bin(value.to_vec())));
+            }
+
+            if let Ok(k) = String::from_utf8(Vec::from(vec[2])) {
+                let value = k.trim().split(FORM_DATA_HEAD_SECOND_SPLIT_CHAR).collect::<Vec<&str>>()[1].trim_matches('\"');
+                if let Ok(v) = String::from_utf8(Vec::from(value)) {
+                    return map.assign(FORM_DATA_FILE_KEY, Value::String(v));
+                }
+            }       
+        }
+    }
+    Err(ParamsError::InvalidForm)
 }
 
 //尝试解析编码的url

@@ -4,6 +4,7 @@ use std::sync::{Arc, RwLock, Mutex};
 
 use plugin::Plugin;
 use typemap::Key;
+use twoway::find_bytes;
 
 use request::Request;
 use response::Response;
@@ -211,6 +212,44 @@ impl<P: Key> Write<P> where P::Value: Send {
     pub fn one<T>(start: T) -> Write<P> where T: PersistentInto<Arc<Mutex<P::Value>>> {
         Write { data: start.persistent_into() }
     }
+}
+
+/*
+* 批分指定子片断的二进制数据
+*/
+pub fn split_bytes<'a>(bytes: &'a [u8], sub: &'a [u8]) -> Vec<&'a [u8]> {
+    let mut pos = 0;
+    let bytes_len = bytes.len();
+    let sub_len = sub.len();
+    let mut vec = Vec::new();
+    if (bytes_len == 0) || (sub_len == 0) || (bytes_len < sub_len) {
+        return vec;
+    }
+
+    let mut slice = bytes;
+    loop {
+        match find_bytes(slice, sub) {
+            Some(0) => {
+                //移除子片断，并继续查询
+                slice = &slice[sub_len..];
+            },
+            Some(top) => {
+                //加入片断，并继续查询
+                pos = top + sub_len;
+                vec.push(&slice[0..top]);
+                slice = &slice[pos..];
+            },
+            None => {
+                //退出查询
+                if pos < bytes_len {
+                    //加入剩余片断
+                    vec.push(&slice[0..slice.len()]);
+                }
+                break;
+            }
+        }
+    }
+    vec
 }
 
 /*
