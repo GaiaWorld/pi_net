@@ -346,14 +346,50 @@ impl Map {
             return None;
         }
 
+        //根据键路径，迭代查询指定的叶
         let mut value = self.0.get(keys[0]);
         for key in &keys[1..] {
             value = match value {
                 Some(&Value::Map(ref map)) => map.0.get(*key),
-                _ => return None,
+                _ => return None, //未查询到指定的键
             }
         }
         value
+    }
+
+    //递归遍历获取指定键的值，键路径：&[name, x]
+    pub fn take(&mut self, keys: &[&str]) -> Option<Value> {
+        if keys.is_empty() {
+            return None;
+        }
+
+        //根据键路径，迭代查询指定的叶
+        let mut init = Value::Null;
+        let mut len = keys.len();
+        let mut value = Some(&mut init);
+        for key in keys {
+            len -= 1;
+            match value {
+                Some(&mut Value::Null) => {
+                    //迭代首键
+                    if len == 0 {
+                        //已查询到指定的叶键，移除指定键对应的值，并返回
+                        return self.0.remove(*key);
+                    }
+                    value = self.0.get_mut(*key); //获取子键的值
+                },
+                Some(&mut Value::Map(ref mut map)) => {
+                    //迭代子键
+                    if len == 0 {
+                        //已查询到指定的叶键，移除指定键对应的值，并返回
+                        return map.0.remove(*key);
+                    }
+                    value = map.0.get_mut(*key); //获取子键的值
+                },
+                _ => break, //未查询到指定的键
+            }
+        }
+        None
     }
 
     //将表转换为BtreeMap
@@ -710,7 +746,7 @@ fn parse_form_text(prefix: &[u8], value: &[u8], map: &mut Map) -> Result<(), Par
 }
 
 //分析表单二进制数据
-fn parse_form_binary(prefix: &[u8], content_type: &[u8], value: &[u8], map: &mut Map) -> Result<(), ParamsError> {
+fn parse_form_binary(prefix: &[u8], _content_type: &[u8], value: &[u8], map: &mut Map) -> Result<(), ParamsError> {
     let vec = split_bytes(prefix, FORM_DATA_HEAD_FIRST_SPLIT_CHAR);
     if vec.len() != 3 {
         return Err(ParamsError::InvalidForm);
@@ -752,3 +788,4 @@ fn try_parse_url_encode<'a, 'b, P>(req: &mut Request, map: &mut Map) -> Result<(
     }
     Ok(())
 }
+
