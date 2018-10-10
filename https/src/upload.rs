@@ -22,7 +22,7 @@ use handler::{HttpsError, HttpsResult, Handler};
 use params::{Params, Value};
 
 /*
-* 文件移除方法
+* 文件移除方法标记
 */
 const FILE_REMOVE_METHOD: &str = "_$remove";
 
@@ -46,9 +46,9 @@ impl Handler for FileUpload {
         let mut file: String;
         let mut content = Vec::new();
         {
-            let map = req.get_ref::<Params>().unwrap();
-            if let Some(&Value::String(ref path)) = map.find(&["$file_name"]) {
-                file = path.clone();
+            let map = req.get_mut::<Params>().unwrap();
+            if let Some(Value::String(path)) = map.take(&["$file_name"]) {
+                file = path;
             } else {
                 return Some((req, res, 
                             Err(HttpsError::new(IOError::new(ErrorKind::NotFound, "upload file error, empty relative path")))));
@@ -57,16 +57,16 @@ impl Handler for FileUpload {
                 if r == FILE_REMOVE_METHOD {
                     //文件移除
                     is_remove = true;
-                    if let Some(&Value::String(ref path)) = map.find(&["file_name"]) {
-                        file = path.clone();
+                    if let Some(Value::String(path)) = map.take(&["file_name"]) {
+                        file = path;
                     } else {
                         return Some((req, res, 
                                     Err(HttpsError::new(IOError::new(ErrorKind::NotFound, "remove file error, empty relative path")))));
                     }
                 } else {
                     //不是文件移除，则为文件上传
-                    if let Some(&Value::Bin(ref bin)) = map.find(&["content"]) {
-                        content = bin.to_vec();
+                    if let Some(Value::Bin(bin)) = map.take(&["content"]) {
+                        content = bin;
                     }
                 }
             }
@@ -232,3 +232,4 @@ impl FileUpload {
         }
     }
 }
+
