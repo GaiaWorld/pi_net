@@ -410,7 +410,7 @@ fn async_load_files(req: Request, res: Response, files: Vec<(u64, PathBuf)>, ind
             Err(e) => {
                 //打开失败
                 async_load_files_error(req, res, e, HTTPS_ASYNC_OPEN_FILE_FAILED_STATUS);
-            }
+            },
             Ok(r) => {
                 //打开成功
                 let file = Arc::new(r);
