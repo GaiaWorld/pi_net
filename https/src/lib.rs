@@ -51,7 +51,8 @@ extern crate time;
 extern crate filetime;
 extern crate tempdir;
 extern crate void;
-extern crate multipart;
+extern crate twoway;
+extern crate path_absolutize;
 
 extern crate pi_lib;
 extern crate pi_base;
@@ -68,6 +69,7 @@ pub mod https;
 pub mod file_path;
 pub mod file;
 pub mod files;
+pub mod upload;
 pub mod url_encode;
 pub mod util;
 pub mod https_load_files;
