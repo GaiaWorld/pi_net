@@ -356,7 +356,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
 
     let mut events = Events::with_capacity(1024);
 
-    let one_sec = Duration::from_secs(1);
+    let one_sec = Duration::from_millis(100);
 
     loop {
         // recv_comings
