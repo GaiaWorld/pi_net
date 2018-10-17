@@ -43,16 +43,10 @@ impl Handler for FileUpload {
         }
 
         let mut is_remove = false;
-        let mut file: String;
+        let mut file = String::from("");
         let mut content = Vec::new();
         {
             let map = req.get_mut::<Params>().unwrap();
-            if let Some(Value::String(path)) = map.take(&["$file_name"]) {
-                file = path;
-            } else {
-                return Some((req, res, 
-                            Err(HttpsError::new(IOError::new(ErrorKind::NotFound, "upload file error, empty relative path")))));
-            }
             if let Some(&Value::String(ref r)) = map.find(&["method"]) {
                 if r == FILE_REMOVE_METHOD {
                     //文件移除
@@ -63,11 +57,18 @@ impl Handler for FileUpload {
                         return Some((req, res, 
                                     Err(HttpsError::new(IOError::new(ErrorKind::NotFound, "remove file error, empty relative path")))));
                     }
+                }
+            }
+            if !is_remove {
+                //不是文件移除，则为文件上传
+                if let Some(Value::String(path)) = map.take(&["$file_name"]) {
+                    file = path;
                 } else {
-                    //不是文件移除，则为文件上传
-                    if let Some(Value::Bin(bin)) = map.take(&["content"]) {
-                        content = bin;
-                    }
+                    return Some((req, res, 
+                                Err(HttpsError::new(IOError::new(ErrorKind::NotFound, "upload file error, empty relative path")))));
+                }
+                if let Some(Value::Bin(bin)) = map.take(&["content"]) {
+                    content = bin;
                 }
             }
         }
