@@ -257,7 +257,6 @@ fn handle_recv(
     stream: Arc<RwLock<Stream>>,
     packet: Result<Packet>,
 ) {
-    println!("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
     let n = node.clone();
     let st = stream.clone();
     if let Ok(packet) = packet {
@@ -516,7 +515,7 @@ fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish, socke
     if publish.qos != mqtt3::QoS::AtMostOnce {
         return;
     }
-    //println!("&publish.topic_name = {:?}", &publish.topic_name);
+    //println!("!!!recv_publish.topic_name = {:?}", &publish.topic_name);
     let topic = mqtt3::TopicPath::from_str(&publish.topic_name);
     if topic.is_err() {
         return;
@@ -551,10 +550,11 @@ fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish, socke
                 }
                 _ => {println!("Compression mode does not support, topic:{}", &publish.topic_name); return;},
             };
-            //println!("mqtt server !!!!!!! topic = {:?}, payload={:?}", topic, publish.payload.as_slice());
             (v.1.publish_func)((&*v.0).clone(), Ok(Arc::new(r)));
         },
-        None => (),
+        None => {
+            println!("Topic is not registered {:?}", &publish.topic_name);
+        },
     }
 }
 

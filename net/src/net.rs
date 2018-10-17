@@ -28,7 +28,7 @@ fn bind_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
         let key = entry.key();
 
         println!(
-            "listener {:?}: register, interest = {:?}",
+            "bind_tcp listener {:?}: register, interest = {:?}",
             key,
             Ready::readable()
         );
@@ -60,7 +60,7 @@ pub fn connect_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
         stream.interest.insert(Ready::writable());
 
         println!(
-            "stream {:?}: register, interest = {:?}",
+            "connect_tcp stream {:?}: register, interest = {:?}",
             stream.token, stream.interest
         );
 
@@ -104,10 +104,10 @@ fn send_tcp(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream, v8: Arc<V
             } else {
                 if stream.send_remain_size == 0 {
                     stream.interest.insert(Ready::writable());
-                    println!(
-                        "send_tcp stream {:?}: reregister, interest = {:?}",
-                        stream.token, stream.interest
-                    );
+                    // println!(
+                    //     "send_tcp stream {:?}: reregister, interest = {:?}",
+                    //     stream.token, stream.interest
+                    // );
                     poll.reregister(mio, stream.token, stream.interest, PollOpt::level())
                         .unwrap();
                 }
@@ -143,7 +143,7 @@ fn close_tcp(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream, force: b
         stream.state = State::Closed;
         stream.interest = Ready::empty();
         poll.deregister(mio).unwrap();
-        println!("stream deregister {:?}, shutdown!!!!!!!!!!", stream.token);
+        println!("close_tcp stream deregister {:?}, shutdown!!!!!!!!!!", stream.token);
         mio.shutdown(Shutdown::Both).unwrap();
     } else {
         match stream.state {
@@ -182,7 +182,6 @@ fn tcp_event(mio: &mut TcpListener, recv_comings: Arc<RwLock<Vec<Token>>>, net_t
 
 // return bool indicate that should close the net imm;
 fn stream_recv(stream: &mut Stream, mio: &mut TcpStream) -> Option<Result<(RecvFn, Range<usize>)>> {
-    println!("stream_recv-------------------------------------------------------" );
     if stream.recv_callback.is_none() {
         panic!("stream_recv failed, stream.recv_callback == None");
     }
@@ -214,6 +213,9 @@ fn stream_recv(stream: &mut Stream, mio: &mut TcpStream) -> Option<Result<(RecvF
                 let end = stream.recv_callback_offset + stream.recv_size;
                 match mio.read(&mut stream.recv_buf[begin..end]) {
                     Ok(size) => {
+                        if size == 0 {
+                             break Ok(());
+                        }
                         stream.recv_buf_offset += size;
                         if stream.recv_buf_offset == end {
                             break Ok(());
@@ -311,10 +313,10 @@ fn stream_send(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream) -> boo
             mio.flush().unwrap();
             stream.interest.remove(Ready::writable());
 
-            println!(
-                "stream {:?}: reregister, interest = {:?}",
-                stream.token, stream.interest
-            );
+            // println!(
+            //     "stream_send {:?}: reregister, interest = {:?}",
+            //     stream.token, stream.interest
+            // );
 
             poll.reregister(mio, stream.token, stream.interest, PollOpt::level())
                 .unwrap();
@@ -347,7 +349,6 @@ fn stream_send(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream) -> boo
 }
 
 pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureFn>) {
-    println!("handle_net-------------------------------------------");
     let mut handler = NetHandler {
         sender: sender,
         slab: Slab::<NetData>::new(),
@@ -358,7 +359,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
 
     let mut events = Events::with_capacity(1024);
 
-    let one_sec = Duration::from_secs(1);
+    let one_sec = Duration::from_millis(100);
 
     loop {
         // recv_comings
@@ -368,10 +369,10 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                 &mut NetData::TcpStream(ref mut s, ref mio) => {
                     let mut stream = &mut s.write().unwrap();
                     stream.interest.insert(Ready::readable());
-                    println!(
-                        "stream {:?}: reregister, interest = {:?}",
-                        stream.token, stream.interest
-                    );
+                    // println!(
+                    //     "recv_comings stream {:?}: reregister, interest = {:?}",
+                    //     stream.token, stream.interest
+                    // );
 
                     handler
                         .poll
@@ -415,7 +416,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                                             stream.interest.remove(Ready::readable());
 
                                             println!(
-                                                "stream {:?}: reregister, interest = {:?}",
+                                                "recv_buf1 stream {:?}: reregister, interest = {:?}",
                                                 stream.token, stream.interest
                                             );
 
@@ -464,6 +465,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                                 close_id = Some(id);
                             }
                         } else if readiness.is_writable() {
+                            println!("write_buf1 stream");
                             let close =
                                 stream_send(&mut handler.poll, &mut s.write().unwrap(), mio);
                             if close {
@@ -488,10 +490,10 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                         let mut s = &mut stream.write().unwrap();
                         s.token = Token(entry.key());
 
-                        println!(
-                            "stream {:?}: register, interest = {:?}",
-                            s.token, s.interest
-                        );
+                        // println!(
+                        //     "net_data stream {:?}: register, interest = {:?}",
+                        //     s.token, s.interest
+                        // );
 
                         handler
                             .poll
@@ -715,10 +717,9 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                 let stream = stream2.clone();
                 //从缓存中取数据
                 let end = offset + size;
-                let buf = websocket_buf.clone();
+                //let buf = websocket_buf.clone();
                 let v = &websocket_buf[offset..end];
                 let v = Vec::from(v);
-                println!("stream websocket1-------------------------------{}, {}, {}, {}",offset, size, len, len - size);
                 //写入ws缓存
                 stream.write().unwrap().websocket = Websocket::Bin(offset + size, len - size);
                 return Some((func, Ok(Arc::new(v))));
@@ -734,15 +735,14 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                                
                                 //写入ws缓存
                                 stream.write().unwrap().websocket = Websocket::Bin(size, len - size);
-                                println!("stream websocket-------------------------------{}, {}, {}",len, size, len - size);
                                 stream.write().unwrap().websocket_buf = buf;
                                 func(Ok(Arc::new(v)))
                             }
                         }
-                        OwnedMessage::Text(body) => {
+                        OwnedMessage::Text(_body) => {
                             func(Err(Error::new(ErrorKind::Other, "not bin")));
                         }
-                        OwnedMessage::Close(close) => {
+                        OwnedMessage::Close(_close) => {
                         }
                         _ => {
                             //TODO ping包等数据包
@@ -753,7 +753,7 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                     
                 });
                 //从网络中等待websocket包
-                ws_read_header(stream, vec![], ws_func);
+                ws_read_header(stream, ws_func);
             }
         },
     }
