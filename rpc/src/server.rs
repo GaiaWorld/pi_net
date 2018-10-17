@@ -74,6 +74,7 @@ impl RPCServerTraits for RPCServer {
     ) -> Result<()> {
         let topic2 = topic.clone();
         let rpc_handle = move |client: ClientStub, r: Result<Arc<Vec<u8>>>| {
+            //println!("rpc_handle -----------------------------------------{:?}", &topic2);
             let rdata = r.unwrap();
             let uid = rdata[0..3].as_ptr();
             let mut session = Session::new(
@@ -102,16 +103,19 @@ impl RPCServerTraits for RPCServer {
                     )
                 });
             }
-            if sync {
+            //if sync {
+            //    println!("rpc_handle -----------------------------------------{:?}", &topic2);
                 handle_func();
-            } else if client.get_queue_size() == 0 {
-                handle
-                    .clone()
-                    .handle(session.clone(), topic2.clone(), Args::TwoArgs(0, Arc::new(Vec::from(&rdata[5..]))));
-                client.queue_push(handle_func);
-            } else {
-                client.queue_push(handle_func);
-            }
+            // } else if client.get_queue_size() == 0 {
+            //     println!("rpc_handle queue_push 0 -----------------------------------------{:?}", &topic2);
+            //     handle
+            //         .clone()
+            //         .handle(session.clone(), topic2.clone(), Args::TwoArgs(0, Arc::new(Vec::from(&rdata[5..]))));
+            //     client.queue_push(handle_func);
+            // } else {
+            //     println!("rpc_handle queue_push 1-----------------------------------------{:?}", &topic2);
+            //     client.queue_push(handle_func);
+            // }
         };
         match self.mqtt.set_topic_meta(
             topic,
