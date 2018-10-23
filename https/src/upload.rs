@@ -161,7 +161,7 @@ fn async_save_file(req: Request, res: Response, path: PathBuf, content: Vec<u8>)
             },
         }
     });
-    AsyncFile::open(path, AsynFileOptions::OnlyWrite(1), open);
+    AsyncFile::open(path, AsynFileOptions::TruncateWrite(1), open);
 }
 
 //异步操作文件错误
