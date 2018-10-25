@@ -1,4 +1,4 @@
-use mio_extras::timer::{Timeout, Timer};
+use mio_extras::timer::{Timeout, Timer, Builder};
 use pi_lib::atom::Atom;
 
 use std::cell::RefCell;
@@ -29,7 +29,7 @@ pub type TimerCallback = Box<FnBox(Atom) + Send>;
 impl<T> NetTimer<T> {
     pub fn new() -> NetTimer<T> {
         NetTimer {
-            timer: Arc::new(RefCell::new(Timer::default())),
+            timer: Arc::new(RefCell::new(Builder::default().tick_duration(Duration::from_millis(10)).build())),
         }
     }
 
@@ -56,7 +56,7 @@ impl NetTimers<TimerCallback> {
     }
     //设置定时器，并设置回调,返回定时器ID
     pub fn set_timeout(&mut self, src: Atom, delay_from_now: Duration, state: TimerCallback) {
-        let mut timer = Timer::default();
+        let mut timer = Builder::default().tick_duration(Duration::from_millis(10)).build();
         let timeout = timer.set_timeout(delay_from_now, state);
         self.timers.insert(src, (timer, timeout));
     }

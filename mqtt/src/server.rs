@@ -11,6 +11,7 @@ use magnetic::mpsc::{MPSCConsumer, MPSCProducer};
 use magnetic::{Consumer, Producer};
 
 use pi_lib::atom::Atom;
+use pi_lib::time::now_millis;
 use pi_lib::gray::GrayVersion;
 use pi_base::util::uncompress;
 use data::{Server, SetAttrFun};
@@ -282,12 +283,14 @@ fn handle_recv(
             let mut timers = stream.net_timers.write().unwrap();
             let socket = socket.clone();
             //mqtt协议要求keep_alive的1.5倍超时关闭连接
-            let keep_alive = (keep_alive as f32) * 1.5;
+            let keep_alive = ((keep_alive as f32) * 1.5) as u64;
+
+            let n = now_millis();
             timers.set_timeout(
                 Atom::from(String::from("handle_recv") + &socket.socket.to_string()),
-                Duration::from_secs(keep_alive as u64),
+                Duration::from_millis(keep_alive as u64 * 1000),
                 Box::new(move |_src: Atom| {
-                    println!("keep_alive timeout con close!!!!!!!!!!!!");
+                    println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  now_millis() - n, keep_alive as u64 * 1000);
                     //关闭连接
                     socket.close(true);
                 }),
