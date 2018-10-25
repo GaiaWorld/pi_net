@@ -6,7 +6,7 @@ authors = ["moyy <moyy@yineng.com>"]
 [dependencies]
 mio = "0.6.14"
 slab = "0.4.0"
-mio-extras = "2.0.4"
+mio-extras = "2.0.5"
 byteorder = "1.0"
 bitflags = "0.9"
 rand = "0.3"

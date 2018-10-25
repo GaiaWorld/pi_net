@@ -5,6 +5,7 @@ use std::time::{Duration};
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
 use std::net::{Shutdown};
+use std::thread;
 
 use mio::{Events, Poll, PollOpt, Ready, Token};
 use mio::net::{TcpListener, TcpStream};
@@ -362,6 +363,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
     let one_sec = Duration::from_millis(10);
 
     loop {
+        thread::sleep(Duration::from_millis(10));
         // recv_comings
         for &Token(id) in handler.recv_comings.read().unwrap().iter() {
             let data = handler.slab.get_mut(id).unwrap();
@@ -385,7 +387,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
         handler.recv_comings.write().unwrap().clear();
 
         // handle event from net
-        handler.poll.poll(&mut events, Some(one_sec)).unwrap();
+        handler.poll.poll(&mut events, Some(Duration::from_millis(0))).unwrap();
         for event in &events {
             let Token(token) = event.token();
             let readiness = event.readiness();
