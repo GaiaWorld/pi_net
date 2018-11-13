@@ -18,6 +18,7 @@ use websocket::server::upgrade::sync::Upgrade;
 
 use slab::Slab;
 
+use api::WSControlType;
 use data::{CloseFn, Config, ListenerFn, NetData, NetHandler, Protocol, RecvFn, SendClosureFn,
            Socket, State, Stream, Websocket};
 
@@ -744,7 +745,29 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                         OwnedMessage::Text(_body) => {
                             func(Err(Error::new(ErrorKind::Other, "not bin")));
                         }
-                        OwnedMessage::Close(_close) => {
+                        OwnedMessage::Close(close) => {
+                            //立即回应关闭消息，且立即关闭连接
+                            let mut socket = None;
+                            {
+                                let mut s = stream.write().unwrap();
+                                if let State::Run = s.state {
+                                    //当前连接正在运行，则关闭
+                                    s.state = State::WouldClose;
+                                    socket = s.socket.clone();
+                                }
+                            }
+                            
+                            if let Some(s) = socket {
+                                if let Some(data) = close {
+                                    if let Ok(bin) = data.into_bytes() {
+                                        if let Ok(reason) = String::from_utf8(bin) {
+                                            //返回客户端关闭原因
+                                            return s.send_control(WSControlType::Close(0, reason));
+                                        }
+                                    }
+                                }
+                                s.send_control(WSControlType::Close(0, "client closed connect".to_string()));
+                            }
                         }
                         _ => {
                             //TODO ping包等数据包
