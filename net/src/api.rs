@@ -115,6 +115,12 @@ impl Socket {
 
     /// call by logic thread
     pub fn close(&self, force: bool) {
+        //主动向对端发送连接关闭消息
+        let mut sender = WsSender::new(false);
+        let mut reader = Cursor::new(vec![]);
+        let message = OwnedMessage::Close(Some(CloseData::new(0, "server closed connect".to_string())));
+        sender.send_message(&mut reader, &message).expect(&format!("send control error, msg: {:?}", message));
+
         let socket = self.socket;
         let data = Box::new(move |handler: &mut NetHandler| {
             handle_close(handler, socket, force);
