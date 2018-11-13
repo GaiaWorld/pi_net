@@ -1,5 +1,6 @@
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::io::{Error, ErrorKind, Read, Result, Write, Cursor};
 use std::time::{Duration};
 use std::collections::VecDeque;
@@ -94,7 +95,7 @@ pub fn handle_connect(handler: &mut NetHandler, config: Config, func: ListenerFn
 
 // return bool to indicate that should close the stream
 fn send_tcp(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream, v8: Arc<Vec<u8>>) -> bool {
-    return match stream.state {
+    return match State::from_usize(stream.socket.as_ref().expect("socket not exist").state.load(Ordering::SeqCst)) {
         State::Closed => panic!("error, send_tcp must not to closed state!"),
         State::WouldClose => {
             // can't add sending data any longer
@@ -142,16 +143,15 @@ pub fn handle_send(handler: &mut NetHandler, socket: usize, v8: Arc<Vec<u8>>) {
 
 fn close_tcp(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream, force: bool) {
     if force || stream.send_remain_size == 0 {
-        stream.state = State::Closed;
+        stream.socket.as_ref().expect("socket not exist").state.swap(State::Closed as usize, Ordering::SeqCst);
         stream.interest = Ready::empty();
         poll.deregister(mio).unwrap();
         println!("close_tcp stream deregister {:?}, shutdown!!!!!!!!!!", stream.token);
         mio.shutdown(Shutdown::Both).unwrap();
     } else {
-        match stream.state {
-            State::Run => stream.state = State::WouldClose,
-            _ => {}
-        }
+        stream.socket.as_ref()
+                    .expect("socket not exist")
+                    .state.compare_exchange(State::Run as usize, State::WouldClose as usize, Ordering::SeqCst, Ordering::Acquire);
     }
 }
 
@@ -571,7 +571,6 @@ impl Stream {
         }
 
         Self {
-            state: State::Run,
             token: Token(id),
             interest: Ready::empty(),
 
@@ -750,10 +749,18 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                             let mut socket = None;
                             {
                                 let mut s = stream.write().unwrap();
-                                if let State::Run = s.state {
-                                    //当前连接正在运行，则关闭
-                                    s.state = State::WouldClose;
-                                    socket = s.socket.clone();
+                                if let Ok(_) = s.socket.as_ref()
+                                                    .expect("socket not exist")
+                                                    .state
+                                                    .compare_exchange(State::Run as usize, State::WouldClose as usize, Ordering::SeqCst, Ordering::Acquire) {
+                                    //客户端通知关闭，则回应关闭
+                                    socket = s.socket.clone();              
+                                } else if let Ok(_) = s.socket.as_ref()
+                                                    .expect("socket not exist")
+                                                    .state
+                                                    .compare_exchange(State::WouldClose as usize, State::Closed as usize, Ordering::SeqCst, Ordering::Acquire) {
+                                    //客户端回应关闭，则立即关闭
+                                    s.socket.as_ref().expect("socket not exist").rclose(true);
                                 }
                             }
                             
@@ -808,6 +815,7 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
 impl Socket {
     pub fn new(id: usize, sender: Sender<SendClosureFn>) -> Self {
         Self {
+            state: Arc::new(AtomicUsize::new(State::Run as usize)),
             socket: id,
             sender: sender,
             gray: None,

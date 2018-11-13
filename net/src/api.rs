@@ -1,9 +1,10 @@
 use std::thread;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Sender};
 use std::io::Cursor;
 
-use data::{Config, ListenerFn, NetHandler, SendClosureFn, Socket};
+use data::{Config, ListenerFn, NetHandler, SendClosureFn, Socket, State};
 use net::{handle_bind, handle_close, handle_connect, handle_net, handle_send};
 use websocket::ws::Sender as SenderT;
 use websocket::message::CloseData;
@@ -86,46 +87,41 @@ impl Socket {
         let mut sender = WsSender::new(false);
         let mut reader = Cursor::new(vec![]);
         let socket = self.socket;
-        let (close, message) = match msg {
+        let message = match msg {
             WSControlType::Close(state, reason) => {
-                (true, OwnedMessage::Close(Some(CloseData::new(state, reason))))
+                OwnedMessage::Close(Some(CloseData::new(state, reason)))
             },
             WSControlType::Ping(bin) => {
-                (false, OwnedMessage::Ping(bin))
+                OwnedMessage::Ping(bin)
             },
             WSControlType::Pong(bin) => {
-                (false, OwnedMessage::Pong(bin))
+                OwnedMessage::Pong(bin)
             },
         };
         sender.send_message(&mut reader, &message).expect(&format!("send control error, msg: {:?}", message));
 
-        
-        if close {
-            let cb = Box::new(move |handler: &mut NetHandler| {
-                handle_close(handler, socket, true);
-            });
-            self.sender.send(cb).unwrap();
-        } else {
-            let cb = Box::new(move |handler: &mut NetHandler| {
-                handle_send(handler, socket, Arc::new(reader.into_inner()));
-            });
-            self.sender.send(cb).unwrap();
-        }
+        let cb = Box::new(move |handler: &mut NetHandler| {
+            handle_send(handler, socket, Arc::new(reader.into_inner()));
+        });
+        self.sender.send(cb).unwrap();
     }
 
     /// call by logic thread
-    pub fn close(&self, force: bool) {
+    pub fn close(&self, _force: bool) {
         //主动向对端发送连接关闭消息
-        let mut sender = WsSender::new(false);
-        let mut reader = Cursor::new(vec![]);
-        let message = OwnedMessage::Close(Some(CloseData::new(0, "server closed connect".to_string())));
-        sender.send_message(&mut reader, &message).expect(&format!("send control error, msg: {:?}", message));
+        if let Ok(_) = self.state.compare_exchange(State::Run as usize, State::WouldClose as usize, Ordering::SeqCst, Ordering::Acquire) {
+            self.send_control(WSControlType::Close(0, "server closed connect".to_string()));
+        }
+    }
 
-        let socket = self.socket;
-        let data = Box::new(move |handler: &mut NetHandler| {
-            handle_close(handler, socket, force);
-        });
-
-        self.sender.send(data).unwrap();
+    //实际关闭连接
+    pub fn rclose(&self, force: bool) {
+        if let Ok(_) = self.state.compare_exchange(State::WouldClose as usize, State::Closed as usize, Ordering::SeqCst, Ordering::Acquire) {
+            let socket = self.socket;
+            let cb = Box::new(move |handler: &mut NetHandler| {
+                handle_close(handler, socket, force);
+            });
+            self.sender.send(cb).unwrap();
+        }
     }
 }

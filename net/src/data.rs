@@ -2,6 +2,7 @@ use std::io::Result;
 use std::boxed::FnBox;
 use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
+use std::sync::atomic::AtomicUsize;
 use std::net::SocketAddr;
 use std::time::{Duration};
 use std::collections::VecDeque;
@@ -24,6 +25,7 @@ pub type ListenerFn = Box<Fn(Result<(Socket, Arc<RwLock<Stream>>)>, Result<Socke
 
 #[derive(Clone)]
 pub struct Socket {
+    pub state: Arc<AtomicUsize>,
     pub socket: usize,
     pub sender: Sender<SendClosureFn>,
     pub gray: Option<usize>,
@@ -49,7 +51,6 @@ pub enum Websocket {
 
 // all size's unit is byte
 pub struct Stream {
-    pub state: State,
     pub token: Token,
     pub interest: Ready,
 
@@ -87,6 +88,17 @@ pub enum State {
     Run = 0,
     WouldClose = 1,
     Closed = 2,
+}
+
+impl State {
+    //将数字转换为状态
+    pub fn from_usize(n: usize) -> Self {
+        match n {
+            0 => State::Run,
+            1 => State::WouldClose,
+            _ => State::Closed,
+        }
+    }
 }
 
 pub enum NetData {
