@@ -194,7 +194,9 @@ fn stream_recv(stream: &mut Stream, mio: &mut TcpStream) -> Option<Result<(RecvF
             if stream.recv_size == 0 {
                 let begin = stream.recv_buf_offset;
                 match mio.read(&mut stream.recv_buf[begin..]) {
-                    Ok(0) => {},
+                    Ok(0) => {
+                        break Ok(());
+                    },
                     Ok(size) => {
                         stream.recv_buf_offset += size;
                         break Ok(());
