@@ -137,10 +137,15 @@ fn recv_header(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
         let mut pack = vec![];
         let stream = stream.clone();
         handle_header = Box::new(move |data: Result<Arc<Vec<u8>>>| {
-            pack.extend_from_slice(data.unwrap().as_slice());
-            // let size = get_recv_size(pack.as_slice()).unwrap();
-            // recv_pack(stream, pack, size, func);
-            recv_header2(stream, pack, func);
+            match data {
+                Err(e) => println!("recv_header error: {}", e),
+                Ok(bin) => {
+                    pack.extend_from_slice(bin.as_slice());
+                    // let size = get_recv_size(pack.as_slice()).unwrap();
+                    // recv_pack(stream, pack, size, func);
+                    recv_header2(stream, pack, func);
+                }
+            }
         });
     }
 
