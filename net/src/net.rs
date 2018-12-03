@@ -147,7 +147,9 @@ fn close_tcp(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream, force: b
         stream.interest = Ready::empty();
         poll.deregister(mio).unwrap();
         println!("close_tcp stream deregister {:?}, shutdown!!!!!!!!!!", stream.token);
-        mio.shutdown(Shutdown::Both).unwrap();
+        if let Err(e) = mio.shutdown(Shutdown::Both) {
+            println!("close tcp stream err, e: {:?}", e);
+        }
     } else {
         stream.socket.as_ref()
                     .expect("socket not exist")
