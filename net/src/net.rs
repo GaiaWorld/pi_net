@@ -695,21 +695,24 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
         Websocket::None => {
             let stream2 = stream.clone();
             let http_func = Box::new(move |r: Result<Upgrade<Cursor<Vec<u8>>>>| {
-                if let Ok(mut ws) = r {
-                    let stream = stream2.clone();
-                    {
-                        let socket2;
+                match r {
+                    Err(e) => println!("!!!> WS Handshake Error, e: {:?}", e),
+                    Ok(mut ws) => {
+                        let stream = stream2.clone();
                         {
-                            let stream = &stream.read().unwrap();
-                            socket2 = stream.socket.clone();
+                            let socket2;
+                            {
+                                let stream = &stream.read().unwrap();
+                                socket2 = stream.socket.clone();
+                            }
+                            //发送回应包
+                            let send_buf = get_send_buf(&mut ws).unwrap();
                         }
-                        //发送回应包
-                        let send_buf = get_send_buf(&mut ws).unwrap();
-                    }
 
-                    //修改握手状态
-                    stream.write().unwrap().websocket = Websocket::Bin(0, 0);
-                    recv(stream2.clone(), size, func);
+                        //修改握手状态
+                        stream.write().unwrap().websocket = Websocket::Bin(0, 0);
+                        recv(stream2.clone(), size, func);
+                    },
                 }
             });
             //请求握手包

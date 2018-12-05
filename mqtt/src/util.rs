@@ -112,6 +112,7 @@ pub fn send_publish(socket: &Socket, retain: bool, _qos: QoS, topic: &str, paylo
     );
 }
 
+//处理mqtt数据包，解析为mqtt消息
 pub fn recv_mqtt_packet(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
     recv_header(stream, func);
 }

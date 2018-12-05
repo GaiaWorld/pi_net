@@ -242,6 +242,7 @@ impl Server for ServerNode {
     }
 }
 
+//处理socket写入流
 fn handle_stream(node: Arc<Mutex<ServerNodeImpl>>, socket: Socket, stream: Arc<RwLock<Stream>>) {
     let s = stream.clone();
     util::recv_mqtt_packet(
@@ -252,6 +253,7 @@ fn handle_stream(node: Arc<Mutex<ServerNodeImpl>>, socket: Socket, stream: Arc<R
     );
 }
 
+//处理mqtt消息
 fn handle_recv(
     node: Arc<Mutex<ServerNodeImpl>>,
     socket: &Socket,
