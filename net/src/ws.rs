@@ -38,6 +38,7 @@ pub fn read_header(stream: Arc<RwLock<Stream>>, buf: Vec<u8>, func: Box<FnBox(Re
                             });
             match request {
                 Ok(r) => {
+                    //println!("!!!!!!valid ws connect, method: {:?}, version: {:?}, headers: {:?}", &r.subject.0, &r.version, &r.headers);
                     match validate(&r.subject.0, &r.version, &r.headers) {
                         Ok(_) => {
                             func(Ok(WsUpgrade {
