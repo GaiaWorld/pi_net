@@ -707,6 +707,7 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                             }
                             //发送回应包
                             let send_buf = get_send_buf(&mut ws).unwrap();
+                            socket2.unwrap().send_bin(Arc::new(send_buf));
                         }
 
                         //修改握手状态
