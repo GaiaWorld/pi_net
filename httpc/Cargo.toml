@@ -5,6 +5,5 @@ authors = ["zuon <dev@dev.com>"]
 
 [dependencies]
 reqwest = "0.8.8"
-pi_lib = { path = "../../pi_lib" }
-pi_base = { path = "../../pi_base" }
-
+atom = {path="../../pi_lib/atom"}
+worker = {path="../../pi_lib/worker"}

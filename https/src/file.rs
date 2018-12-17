@@ -14,10 +14,10 @@ use modifier::Set;
 use modifier::Modifier;
 use npnc::ConsumeError;
 
-use pi_base::task::TaskType;
-use pi_base::pi_base_impl::cast_store_task;
-use pi_base::file::{AsynFileOptions, Shared, AsyncFile, SharedFile};
-use pi_lib::atom::Atom;
+use worker::task::TaskType;
+use worker::impls::cast_store_task;
+use lib_file::file::{AsynFileOptions, Shared, AsyncFile, SharedFile};
+use atom::Atom;
 
 use request::{Url, Request};
 use response::Response;

@@ -54,8 +54,10 @@ extern crate void;
 extern crate twoway;
 extern crate path_absolutize;
 
-extern crate pi_lib;
-extern crate pi_base;
+extern crate atom;
+extern crate worker;
+extern crate file as lib_file;
+extern crate future;
 
 pub mod https_impl;
 pub mod modifiers;

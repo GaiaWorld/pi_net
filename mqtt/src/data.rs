@@ -10,7 +10,7 @@ use fnv::FnvHashMap;
 use net::{Socket, Stream};
 use server::{ClientStub};
 
-use pi_lib::atom::Atom;
+use atom::Atom;
 
 pub type ClientCallback = Box<FnBox(Result<()>)>;
 pub type SetAttrFun = Box<Fn(&mut FnvHashMap<Atom, Arc<Any>>, Socket, mqtt3::Connect)>;

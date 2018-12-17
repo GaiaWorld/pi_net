@@ -10,10 +10,10 @@ use magnetic::mpsc::mpsc_queue;
 use magnetic::mpsc::{MPSCConsumer, MPSCProducer};
 use magnetic::{Consumer, Producer};
 
-use pi_lib::atom::Atom;
-use pi_lib::time::now_millis;
-use pi_lib::gray::GrayVersion;
-use pi_base::util::uncompress;
+use atom::Atom;
+use time::now_millis;
+use gray::GrayVersion;
+use lib_util::uncompress;
 use data::{Server, SetAttrFun};
 use fnv::FnvHashMap;
 use mqtt3::{self, Packet};

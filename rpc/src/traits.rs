@@ -1,6 +1,6 @@
-use pi_lib::handler::Handler;
+use handler::Handler;
 
-use pi_lib::atom::Atom;
+use atom::Atom;
 
 use std::io::Result;
 use std::sync::Arc;

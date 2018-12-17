@@ -30,8 +30,10 @@ void = "*"
 twoway= "*"
 path-absolutize = "*"
 
-pi_lib = { path = "../../pi_lib" }
-pi_base = { path = "../../pi_base" }
+atom = { path = "../../pi_lib/atom" }
+file = { path = "../../pi_lib/file" }
+worker = { path = "../../pi_lib/worker" }
+future = { path = "../../pi_lib/future" }
 
 [dev-dependencies]
 serde_derive = "1.0"

@@ -13,7 +13,7 @@ use mio::net::{TcpListener, TcpStream};
 use timer::{NetTimer, NetTimers, TimerCallback};
 use ws::{read_header as http_read_header, read_ws_header as ws_read_header, get_send_buf};
 
-use pi_lib::gray::GrayVersion;
+use gray::GrayVersion;
 use websocket::OwnedMessage;
 use websocket::server::upgrade::sync::Upgrade;
 

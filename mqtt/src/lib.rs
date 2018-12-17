@@ -7,8 +7,10 @@ extern crate net;
 extern crate rand;
 extern crate fnv;
 extern crate magnetic;
-extern crate pi_base;
-extern crate pi_lib;
+extern crate gray;
+extern crate time;
+extern crate atom;
+extern crate util as lib_util;
 extern crate rustc_serialize;
 
 pub mod client;

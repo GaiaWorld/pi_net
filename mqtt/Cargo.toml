@@ -10,5 +10,7 @@ mqtt3 = { git = "https://github.com/tekjar/mqtt3" }
 fnv = "1.0.6"
 net = {path="../net"}
 magnetic = "2.0.0"
-pi_base = {path="../../pi_base"}
-pi_lib = {path="../../pi_lib"}
+atom = {path="../../pi_lib/atom"}
+time = {path="../../pi_lib/time"}
+gray = {path="../../pi_lib/gray"}
+util = {path="../../pi_lib/util"}

@@ -8,7 +8,8 @@
 extern crate mio;
 extern crate slab;
 extern crate mio_extras;
-extern crate pi_lib;
+extern crate atom;
+extern crate gray;
 extern crate rand;
 extern crate byteorder;
 extern crate hyper;

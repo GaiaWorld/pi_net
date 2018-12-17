@@ -8,13 +8,13 @@ use std::io::Result;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
-use pi_lib::atom::Atom;
+use atom::Atom;
 
 use mqtt::data::{Server, SetAttrFun};
 use mqtt::server::{ClientStub, ServerNode};
 use mqtt::session::Session;
 
-use pi_lib::handler::{Args, Handler};
+use handler::{Args, Handler};
 use traits::RPCServerTraits;
 
 use net::{CloseFn, Socket, Stream};

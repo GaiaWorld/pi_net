@@ -2,8 +2,8 @@
 
 extern crate reqwest;
 
-extern crate pi_lib;
-extern crate pi_base;
+extern crate atom;
+extern crate worker;
 
 use std::fs::File;
 use std::sync::Arc;
@@ -19,9 +19,9 @@ use reqwest::multipart::Form;
 use reqwest::header::{Raw, Headers};
 use reqwest::{ClientBuilder, Client, Certificate, Identity, Proxy, RedirectPolicy, Body, RequestBuilder, Response};
 
-use pi_lib::atom::Atom;
-use pi_base::task::TaskType;
-use pi_base::pi_base_impl::cast_ext_task;
+use atom::Atom;
+use worker::task::TaskType;
+use worker::impls::cast_ext_task;
 
 /*
 * http客户端选项

@@ -4,8 +4,8 @@
 use mqtt3;
 
 //use pi_base::util::{compress, CompressLevel};
-use pi_lib::atom::Atom;
-use pi_lib::gray::GrayVersion;
+use atom::Atom;
+use gray::GrayVersion;
 use server::ClientStub;
 use util;
 

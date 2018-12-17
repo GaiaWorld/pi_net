@@ -8,7 +8,7 @@ use std::io::Result;
 use std::sync::{Arc, Mutex, RwLock};
 
 use fnv::FnvHashMap;
-use pi_lib::atom::Atom;
+use atom::Atom;
 
 use mqtt3;
 use mqtt3::LastWill;
@@ -20,7 +20,7 @@ use mqtt::util;
 use net::{Socket, Stream};
 use net::timer::{NetTimers, TimerCallback};
 
-use pi_base::util::{compress, uncompress, CompressLevel};
+use util::{compress, uncompress, CompressLevel};
 use traits::RPCClientTraits;
 
 #[derive(Clone)]

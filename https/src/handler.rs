@@ -5,8 +5,8 @@ use http::StatusCode;
 use hyper::body::Body;
 use npnc::ConsumeError;
 
-use pi_lib::atom::Atom;
-use pi_base::task::TaskType;
+use atom::Atom;
+use worker::task::TaskType;
 
 use request::Request;
 use response::Response;

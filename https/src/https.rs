@@ -14,10 +14,10 @@ use hyper::service::{NewService, Service};
 
 use http::StatusCode;
 
-use pi_base::task::TaskType;
-use pi_base::pi_base_impl::cast_ext_task;
-use pi_base::future_pool::FutTaskPool;
-use pi_lib::atom::Atom;
+use worker::task::TaskType;
+use worker::impls::cast_ext_task;
+use future::future_pool::FutTaskPool;
+use atom::Atom;
 
 use request::Request;
 use response::Response;

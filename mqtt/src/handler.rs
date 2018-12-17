@@ -1,6 +1,6 @@
 use std::sync::{Arc};
 
-use pi_lib::atom::Atom;
+use atom::Atom;
 use session::Session;
 
 /*

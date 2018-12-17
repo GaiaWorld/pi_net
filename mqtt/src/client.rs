@@ -12,7 +12,7 @@ use net::timer::{NetTimers, TimerCallback};
 use net::{Socket, Stream};
 use util;
 
-use pi_lib::atom::Atom;
+use atom::Atom;
 
 pub struct ClientNodeImpl {
     socket: Option<Socket>,

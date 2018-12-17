@@ -1,5 +1,5 @@
 use mio_extras::timer::{Timeout, Timer, Builder};
-use pi_lib::atom::Atom;
+use atom::Atom;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -93,7 +93,7 @@ impl NetTimers<TimerCallback> {
 
 #[cfg(test)]
 mod test {
-    use pi_lib::atom::Atom;
+    use atom::Atom;
     //use std::sync::Arc;
     use std::thread;
     use std::time::Duration;

@@ -18,8 +18,8 @@ use headers::{self, HeaderMap};
 
 use plugin::Extensible;
 
-use pi_base::task::TaskType;
-use pi_lib::atom::Atom;
+use worker::task::TaskType;
+use atom::Atom;
 
 use https::Protocol;
 
