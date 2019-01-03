@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::boxed::FnBox;
 use std::time::Duration;
+use std::sync::atomic::AtomicUsize;
 use std::net::{SocketAddr, ToSocketAddrs};
 
 use futures::*;
@@ -15,7 +16,7 @@ use hyper::service::{NewService, Service};
 use http::StatusCode;
 
 use worker::task::TaskType;
-use worker::impls::cast_ext_task;
+use worker::impls::cast_net_task;
 use future::future_pool::FutTaskPool;
 use atom::Atom;
 
@@ -24,6 +25,11 @@ use response::Response;
 use handler::Handler;
 
 use {HttpRequest, HttpResponse};
+
+/*
+* https异步任务优先级
+*/
+const HTTPS_ASYNC_TASK_PRIORITY: usize = 100;
 
 /*
 * http协议
@@ -85,7 +91,7 @@ impl<H: Handler> Https<H> {
             keep_alive: Some(Duration::from_millis(keep_alive_timeout)),
             handler: Arc::new(handler),
             handle_timeout: handle_timeout,
-            pool: FutTaskPool::new(cast_ext_task),
+            pool: FutTaskPool::new(cast_net_task),
         }
     }
 
@@ -123,10 +129,10 @@ impl<H: Handler> Service for HttpsHandler<H> {
         let proto = self.protocol.clone();
         let handler = self.handler.clone();
 
-        let callback = Box::new(move |executor: fn(TaskType, u64, Box<FnBox()>, Atom), 
-                                    sender: Arc<Producer<Result<HttpResponse<Self::ResBody>, Self::Error>>>, 
-                                    receiver: Arc<Consumer<task::Task>>, uid: usize| {
-            let func = Box::new(move || {
+        let callback = Box::new(move |executor: fn(TaskType, usize, Option<isize>, Box<FnBox(Option<isize>)>, Atom) -> Option<isize>,
+                                                            sender: Arc<Producer<Result<HttpResponse<Self::ResBody>, Self::Error>>>,
+                                                            receiver: Arc<Consumer<task::Task>>, uid: usize| {
+            let func = Box::new(move |_lock| {
                 match Request::from_http(executor, request, addr, &proto, uid) {
                     Err(e) => println!("Https Service Task Parse Request Failed, e: {}", e),
                     Ok(req) => {
@@ -183,7 +189,7 @@ impl<H: Handler> Service for HttpsHandler<H> {
                     },
                 }
             });
-            executor(TaskType::Sync, 1000000, func, Atom::from("https service before task"));
+            executor(TaskType::Async(false), HTTPS_ASYNC_TASK_PRIORITY, None, func, Atom::from("https service before task"));
         });
         Box::new(self.pool.spawn(callback, self.handle_timeout))
     }

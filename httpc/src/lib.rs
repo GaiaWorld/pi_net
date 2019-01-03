@@ -21,7 +21,12 @@ use reqwest::{ClientBuilder, Client, Certificate, Identity, Proxy, RedirectPolic
 
 use atom::Atom;
 use worker::task::TaskType;
-use worker::impls::cast_ext_task;
+use worker::impls::cast_net_task;
+
+/*
+* http客户端异步任务优先级
+*/
+const HTTPC_ASYNC_TASK_PRIORITY: usize = 100;
 
 /*
 * http客户端选项
@@ -291,20 +296,20 @@ impl SharedHttpc for HttpClient {
 
     fn get<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self>, Result<HttpClientResponse>)>) {
         let copy = client.clone();
-        let func = move || {
+        let func = move |_lock| {
             let get = &mut copy.inner.get((*url).as_str());
             request(copy, get, body, callback);
         };
-        cast_ext_task(TaskType::Sync, 10000000, Box::new(func), Atom::from("httpc normal get request task"));
+        cast_net_task(TaskType::Async(false), HTTPC_ASYNC_TASK_PRIORITY, None, Box::new(func), Atom::from("httpc normal get request task"));
     }
 
     fn post<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self>, Result<HttpClientResponse>)>) {
         let copy = client.clone();
-        let func = move || {
+        let func = move |_lock| {
             let post = &mut copy.inner.post((*url).as_str());
             request(copy, post, body, callback);
         };
-        cast_ext_task(TaskType::Sync, 10000000, Box::new(func), Atom::from("httpc normal post request task"));
+        cast_net_task(TaskType::Async(false), HTTPC_ASYNC_TASK_PRIORITY, None, Box::new(func), Atom::from("httpc normal post request task"));
     }
 
     fn headers_size(&self) -> usize {

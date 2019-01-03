@@ -1,7 +1,9 @@
 #![feature(fnbox)]
 
-extern crate pi_lib;
-extern crate pi_base;
+extern crate atom;
+extern crate worker;
+extern crate file as lib_file;
+extern crate future;
 
 extern crate http;
 extern crate modifier;
@@ -14,15 +16,15 @@ use http::StatusCode;
 
 use modifier::Set;
 
-use pi_lib::atom::Atom;
-use pi_base::pi_base_impl::{STORE_TASK_POOL, EXT_TASK_POOL};
-use pi_base::worker_pool::WorkerPool;
+use atom::Atom;
+use worker::worker_pool::WorkerPool;
+use worker::impls::{STORE_WORKER_WALKER, NET_WORKER_WALKER, STORE_TASK_POOL, NET_TASK_POOL};
 
 use https::Plugin;
 use https::https_impl::start_http;
 use https::request::Request;
 use https::response::Response;
-use https::handler::{HttpsResult, Handler, Chain};
+use https::handler::{HttpsResult, Handler};
 use https::mount::Mount;
 use https::file::StaticFile;
 use https::files::StaticFileBatch;
@@ -31,10 +33,10 @@ use https::params::{Params, Value};
 
 #[test]
 fn test_https() {
-    let store_pool = Box::new(WorkerPool::new(10, 1024 * 1024, 10000));
+    let store_pool = Box::new(WorkerPool::new(8, 1024 * 1024, 10000, STORE_WORKER_WALKER.clone()));
     store_pool.run(STORE_TASK_POOL.clone());
-    let ext_pool = Box::new(WorkerPool::new(10, 1024 * 1024, 10000));
-    ext_pool.run(EXT_TASK_POOL.clone());
+    let ext_pool = Box::new(WorkerPool::new(8, 1024 * 1024, 10000, NET_WORKER_WALKER.clone()));
+    ext_pool.run(NET_TASK_POOL.clone());
     
     struct Test;
 

@@ -11,7 +11,7 @@ use path_absolutize::*;
 
 use worker::task::TaskType;
 use worker::impls::cast_store_task;
-use lib_file::file::{AsynFileOptions, WriteOptions, Shared, AsyncFile, SharedFile};
+use lib_file::file::{AsyncFileOptions, WriteOptions, Shared, AsyncFile, SharedFile};
 use atom::Atom;
 
 use Plugin;
@@ -20,6 +20,11 @@ use request::Request;
 use response::Response;
 use handler::{HttpsError, HttpsResult, Handler};
 use params::{Params, Value};
+
+/*
+* https文件上传任务优先级
+*/
+const HTTPS_ASYNC_FILE_UPLOAD_PRIORITY: usize = 100;
 
 /*
 * 文件移除方法标记
@@ -161,7 +166,7 @@ fn async_save_file(req: Request, res: Response, path: PathBuf, content: Vec<u8>)
             },
         }
     });
-    AsyncFile::open(path, AsynFileOptions::TruncateWrite(1), open);
+    AsyncFile::open(path, AsyncFileOptions::TruncateWrite(1), open);
 }
 
 //异步操作文件错误
@@ -171,10 +176,10 @@ fn async_reply_error(req: Request, mut res: Response, err: IOError) {
             match e {
                 ConsumeError::Empty => {
                     //未准备好，则继续异步等待返回错误
-                    let func = Box::new(move || {
+                    let func = Box::new(move |_lock| {
                         async_reply_error(req, res, err);
                     });
-                    cast_store_task(TaskType::Sync, 3000003, func, Atom::from("async reply failed task"));
+                    cast_store_task(TaskType::Async(false), HTTPS_ASYNC_FILE_UPLOAD_PRIORITY, None, func, Atom::from("async reply failed task"));
                 },
                 _ => println!("!!!> Upload File Error, task wakeup failed, task id: {}, err: {:?}", req.uid, err),
             }
@@ -197,10 +202,10 @@ fn async_reply_ok(req: Request, mut res: Response) {
             match e {
                 ConsumeError::Empty => {
                     //未准备好，则继续异步等待返回成功
-                    let func = Box::new(move || {
+                    let func = Box::new(move |_lock| {
                         async_reply_ok(req, res);
                     });
-                    cast_store_task(TaskType::Sync, 3000003, func, Atom::from("async reply ok task"));
+                    cast_store_task(TaskType::Async(false), HTTPS_ASYNC_FILE_UPLOAD_PRIORITY, None, func, Atom::from("async reply ok task"));
                 },
                 _ => println!("!!!> Upload File Ok, task wakeup failed, task id: {}, e: {:?}", req.uid, e),
             }

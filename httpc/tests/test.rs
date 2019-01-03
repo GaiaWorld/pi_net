@@ -1,7 +1,7 @@
 #![feature(fnbox)]
 
-extern crate pi_lib;
-extern crate pi_base;
+extern crate atom;
+extern crate worker;
 extern crate httpc;
 
 use std::thread;
@@ -9,16 +9,16 @@ use std::fs::File;
 use std::io::Result;
 use std::boxed::FnBox;
 
-use pi_lib::atom::Atom;
-use pi_base::worker_pool::WorkerPool;
-use pi_base::pi_base_impl::EXT_TASK_POOL;
+use atom::Atom;
+use worker::worker_pool::WorkerPool;
+use worker::impls::{NET_WORKER_WALKER, NET_TASK_POOL};
 
 use httpc::{HttpClientOptions, SharedHttpc, SharedHttpClient, HttpClient, HttpClientBody, HttpClientResponse};
 
 #[test]
 fn test_httpc_basic() {
-    let worker_pool = Box::new(WorkerPool::new(10, 1024 * 1024, 30000));
-    worker_pool.run(EXT_TASK_POOL.clone());
+    let worker_pool = Box::new(WorkerPool::new(8, 1024 * 1024, 30000, NET_WORKER_WALKER.clone()));
+    worker_pool.run(NET_TASK_POOL.clone());
 
     let r = HttpClient::create(HttpClientOptions::Default);
     assert!(r.is_ok());
@@ -61,7 +61,7 @@ fn test_httpc_basic() {
         }
     }));
 
-    let r = File::open(r"E:\rust\git\pi_net\test.txt");
+    let r = File::open(r"E:\rust\pi\pi_net\httpc\tests\test.txt");
     assert!(r.is_ok());
     let file = r.unwrap();
     let body = HttpClientBody::body(file);
@@ -78,7 +78,7 @@ fn test_httpc_basic() {
 
     let mut json = HttpClientBody::json(Atom::from("x"), "Hello".to_string());
     json.add_json_kv(Atom::from("y"), "Hello".to_string());
-    HttpClient::get(&mut client, Atom::from("http://www.baidu.com"), json, Box::new(move |client: SharedHttpClient, result: Result<HttpClientResponse>| {
+    HttpClient::get(&mut client, Atom::from("http://www.baidu.com"), json, Box::new(move |_client: SharedHttpClient, result: Result<HttpClientResponse>| {
         match result {
             Err(s) => println!("!!!!!!reason: {}", s),
             Ok(mut resp) => {
@@ -91,8 +91,8 @@ fn test_httpc_basic() {
 
     let mut form = HttpClientBody::form(Atom::from("x"), "Hello".to_string());
     form = form.add_form_kv(Atom::from("fileName"), "test.txt".to_string())
-        .add_form_file(Atom::from("fileData"), r"E:\rust\git\pi_net\test.txt").unwrap();
-    HttpClient::get(&mut client, Atom::from("http://www.baidu.com"), form, Box::new(move |client: SharedHttpClient, result: Result<HttpClientResponse>| {
+        .add_form_file(Atom::from("fileData"), r"E:\rust\pi\pi_net\httpc\tests\test.txt").unwrap();
+    HttpClient::get(&mut client, Atom::from("http://www.baidu.com"), form, Box::new(move |_client: SharedHttpClient, result: Result<HttpClientResponse>| {
         match result {
             Err(s) => println!("!!!!!!reason: {}", s),
             Ok(mut resp) => {

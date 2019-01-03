@@ -16,7 +16,7 @@ use npnc::ConsumeError;
 
 use worker::task::TaskType;
 use worker::impls::cast_store_task;
-use lib_file::file::{AsynFileOptions, Shared, AsyncFile, SharedFile};
+use lib_file::file::{AsyncFileOptions, Shared, AsyncFile, SharedFile};
 use atom::Atom;
 
 use request::{Url, Request};
@@ -28,6 +28,11 @@ use headers;
 use handler::{HttpsError, HttpsResult, Handler};
 
 use HttpResponse;
+
+/*
+* https文件加载异步任务优先级
+*/
+const HTTPS_ASYNC_FILE_LOAD_PRIORITY: usize = 100;
 
 //文件异步打开失败
 pub const HTTPS_ASYNC_OPEN_FILE_FAILED_STATUS: u16 = 515;
@@ -161,7 +166,7 @@ fn async_load_file(req: Request, res: Response, file_path: PathBuf) {
             },
         }
     });
-    AsyncFile::open(file_path, AsynFileOptions::OnlyRead(1), open);
+    AsyncFile::open(file_path, AsyncFileOptions::OnlyRead(1), open);
 }
 
 //异步加载文件错误
@@ -171,10 +176,10 @@ fn async_load_file_error(req: Request, mut res: Response, err: IOError, err_no: 
             match e {
                 ConsumeError::Empty => {
                     //未准备好，则继续异步等待返回错误
-                    let func = Box::new(move || {
+                    let func = Box::new(move |_lock| {
                         async_load_file_error(req, res, err, err_no);
                     });
-                    cast_store_task(TaskType::Sync, 3000000, func, Atom::from("async load file failed task"));
+                    cast_store_task(TaskType::Async(false), HTTPS_ASYNC_FILE_LOAD_PRIORITY, None, func, Atom::from("async load file failed task"));
                 },
                 _ => println!("!!!> Https Async Load File Error, task wakeup failed, task id: {}, err: {:?}, e: {:?}", req.uid, err, e),
             }
@@ -197,10 +202,10 @@ fn async_load_file_ok(req: Request, mut res: Response, path: PathBuf, size: u64,
             match e {
                 ConsumeError::Empty => {
                     //未准备好，则继续异步等待返回成功
-                    let func = Box::new(move || {
+                    let func = Box::new(move |_lock| {
                         async_load_file_ok(req, res, path, size, data);
                     });
-                    cast_store_task(TaskType::Sync, 3000000, func, Atom::from("async load file ok task"));
+                    cast_store_task(TaskType::Async(false), HTTPS_ASYNC_FILE_LOAD_PRIORITY, None, func, Atom::from("async load file ok task"));
                 },
                 _ => println!("!!!> Https Async Load File Ok, task wakeup failed, task id: {}, e: {:?}", req.uid, e),
             }

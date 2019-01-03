@@ -14,6 +14,11 @@ use response::Response;
 use {Error, HttpResponse};
 
 /*
+* https异步处理任务优先级
+*/
+const HTTPS_ASYNC_HANDLE_TASK_PRIORITY: usize = 100;
+
+/*
 * http服务器结果
 */
 pub type HttpsResult<T> = Result<T, HttpsError>;
@@ -312,10 +317,10 @@ impl ChainProcess for SharedChain {
         //错误不会进入处理器，直接开始错误的异步后处理
         let executor = req.executor;
         let chain = self.clone();
-        let func = Box::new(move || {
+        let func = Box::new(move |_lock| {
             chain.fail_from_after(req, res, 0, err);
         });
-        executor(TaskType::Sync, 1000000, func, Atom::from("https service after task"));
+        executor(TaskType::Async(false), HTTPS_ASYNC_HANDLE_TASK_PRIORITY, None, func, Atom::from("https service after task"));
     }
 
     fn fail_from_after(&self, mut req: Request, mut res: Response, index: usize, mut err: HttpsError) {
@@ -369,7 +374,7 @@ impl ChainProcess for SharedChain {
             //有预处理，则异步执行handler
             let executor = req.executor;
             let chain = self.clone();
-            let func = Box::new(move || {
+            let func = Box::new(move |_lock| {
                 match chain.handler.as_ref().unwrap().handle(req, res) {
                     None => (), //异步处理，并中断后处理
                     Some((r, q, reply)) => {
@@ -380,7 +385,7 @@ impl ChainProcess for SharedChain {
                     },
                 }
             });
-            executor(TaskType::Sync, 1000000, func, Atom::from("https service handler task"));
+            executor(TaskType::Async(false), HTTPS_ASYNC_HANDLE_TASK_PRIORITY, None, func, Atom::from("https service handler task"));
         } else {
             //无预处理，则同步执行handler
             match self.handler.as_ref().unwrap().handle(req, res) {
@@ -403,7 +408,7 @@ impl ChainProcess for SharedChain {
             //有后处理，则开始异步后处理
             let executor = req.executor;
             let chain = self.clone();
-            let func = Box::new(move || {
+            let func = Box::new(move |_lock| {
                 //按顺序执行后处理
                 for (i, after) in chain.afters[index..].iter().enumerate() {
                     res = match after.after(req, res) {
@@ -421,14 +426,14 @@ impl ChainProcess for SharedChain {
                 //后处理完成，返回结果
                 chain.reply(req, res);
             });
-            executor(TaskType::Sync, 1000000, func, Atom::from("https service after task"));
+            executor(TaskType::Async(false), HTTPS_ASYNC_HANDLE_TASK_PRIORITY, None, func, Atom::from("https service after task"));
         }
     }
 
     fn reply(&self, req: Request, res: Response) {
         let executor = req.executor;
         let chain = self.clone();
-        let func = Box::new(move || {
+        let func = Box::new(move |_lock| {
             match res.receiver.as_ref().unwrap().consume() {
                 Err(ConsumeError::Disconnected) => println!("https service reply task wakeup failed, task id: {}", req.uid),
                 Err(ConsumeError::Empty) => {
@@ -446,6 +451,6 @@ impl ChainProcess for SharedChain {
                 }
             }
         });
-        executor(TaskType::Sync, 1000000, func, Atom::from("https service reply task"));
+        executor(TaskType::Async(false), HTTPS_ASYNC_HANDLE_TASK_PRIORITY, None, func, Atom::from("https service reply task"));
     }
 }
