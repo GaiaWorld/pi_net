@@ -17,8 +17,9 @@ use mqtt::client::ClientNode;
 use mqtt::data::{Client, ClientCallback};
 use mqtt::util;
 
-use net::{Socket, Stream};
 use net::timer::{NetTimers, TimerCallback};
+
+use net::api::{Socket, Stream};
 
 use util::{compress, uncompress, CompressLevel};
 use traits::RPCClientTraits;
@@ -70,7 +71,12 @@ impl RPCClient {
                     uncompress(&data[6..], &mut vec_).is_ok();
                     rdata.extend_from_slice(&vec_[..]);
                 }
-                _ => socket.close(true),
+                _ => {
+                    match &socket {
+                        &Socket::Raw(ref s) => s.close(true),
+                        &Socket::Tls(ref s) => s.close(true),
+                    }
+                },
             }
             let rdata = Arc::new(rdata);
             let mut handlers = handlers.lock().unwrap();
@@ -78,7 +84,12 @@ impl RPCClient {
                 Some(func) => {
                     func(Ok(rdata));
                 }
-                None => socket.close(true),
+                None => {
+                    match &socket {
+                        &Socket::Raw(ref s) => s.close(true),
+                        &Socket::Tls(ref s) => s.close(true),
+                    }
+                }
             };
             handlers.remove(&msg_id);
         };
@@ -90,7 +101,7 @@ impl RPCClient {
             .is_ok();
     }
 
-    pub fn set_stream(&self, socket: Socket, stream: Arc<RwLock<Stream>>) {
+    pub fn set_stream(&self, socket: Socket, stream: Stream) {
         self.mqtt.set_stream(socket, stream)
     }
 

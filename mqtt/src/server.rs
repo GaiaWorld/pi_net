@@ -17,7 +17,8 @@ use lib_util::uncompress;
 use data::{Server, SetAttrFun};
 use fnv::FnvHashMap;
 use mqtt3::{self, Packet};
-use net::{CloseFn, Socket, Stream};
+use net::CloseFn;
+use net::api::{Socket, Stream};
 use session;
 use util;
 
@@ -84,10 +85,15 @@ impl GrayVersion for ClientStub {
 
 impl Debug for ClientStub {
     fn fmt(&self, f: &mut Formatter) -> DebugResult {
+        let socket = match &self.socket {
+            &Socket::Raw(ref s) => s.socket,
+            &Socket::Tls(ref s) => s.socket,
+        };
+
         write!(
             f,
             "ClientStub[socket = {}, keep_alive = {}]",
-            self.socket.socket, self.keep_alive
+            socket, self.keep_alive
         )
     }
 }
@@ -148,7 +154,7 @@ impl ServerNode {
         })))
     }
     //设置连接关闭回调(遗言发布)
-    pub fn set_close_callback(&self, stream: &mut Stream, func: CloseFn) {
+    pub fn set_close_callback(&self, stream: Stream, func: CloseFn) {
         let node = self.0.clone();
         let handle = move |socket_id: usize, r: Result<()>| {
             //获取遗言消息
@@ -175,7 +181,7 @@ impl ServerNode {
 }
 
 impl Server for ServerNode {
-    fn add_stream(&self, socket: Socket, stream: Arc<RwLock<Stream>>) {
+    fn add_stream(&self, socket: Socket, stream: Stream) {
         handle_stream(self.0.clone(), socket, stream);
     }
 
@@ -243,7 +249,7 @@ impl Server for ServerNode {
 }
 
 //处理socket写入流
-fn handle_stream(node: Arc<Mutex<ServerNodeImpl>>, socket: Socket, stream: Arc<RwLock<Stream>>) {
+fn handle_stream(node: Arc<Mutex<ServerNodeImpl>>, socket: Socket, stream: Stream) {
     let s = stream.clone();
     util::recv_mqtt_packet(
         stream,
@@ -257,7 +263,7 @@ fn handle_stream(node: Arc<Mutex<ServerNodeImpl>>, socket: Socket, stream: Arc<R
 fn handle_recv(
     node: Arc<Mutex<ServerNodeImpl>>,
     socket: &Socket,
-    stream: Arc<RwLock<Stream>>,
+    stream: Stream,
     packet: Result<Packet>,
 ) {
     let n = node.clone();
@@ -269,7 +275,13 @@ fn handle_recv(
             Packet::Unsubscribe(unsub) => recv_unsub(n, socket, unsub),
             Packet::Publish(publish) => recv_publish(n, publish, socket),
             Packet::Pingreq => recv_pingreq(n, socket),
-            Packet::Disconnect => recv_disconnect(n, socket.socket),
+            Packet::Disconnect => {
+                let socket = match &socket {
+                    &Socket::Raw(s) => s.socket,
+                    &Socket::Tls(s) => s.socket,
+                };
+                recv_disconnect(n, socket)
+            },
             _ => panic!("server handle_recv: invalid packet!"),
         }
     }
@@ -277,26 +289,54 @@ fn handle_recv(
     //设置keep_alive定时器
     {
         let node = &mut node.lock().unwrap();
-        let clients = node.clients.get(&socket.socket).unwrap();
+        let id = match &socket {
+            &Socket::Raw(s) => s.socket,
+            &Socket::Tls(s) => s.socket,
+        };
+
+        let socket = socket.clone();
+        let clients = node.clients.get(&id).unwrap();
         let keep_alive = clients.keep_alive;
         if keep_alive > 0 {
             let stream = st.clone();
-            let stream = stream.read().unwrap();
-            let mut timers = stream.net_timers.write().unwrap();
-            let socket = socket.clone();
+            match &stream {
+                &Stream::Raw(ref s) => {
+                    let n = now_millis();
+                    let ss = s.read().unwrap();
+                    ss.net_timers.write().unwrap().set_timeout(
+                        Atom::from(String::from("handle_recv") + &id.to_string()),
+                        Duration::from_millis(keep_alive as u64 * 1000),
+                        Box::new(move |_src: Atom| {
+                            println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  now_millis() - n, keep_alive as u64 * 1000);
+                            //关闭连接
+                            match &socket {
+                                &Socket::Raw(ref s) => s.close(true),
+                                &Socket::Tls(ref s) => s.close(true),
+                            }
+                        }),
+                    );
+                },
+                &Stream::Tls(ref s) => {
+                    let n = now_millis();
+                    let ss = s.read().unwrap();
+                    let timers = ss.get_timers();
+                    timers.write().unwrap().set_timeout(
+                        Atom::from(String::from("handle_recv") + &id.to_string()),
+                        Duration::from_millis(keep_alive as u64 * 1000),
+                        Box::new(move |_src: Atom| {
+                            println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  now_millis() - n, keep_alive as u64 * 1000);
+                            //关闭连接
+                            match &socket {
+                                &Socket::Raw(ref s) => s.close(true),
+                                &Socket::Tls(ref s) => s.close(true),
+                            }
+                        }),
+                    );
+                },
+            }
+
             //mqtt协议要求keep_alive的1.5倍超时关闭连接
             let keep_alive = ((keep_alive as f32) * 1.5) as u64;
-
-            let n = now_millis();
-            timers.set_timeout(
-                Atom::from(String::from("handle_recv") + &socket.socket.to_string()),
-                Duration::from_millis(keep_alive as u64 * 1000),
-                Box::new(move |_src: Atom| {
-                    println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  now_millis() - n, keep_alive as u64 * 1000);
-                    //关闭连接
-                    socket.close(true);
-                }),
-            )
         }
     }
 
@@ -316,7 +356,7 @@ fn handle_recv(
 fn recv_connect(
     node: Arc<Mutex<ServerNodeImpl>>,
     socket: &Socket,
-    _stream: Arc<RwLock<Stream>>,
+    _stream: Stream,
     connect: mqtt3::Connect,
 ) {
     let mut code = mqtt3::ConnectReturnCode::Accepted;
@@ -342,7 +382,11 @@ fn recv_connect(
             queue: Arc::new(mpsc_queue(DynamicBuffer::new(32).unwrap())),
             queue_size: Arc::new(AtomicUsize::new(0)),
         });
-        node.clients.insert(socket.socket, client_stub.clone());
+        let id = match &socket {
+            &Socket::Raw(s) => s.socket,
+            &Socket::Tls(s) => s.socket,
+        };
+        node.clients.insert(id, client_stub.clone());
         //模拟客户端发送主题消息
         let name = Atom::from(String::from("$open"));
         if let Some(meta) = node.metas.get(&name) {
@@ -381,9 +425,13 @@ fn recv_sub(node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket, sub: mqtt3::Subsc
             }
         }
 
+        let id = match &socket {
+            &Socket::Raw(s) => s.socket,
+            &Socket::Tls(s) => s.socket,
+        };
         codes.push(recv_sub_impl(
             node,
-            socket.socket,
+            id,
             Atom::from(path.as_str()),
         ));
     }
@@ -466,7 +514,11 @@ fn recv_unsub(node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket, unsub: mqtt3::U
             }
         }
 
-        recv_unsub_impl(node, socket.socket, Atom::from(path.as_str()));
+        let id = match &socket {
+            &Socket::Raw(s) => s.socket,
+            &Socket::Tls(s) => s.socket,
+        };
+        recv_unsub_impl(node, id, Atom::from(path.as_str()));
     }
     util::send_unsuback(socket, unsub.pid);
 }
@@ -532,7 +584,11 @@ fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish, socke
         let node = &mut node.lock().unwrap();
         for (_, meta) in node.metas.iter() {
             if meta.topic.is_match(&topic) {
-                r = Some((node.clients.get(&socket.socket).unwrap().clone(), meta.clone()));
+                let id = match &socket {
+                    &Socket::Raw(s) => s.socket,
+                    &Socket::Tls(s) => s.socket,
+                };
+                r = Some((node.clients.get(&id).unwrap().clone(), meta.clone()));
                 break;
             }
         }

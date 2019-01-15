@@ -21,7 +21,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 
-use net::{Config, NetManager, Protocol, Socket, Stream};
+use net::{Config, NetManager, Protocol, RawSocket, RawStream};
 
 fn handle_close(stream_id: usize, reason: Result<()>) {
     println!(
@@ -43,7 +43,7 @@ fn client_request(mut rpc: RPCClient) {
     )
 }
 
-fn handle_connect(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketAddr>) {
+fn handle_connect(peer: Result<(RawSocket, Arc<RwLock<RawStream>>)>, addr: Result<SocketAddr>) {
     let (socket, stream) = peer.unwrap();
     println!(
         "client handle_connect: addr = {:?}, socket:{}",

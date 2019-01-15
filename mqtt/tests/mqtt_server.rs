@@ -10,7 +10,7 @@ use std::thread;
 use mqtt::data::Server;
 use mqtt::server::{ServerNode, ClientStub};
 use mqtt3::QoS;
-use net::{Config, NetManager, Protocol, Socket, Stream};
+use net::{Config, NetManager, Protocol, RawSocket, RawStream};
 
 use pi_lib::atom::Atom;
 
@@ -44,7 +44,7 @@ fn handle_publish(server: &mut ServerNode) {
     );
 }
 
-fn handle_bind(peer: IOResult<(Socket, Arc<RwLock<Stream>>)>, addr: IOResult<SocketAddr>) {
+fn handle_bind(peer: IOResult<(RawSocket, Arc<RwLock<RawStream>>)>, addr: IOResult<SocketAddr>) {
     let (socket, stream) = peer.unwrap();
     println!(
         "server handle_bind: addr = {:?}, socket:{}",

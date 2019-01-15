@@ -5,8 +5,10 @@ use rand::{self, Rng};
 
 use mqtt3::{self, MqttRead, MqttWrite, Packet, PacketIdentifier, QoS};
 
-use net::{Socket, Stream};
+use net::api::{Socket, Stream};
 use net::net::recv;
+
+use net::wss;
 
 //LZ4_BLOCK 压缩
 pub const LZ4_BLOCK: u8 = 1;
@@ -61,7 +63,10 @@ pub fn send_unsubscribe(socket: &Socket, id: u16, topics: Vec<String>) {
 pub fn send_disconnect(socket: &Socket) {
     send_packet(socket, Packet::Disconnect);
     //关闭连接
-    socket.close(true);
+    match &socket {
+        &Socket::Raw(s) => s.close(true),
+        &Socket::Tls(s) => s.close(true),
+    }
 }
 
 pub fn send_connack(socket: &Socket, code: mqtt3::ConnectReturnCode) {
@@ -113,14 +118,17 @@ pub fn send_publish(socket: &Socket, retain: bool, _qos: QoS, topic: &str, paylo
 }
 
 //处理mqtt数据包，解析为mqtt消息
-pub fn recv_mqtt_packet(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
+pub fn recv_mqtt_packet(stream: Stream, func: MqttRecvCallback) {
     recv_header(stream, func);
 }
 
 fn send_packet(socket: &Socket, packet: Packet) {
     let mut stream = Cursor::new(Vec::new());
     stream.write_packet(&packet).unwrap();
-    socket.send(Arc::new(stream.into_inner()));
+    match socket {
+       &Socket::Raw(ref s) => s.send(Arc::new(stream.into_inner())),
+       &Socket::Tls(ref s) => s.send(Arc::new(stream.into_inner())),
+    }
     //socket.send_bin(Arc::new(stream.into_inner()));
 }
 
@@ -130,7 +138,7 @@ fn gen_client_id() -> String {
     return format!("mqtt_{}", id);
 }
 
-fn recv_header(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
+fn recv_header(stream: Stream, func: MqttRecvCallback) {
     const FIXTED_LEN: usize = 1;
     let stream2 = stream.clone();
     let handle_header;
@@ -150,13 +158,20 @@ fn recv_header(stream: Arc<RwLock<Stream>>, func: MqttRecvCallback) {
         });
     }
 
-    let r = recv(stream2, FIXTED_LEN, handle_header);
+    let r = match stream2 {
+        Stream::Raw(s) => {
+            recv(s, FIXTED_LEN, handle_header)
+        },
+        Stream::Tls(s) => {
+            wss::recv(s, FIXTED_LEN, handle_header)
+        }
+    };
     if let Some((func, data)) = r {
         func(data);
     }
 }
 
-fn recv_header2(stream: Arc<RwLock<Stream>>, packs: Vec<u8>, func: MqttRecvCallback) {
+fn recv_header2(stream: Stream, packs: Vec<u8>, func: MqttRecvCallback) {
     const FIXTED_LEN: usize = 1;
     let stream2 = stream.clone();
     let handle_header2;
@@ -178,14 +193,21 @@ fn recv_header2(stream: Arc<RwLock<Stream>>, packs: Vec<u8>, func: MqttRecvCallb
             }
         })
     }
-    let r = recv(stream2, FIXTED_LEN, handle_header2);
+    let r = match stream2 {
+        Stream::Raw(s) => {
+            recv(s, FIXTED_LEN, handle_header2)
+        },
+        Stream::Tls(s) => {
+            wss::recv(s, FIXTED_LEN, handle_header2)
+        }
+    };
     if let Some((func, data)) = r {
         func(data);
     }
 }
 
 fn recv_pack(
-    stream: Arc<RwLock<Stream>>,
+    stream: Stream,
     mut pack: Vec<u8>,
     recv_size: usize,
     mut func: MqttRecvCallback,
@@ -202,7 +224,14 @@ fn recv_pack(
         });
     }
 
-    let r = recv(stream2, recv_size, handler_pack);
+    let r = match stream2 {
+        Stream::Raw(s) => {
+            recv(s, recv_size, handler_pack)
+        },
+        Stream::Tls(s) => {
+            wss::recv(s, recv_size, handler_pack)
+        }
+    };
     if let Some((func, data)) = r {
         func(data);
     }

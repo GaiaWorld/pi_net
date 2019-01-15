@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["moyy <moyy@yineng.com>"]
 
 [dependencies]
-mio = "0.6.14"
+mio = "0.6.16"
 slab = "0.4.0"
 mio-extras = "2.0.5"
 byteorder = "1.0"
@@ -19,7 +19,11 @@ websocket = "0.20.2"
 # websocket = {path="../../rust-websocket"}
 # websocket = {path="../websocket"}
 sha1 = "0.2"
+rustls = "0.14.0"
+fnv = "1.0.6"
 base64 = "0.5"
+vecio = "0.1.0"
+
 
 [[test]]
 name = "test"

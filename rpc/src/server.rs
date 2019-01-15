@@ -17,7 +17,9 @@ use mqtt::session::Session;
 use handler::{Args, Handler};
 use traits::RPCServerTraits;
 
-use net::{CloseFn, Socket, Stream};
+use net::CloseFn;
+
+use net::api::{Socket, Stream};
 
 #[derive(Clone)]
 pub struct RPCServer {
@@ -40,11 +42,11 @@ impl RPCServer {
         self.mqtt.unset_topic_meta(topic).is_ok();
     }
     //设置连接关闭回调
-    pub fn set_close_callback(&self, stream: &mut Stream, func: CloseFn) {
+    pub fn set_close_callback(&self, stream: Stream, func: CloseFn) {
         self.mqtt.set_close_callback(stream, func)
     }
     //
-    pub fn add_stream(&self, socket: Socket, stream: Arc<RwLock<Stream>>) {
+    pub fn add_stream(&self, socket: Socket, stream: Stream) {
         self.mqtt.add_stream(socket, stream)
     }
     //为连接设置初始化attr

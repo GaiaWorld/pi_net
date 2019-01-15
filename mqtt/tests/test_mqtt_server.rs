@@ -18,7 +18,7 @@ use pi_lib::atom::Atom;
 use mqtt::client::ClientNode;
 use mqtt::server::ServerNode;
 use mqtt::data::Server;
-use net::{Config, NetManager, Protocol, Socket, Stream};
+use net::{Config, NetManager, Protocol, RawSocket, RawStream};
 
 use mqtt3::{LastWill, QoS};
 use std::env;

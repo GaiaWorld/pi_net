@@ -21,10 +21,11 @@ use slab::Slab;
 
 use api::WSControlType;
 use data::{CloseFn, Config, ListenerFn, NetData, NetHandler, Protocol, RecvFn, SendClosureFn,
-           Socket, State, Stream, Websocket};
+           RawSocket, State, RawStream, Websocket};
 
 const MAX_RECV_SIZE: usize = 16 * 1024;
 
+//绑定tcp连接
 fn bind_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
     if let Ok(lisn) = TcpListener::bind(&config.addr) {
         let entry = handler.slab.vacant_entry();
@@ -46,12 +47,14 @@ fn bind_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
     }
 }
 
+//处理绑定tcp连接
 pub fn handle_bind(handler: &mut NetHandler, config: Config, func: ListenerFn) {
     match config.protocol {
         Protocol::TCP => bind_tcp(handler, config, func),
     }
 }
 
+//建立tcp连接
 pub fn connect_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
     if let Ok(s) = TcpStream::connect(&config.addr) {
         let entry = handler.slab.vacant_entry();
@@ -59,7 +62,7 @@ pub fn connect_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
 
         s.set_recv_buffer_size(MAX_RECV_SIZE).unwrap();
 
-        let mut stream = Stream::new(key, handler.recv_comings.clone(), handler.net_timers.clone());
+        let mut stream = RawStream::new(key, handler.recv_comings.clone(), handler.net_timers.clone());
         stream.interest.insert(Ready::writable());
 
         println!(
@@ -79,7 +82,7 @@ pub fn connect_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
         let data = NetData::TcpStream(stream.clone(), s);
         entry.insert(data);
 
-        let socket = Socket::new(key, handler.sender.clone());
+        let socket = RawSocket::new(key, handler.sender.clone());
 
         let param1 = Ok((socket, stream));
         let param2 = Ok(local_addr);
@@ -87,6 +90,7 @@ pub fn connect_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
     }
 }
 
+//处理tcp连接
 pub fn handle_connect(handler: &mut NetHandler, config: Config, func: ListenerFn) {
     match config.protocol {
         Protocol::TCP => connect_tcp(handler, config, func),
@@ -94,7 +98,7 @@ pub fn handle_connect(handler: &mut NetHandler, config: Config, func: ListenerFn
 }
 
 // return bool to indicate that should close the stream
-fn send_tcp(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream, v8: Arc<Vec<u8>>) -> bool {
+fn send_tcp(poll: &mut Poll, stream: &mut RawStream, mio: &mut TcpStream, v8: Arc<Vec<u8>>) -> bool {
     return match State::from_usize(stream.socket.as_ref().expect("socket not exist").state.load(Ordering::SeqCst)) {
         State::Closed => panic!("error, send_tcp must not to closed state!"),
         State::WouldClose => {
@@ -123,6 +127,7 @@ fn send_tcp(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream, v8: Arc<V
     };
 }
 
+//处理tcp发送
 pub fn handle_send(handler: &mut NetHandler, socket: usize, v8: Arc<Vec<u8>>) {
     let mut should_close = false;
     if let Some(data) = handler.slab.get_mut(socket) {
@@ -141,7 +146,8 @@ pub fn handle_send(handler: &mut NetHandler, socket: usize, v8: Arc<Vec<u8>>) {
     }
 }
 
-fn close_tcp(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream, force: bool) {
+//关闭tcp连接
+fn close_tcp(poll: &mut Poll, stream: &mut RawStream, mio: &mut TcpStream, force: bool) {
     if force || stream.send_remain_size == 0 {
         stream.socket.as_ref().expect("socket not exist").state.swap(State::Closed as usize, Ordering::SeqCst);
         stream.interest = Ready::empty();
@@ -157,6 +163,7 @@ fn close_tcp(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream, force: b
     }
 }
 
+//处理关闭tcp连接
 pub fn handle_close(handler: &mut NetHandler, socket: usize, force: bool) {
     if let Some(data) = handler.slab.get_mut(socket) {
         match data {
@@ -177,15 +184,16 @@ pub fn handle_close(handler: &mut NetHandler, socket: usize, force: bool) {
     }
 }
 
+//接受连接请求，建立tcp流，并为tcp流申请缓冲区
 fn tcp_event(mio: &mut TcpListener, recv_comings: Arc<RwLock<Vec<Token>>>, net_timers: Arc<RwLock<NetTimers<TimerCallback>>>) -> Option<NetData> {
     let (tcp_stream, _) = mio.accept().unwrap();
-    let s = Stream::new(0, recv_comings, net_timers);
+    let s = RawStream::new(0, recv_comings, net_timers);
     tcp_stream.set_recv_buffer_size(MAX_RECV_SIZE).unwrap();
     Some(NetData::TcpStream(Arc::new(RwLock::new(s)), tcp_stream))
 }
 
-// return bool indicate that should close the net imm;
-fn stream_recv(stream: &mut Stream, mio: &mut TcpStream) -> Option<Result<(RecvFn, Range<usize>)>> {
+//从tcp流上接收数据
+fn stream_recv(stream: &mut RawStream, mio: &mut TcpStream) -> Option<Result<(RecvFn, Range<usize>)>> {
     if stream.recv_callback.is_none() {
         panic!("stream_recv failed, stream.recv_callback == None");
     }
@@ -312,7 +320,8 @@ fn stream_recv(stream: &mut Stream, mio: &mut TcpStream) -> Option<Result<(RecvF
     return r;
 }
 
-fn stream_send(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream) -> bool {
+//从tcp流上发送数据
+fn stream_send(poll: &mut Poll, stream: &mut RawStream, mio: &mut TcpStream) -> bool {
     loop {
         let buf = stream.send_bufs.pop_front();
         if None == buf {
@@ -354,6 +363,7 @@ fn stream_send(poll: &mut Poll, stream: &mut Stream, mio: &mut TcpStream) -> boo
     return false;
 }
 
+//处理网络请求
 pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureFn>) {
     let mut handler = NetHandler {
         sender: sender,
@@ -361,12 +371,13 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
         poll: Poll::new().unwrap(),
         recv_comings: Arc::new(RwLock::new(Vec::<Token>::new())),
         net_timers: Arc::new(RwLock::new(NetTimers::new())),
-    };
+    }; //创建处理器
 
-    let mut events = Events::with_capacity(1024);
+    let mut events = Events::with_capacity(1024); //初始化mio事件池
 
     let one_sec = Duration::from_millis(10);
 
+    //tcp事件处理循环
     loop {
         thread::sleep(Duration::from_millis(10));
         // recv_comings
@@ -402,6 +413,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
             if let Some(data) = handler.slab.get_mut(token) {
                 match data {
                     &mut NetData::TcpServer(_, ref mut mio) => {
+                        //处理请求tcp连接事件
                         if readiness.is_readable() {
                             net_data = tcp_event(mio, handler.recv_comings.clone(), handler.net_timers.clone());
                         } else if readiness.is_writable() {
@@ -410,6 +422,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                         }
                     }
                     &mut NetData::TcpStream(ref s, ref mut mio) => {
+                        //处理tcp流接收事件
                         if readiness.is_readable() {
                             let mut is_close = false;
                             
@@ -458,6 +471,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                                         }
 
                                         func(Ok(Arc::new(v)));
+
                                     }
                                     Err(_) => {
                                         is_close = true;
@@ -514,7 +528,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
             }
 
             if let Some(k) = key {
-                let socket = Socket::new(k, handler.sender.clone());
+                let socket = RawSocket::new(k, handler.sender.clone());
                 match handler.slab.get(token).unwrap() {
                     &NetData::TcpServer(ref callback, _) => {
                         let tcp_data = handler.slab.get(k).unwrap();
@@ -567,7 +581,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
     }
 }
 
-impl Stream {
+impl RawStream {
     pub fn new(id: usize, recv_comings: Arc<RwLock<Vec<Token>>>, net_timers: Arc<RwLock<NetTimers<TimerCallback>>>) -> Self {
         let mut recv_buf = Vec::with_capacity(MAX_RECV_SIZE);
         unsafe {
@@ -618,7 +632,7 @@ impl Stream {
         self.recv_timeout = Some(Duration::from_millis(time as u64));
     }
 
-    pub fn set_socket(&mut self, socket: Socket) {
+    pub fn set_socket(&mut self, socket: RawSocket) {
         self.socket = Some(socket);
     }
 
@@ -682,11 +696,11 @@ impl Stream {
 
 
 /// websocket
-pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(RecvFn, Result<Arc<Vec<u8>>>)> {
+pub fn recv(stream: Arc<RwLock<RawStream>>, size: usize, func: RecvFn) -> Option<(RecvFn, Result<Arc<Vec<u8>>>)> {
     let stream2 = stream.clone();
     let websocket;
     let websocket_buf;
-    {   
+    {
         websocket = stream.read().unwrap().websocket.clone();
         websocket_buf = stream.read().unwrap().websocket_buf.clone();
     }
@@ -719,7 +733,7 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
             //请求握手包
             http_read_header(stream, vec![], http_func);
         },
-        
+
         Websocket::Bin(offset, len) => {
             //判断缓存中是否取完
             if len >= size {
@@ -741,7 +755,7 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                             if buf.len() >= size {
                                 let v = Vec::from(&buf[0..size]);
                                 let len = buf.len();
-                               
+
                                 //写入ws缓存
                                 stream.write().unwrap().websocket = Websocket::Bin(size, len - size);
                                 stream.write().unwrap().websocket_buf = buf;
@@ -761,7 +775,7 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                                                     .state
                                                     .compare_exchange(State::Run as usize, State::WouldClose as usize, Ordering::SeqCst, Ordering::Acquire) {
                                     //客户端通知关闭，则回应关闭
-                                    socket = s.socket.clone();              
+                                    socket = s.socket.clone();
                                 } else if let Ok(_) = s.socket.as_ref()
                                                     .expect("socket not exist")
                                                     .state
@@ -770,7 +784,7 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                                     s.socket.as_ref().expect("socket not exist").rclose(true);
                                 }
                             }
-                            
+
                             if let Some(s) = socket {
                                 if let Some(data) = close {
                                     if let Ok(bin) = data.into_bytes() {
@@ -788,8 +802,8 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
                             func(Err(Error::new(ErrorKind::Other, "not bin")));
                         }
                     }
-                    
-                    
+
+
                 });
                 //从网络中等待websocket包
                 ws_read_header(stream, ws_func);
@@ -819,7 +833,7 @@ pub fn recv(stream: Arc<RwLock<Stream>>, size: usize, func: RecvFn) -> Option<(R
 //     }
 // }
 
-impl Socket {
+impl RawSocket {
     pub fn new(id: usize, sender: Sender<SendClosureFn>) -> Self {
         Self {
             state: Arc::new(AtomicUsize::new(State::Run as usize)),
@@ -843,7 +857,7 @@ fn move_vec(v: &mut Vec<u8>, src_offset: usize, dst_offset: usize, size: usize) 
     }
 }
 
-impl GrayVersion for Socket {
+impl GrayVersion for RawSocket {
     fn get_gray(&self) -> &Option<usize>{
         &self.gray
     }

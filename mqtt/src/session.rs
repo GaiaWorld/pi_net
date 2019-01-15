@@ -8,6 +8,7 @@ use atom::Atom;
 use gray::GrayVersion;
 use server::ClientStub;
 use util;
+use net::api::Socket;
 
 #[derive(Clone, Debug)]
 pub struct Session {
@@ -76,7 +77,10 @@ impl Session {
         }
     }
     pub fn close(&self) {
-        self.client.get_socket().close(true)
+        match &self.client.get_socket() {
+            &Socket::Raw(ref s) => s.close(true),
+            &Socket::Tls(ref s) => s.close(true),
+        }
     }
 
     pub fn set_timeout(&mut self, systime: usize, timeout: u8) {

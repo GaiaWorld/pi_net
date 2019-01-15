@@ -2,7 +2,7 @@ use std::io::Result;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 
-use net::{Config, NetManager, Protocol, Socket, Stream};
+use net::{Config, NetManager, Protocol, RawSocket, RawStream};
 use net::net::recv;
 
 fn handle_close(stream_id: usize, reason: Result<()>) {
@@ -12,7 +12,7 @@ fn handle_close(stream_id: usize, reason: Result<()>) {
     );
 }
 
-fn handle_recv(socket: Socket, stream: Arc<RwLock<Stream>>, begin: usize, end: usize) {
+fn handle_recv(socket: RawSocket, stream: Arc<RwLock<RawStream>>, begin: usize, end: usize) {
     let s = stream.clone();
     let stream2 = stream.clone();
     println!("server, request recv [{}, {}]", begin, end);
@@ -53,7 +53,7 @@ fn handle_recv(socket: Socket, stream: Arc<RwLock<Stream>>, begin: usize, end: u
     }
 }
 
-fn handle_bind(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketAddr>) {
+fn handle_bind(peer: Result<(RawSocket, Arc<RwLock<RawStream>>)>, addr: Result<SocketAddr>) {
     println!("server handle_bind: addr = {:?}", addr.unwrap());
 
     let (socket, stream) = peer.unwrap();

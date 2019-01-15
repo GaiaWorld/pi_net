@@ -7,8 +7,9 @@ use mqtt3::{self, LastWill, QoS};
 
 use fnv::FnvHashMap;
 
-use net::{Socket, Stream};
 use server::{ClientStub};
+
+use net::api::{Socket, Stream};
 
 use atom::Atom;
 
@@ -18,7 +19,7 @@ pub type SetAttrFun = Box<Fn(&mut FnvHashMap<Atom, Arc<Any>>, Socket, mqtt3::Con
 // mqtt客户端接口
 pub trait Client {
     // 设置网络数据
-    fn set_stream(&self, socket: Socket, stream: Arc<RwLock<Stream>>);
+    fn set_stream(&self, socket: Socket, stream: Stream);
 
     // 创建mqtt连接
     fn connect(
@@ -60,7 +61,7 @@ pub trait Client {
 // mqtt服务器接口
 pub trait Server {
     // 设置网络数据
-    fn add_stream(&self, socket: Socket, stream: Arc<RwLock<Stream>>);
+    fn add_stream(&self, socket: Socket, stream: Stream);
 
     // 发布
     fn publish(&self, retain: bool, qos: QoS, topic: Atom, payload: Vec<u8>) -> Result<()>;

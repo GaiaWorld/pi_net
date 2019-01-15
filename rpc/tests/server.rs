@@ -11,7 +11,7 @@ use std::sync::{Arc, RwLock};
 use mqtt::data::Server;
 use mqtt::server::ServerNode;
 use mqtt::session::Session;
-use net::{Config, NetManager, Protocol, Socket, Stream};
+use net::{Config, NetManager, Protocol, RawSocket, RawStream};
 use pi_lib::handler::{Args, Handler};
 use pi_lib::gray::GrayVersion;
 use rpc::server::RPCServer;
@@ -68,7 +68,7 @@ fn handle_close(stream_id: usize, reason: Result<()>) {
 }
 
 fn handle_bind(
-    peer: Result<(Socket, Arc<RwLock<Stream>>)>,
+    peer: Result<(RawSocket, Arc<RwLock<RawStream>>)>,
     addr: Result<SocketAddr>,
     mut mqtt: ServerNode,
     mut rpc: RPCServer,

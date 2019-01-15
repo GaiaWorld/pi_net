@@ -8,15 +8,15 @@ use mqtt3::{self, LastWill, Packet, PacketIdentifier};
 
 use data::{Client, ClientCallback};
 use fnv::FnvHashMap;
+use net::api::{Socket, Stream};
 use net::timer::{NetTimers, TimerCallback};
-use net::{Socket, Stream};
 use util;
 
 use atom::Atom;
 
 pub struct ClientNodeImpl {
     socket: Option<Socket>,
-    stream: Option<Arc<RwLock<Stream>>>,
+    stream: Option<Stream>,
 
     connect_func: Option<ClientCallback>,
     close_func: Option<ClientCallback>,
@@ -33,7 +33,7 @@ pub struct ClientNodeImpl {
     topic_patterns: FnvHashMap<Atom, TopicData>,
 
     // 当socket和stream还没准备好时候的缓冲区
-    socket_handlers: VecDeque<Box<FnBox(&Socket, Arc<RwLock<Stream>>)>>,
+    socket_handlers: VecDeque<Box<FnBox(&Socket, Stream)>>,
     keep_alive: u16,
 }
 
@@ -105,13 +105,15 @@ impl ClientNode {
     pub fn get_timers(&self) -> Arc<RwLock<NetTimers<TimerCallback>>> {
         let node = self.0.lock().unwrap();
         let stream = node.stream.clone().unwrap();
-        let stream = stream.read().unwrap();
-        stream.net_timers.clone()
+        match stream {
+            Stream::Raw(s) => s.read().unwrap().net_timers.clone(),
+            Stream::Tls(s) => s.read().unwrap().get_timers(),
+        }
     }
 }
 
 impl Client for ClientNode {
-    fn set_stream(&self, socket: Socket, stream: Arc<RwLock<Stream>>) {
+    fn set_stream(&self, socket: Socket, stream: Stream) {
         let node = &mut self.0.lock().unwrap();
 
         while !node.socket_handlers.is_empty() {
@@ -138,7 +140,7 @@ impl Client for ClientNode {
         }
 
         let node = self.0.clone();
-        let func = Box::new(move |socket: &Socket, stream: Arc<RwLock<Stream>>| {
+        let func = Box::new(move |socket: &Socket, stream: Stream| {
             handle_connect(node, socket, stream, keep_alive, will);
         });
         handle_slot(self.0.clone(), func);
@@ -182,7 +184,7 @@ impl Client for ClientNode {
             }
         }
 
-        let func = Box::new(move |socket: &Socket, _stream: Arc<RwLock<Stream>>| {
+        let func = Box::new(move |socket: &Socket, _stream: Stream| {
             util::send_subscribe(socket, curr_id, topics);
         });
         handle_slot(self.0.clone(), func);
@@ -227,7 +229,7 @@ impl Client for ClientNode {
             }
         }
 
-        let func = Box::new(move |socket: &Socket, _stream: Arc<RwLock<Stream>>| {
+        let func = Box::new(move |socket: &Socket, _stream: Stream| {
             util::send_unsubscribe(socket, curr_id, topics);
         });
         handle_slot(self.0.clone(), func);
@@ -236,7 +238,7 @@ impl Client for ClientNode {
     }
 
     fn disconnect(&self) -> Result<()> {
-        let func = Box::new(move |socket: &Socket, _stream: Arc<RwLock<Stream>>| {
+        let func = Box::new(move |socket: &Socket, _stream: Stream| {
             util::send_disconnect(socket);
         });
         handle_slot(self.0.clone(), func);
@@ -266,7 +268,7 @@ impl Client for ClientNode {
             return Err(Error::new(ErrorKind::Other, "InvalidPublishTopic"));
         }
 
-        let func = Box::new(move |socket: &Socket, _stream: Arc<RwLock<Stream>>| {
+        let func = Box::new(move |socket: &Socket, _stream: Stream| {
             let topic = topic.to_string();
             util::send_publish(socket, retain, mqtt3::QoS::AtMostOnce, &topic, payload);
         });
@@ -358,7 +360,7 @@ impl Client for ClientNode {
 fn handle_connect(
     node: Arc<Mutex<ClientNodeImpl>>,
     socket: &Socket,
-    stream: Arc<RwLock<Stream>>,
+    stream: Stream,
     keep_alive: u16,
     last_will: Option<LastWill>,
 ) {
@@ -375,7 +377,7 @@ fn handle_connect(
 
 fn handle_recv(
     node: Arc<Mutex<ClientNodeImpl>>,
-    stream: Arc<RwLock<Stream>>,
+    stream: Stream,
     packet: Result<Packet>,
 ) {
     let n = node.clone();
@@ -475,7 +477,7 @@ fn recv_publish(node: Arc<Mutex<ClientNodeImpl>>, publish: mqtt3::Publish) {
     }
 }
 
-fn handle_slot(node: Arc<Mutex<ClientNodeImpl>>, func: Box<FnBox(&Socket, Arc<RwLock<Stream>>)>) {
+fn handle_slot(node: Arc<Mutex<ClientNodeImpl>>, func: Box<FnBox(&Socket, Stream)>) {
     let node = node.clone();
     {
         

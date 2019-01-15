@@ -4,6 +4,7 @@
 #![feature(pointer_methods)]
 #![feature(fn_traits)]
 #![feature(proc_macro)]
+#![feature(nll)]
 
 extern crate mio;
 extern crate slab;
@@ -17,10 +18,15 @@ extern crate sha1;
 extern crate base64;
 extern crate httparse;
 extern crate websocket;
+extern crate rustls;
+extern crate fnv;
+extern crate vecio;
 
 extern crate bitflags;
 
 
+pub mod tls;
+pub mod wss;
 pub mod net;
 pub mod api;
 pub mod data;
@@ -28,4 +34,4 @@ pub mod timer;
 pub mod ws;
 
 pub use api::NetManager;
-pub use data::{Config, Socket, Stream, Protocol, CloseFn};
+pub use data::{Config, RawSocket, RawStream, Protocol, CloseFn};

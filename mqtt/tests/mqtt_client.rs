@@ -15,7 +15,7 @@ use mqtt::data::Client;
 use pi_lib::atom::Atom;
 
 use mqtt3::{LastWill, QoS};
-use net::{Config, NetManager, Protocol, Socket, Stream};
+use net::{Config, NetManager, Protocol, RawSocket, RawStream};
 
 fn handle_close(stream_id: usize, reason: Result<()>) {
     println!(
@@ -100,7 +100,7 @@ fn subscribe_publish(client: &mut ClientNode) {
     client.publish(false,  QoS::AtMostOnce, Atom::from("testTopic4"), vec![4]);
 }
 
-fn handle_connect(peer: Result<(Socket, Arc<RwLock<Stream>>)>, addr: Result<SocketAddr>) {
+fn handle_connect(peer: Result<(RawSocket, Arc<RwLock<RawStream>>)>, addr: Result<SocketAddr>) {
     let (socket, stream) = peer.unwrap();
     println!(
         "client handle_connect: addr = {:?}, socket:{}",

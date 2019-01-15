@@ -21,18 +21,18 @@ pub type CloseFn = Box<FnBox(usize, Result<()>)>;
 // recv_callback(vec: Result<Arc<Vec<u8>>>);
 pub type RecvFn = Box<FnBox(Result<Arc<Vec<u8>>>)>;
 
-pub type ListenerFn = Box<Fn(Result<(Socket, Arc<RwLock<Stream>>)>, Result<SocketAddr>) + Send>;
+pub type ListenerFn = Box<Fn(Result<(RawSocket, Arc<RwLock<RawStream>>)>, Result<SocketAddr>) + Send>;
 
 #[derive(Clone)]
-pub struct Socket {
+pub struct RawSocket {
     pub state: Arc<AtomicUsize>,
     pub socket: usize,
     pub sender: Sender<SendClosureFn>,
     pub gray: Option<usize>,
 }
 
-unsafe impl Sync for Socket {}
-unsafe impl Send for Socket {}
+unsafe impl Sync for RawSocket {}
+unsafe impl Send for RawSocket {}
 
 pub enum Protocol {
     TCP,
@@ -50,7 +50,7 @@ pub enum Websocket {
 }
 
 // all size's unit is byte
-pub struct Stream {
+pub struct RawStream {
     pub token: Token,
     pub interest: Ready,
 
@@ -81,7 +81,7 @@ pub struct Stream {
     pub websocket: Websocket,
     pub websocket_buf: Vec<u8>,
     //socket
-    pub socket: Option<Socket>,
+    pub socket: Option<RawSocket>,
 }
 
 pub enum State {
@@ -103,7 +103,7 @@ impl State {
 
 pub enum NetData {
     TcpServer(ListenerFn, TcpListener),
-    TcpStream(Arc<RwLock<Stream>>, TcpStream),
+    TcpStream(Arc<RwLock<RawStream>>, TcpStream),
 }
 
 pub struct NetHandler {
