@@ -1,7 +1,9 @@
+use std::fs;
 use std::sync::Arc;
 use std::boxed::FnBox;
 use std::time::Duration;
 use std::sync::atomic::AtomicUsize;
+use std::io::{BufReader, Result as IoResult, ErrorKind, Error as IoError};
 use std::net::{SocketAddr, ToSocketAddrs};
 
 use futures::*;
@@ -12,6 +14,8 @@ use hyper::Server;
 use hyper::body::Body;
 use hyper::Error;
 use hyper::service::{NewService, Service};
+use rustls::internal::pemfile;
+use tokio_rustls::TlsAcceptor;
 
 use http::StatusCode;
 
@@ -102,8 +106,80 @@ impl<H: Handler> Https<H> {
         let server = Server::bind(&addr)
                             .tcp_keepalive(self.keep_alive)
                             .serve(self)
-                            .map_err(|e| eprintln!("https error: {}", e));
+                            .map_err(|e| eprintln!("http server error: {}", e));
         hyper::rt::run(server);
+    }
+
+    //配置https服务器
+    pub fn https<A: ToSocketAddrs>(mut self, addr: A, cert_path: &str, key_path: &str) {
+        let addr: SocketAddr = addr.to_socket_addrs().unwrap().next().unwrap();
+        self.local_address = Some(addr);
+
+        let tls_cfg = {
+            let certs = load_certs(cert_path).unwrap();
+            let key = load_private_key(key_path).unwrap();
+            let mut cfg = rustls::ServerConfig::new(rustls::NoClientAuth::new());
+            cfg.set_single_cert(certs, key).map_err(|e| IoError::new(ErrorKind::Other, format!("{}", e))).unwrap();
+            Arc::new(cfg)
+        };
+
+        let tcp = tokio_tcp::TcpListener::bind(&addr).unwrap();
+        let tls_acceptor = TlsAcceptor::from(tls_cfg);
+        let tls = tcp.incoming()
+            .and_then(move |s| tls_acceptor.accept(s))
+            .then(|r| match r {
+                Ok(x) => Ok::<_, IoError>(Some(x)),
+                Err(e) => {
+                    println!("!!!> Voluntary server halt due to client-connection error...");
+                    Err(e)
+                }
+            })
+            .filter_map(|x| x);
+
+        let server = Server::builder(tls)
+            .http1_keepalive(true)
+            .serve(self)
+            .map_err(|e| eprintln!("https server error: {}", e));
+        hyper::rt::run(server);
+    }
+}
+
+//加载指定证书
+fn load_certs(filename: &str) -> IoResult<Vec<rustls::Certificate>> {
+    let certfile = fs::File::open(filename).map_err(|e| {
+        IoError::new(ErrorKind::Other, format!("load certs failed, certs: {:?}, e: {:?}", filename, e))
+    })?;
+    let mut reader = BufReader::new(certfile);
+
+    pemfile::certs(&mut reader)
+        .map_err(|_| IoError::new(ErrorKind::Other,format!("failed to load certificate")))
+}
+
+//加载指定私钥
+fn load_private_key(filename: &str) -> IoResult<rustls::PrivateKey> {
+    let rsa_keys = {
+        let keyfile = fs::File::open(filename)
+            .expect("cannot open private key file");
+        let mut reader = BufReader::new(keyfile);
+        rustls::internal::pemfile::rsa_private_keys(&mut reader)
+            .expect("file contains invalid rsa private key")
+    };
+
+    let pkcs8_keys = {
+        let keyfile = fs::File::open(filename)
+            .expect("cannot open private key file");
+        let mut reader = BufReader::new(keyfile);
+        rustls::internal::pemfile::pkcs8_private_keys(&mut reader)
+            .expect("file contains invalid pkcs8 private key (encrypted keys not supported)")
+    };
+
+    if !pkcs8_keys.is_empty() {
+        //优先加载pkcs8密钥
+        Ok(pkcs8_keys[0].clone())
+    } else {
+        //否则加载rsa密钥
+        assert!(!rsa_keys.is_empty());
+        Ok(rsa_keys[0].clone())
     }
 }
 

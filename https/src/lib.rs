@@ -20,6 +20,10 @@ pub use hyper::Response as HttpResponse;
 pub use hyper::error::Result as HttpResult;
 pub use hyper::Error as HttpError;
 
+extern crate rustls;
+extern crate tokio_rustls;
+extern crate tokio_tcp;
+
 extern crate http;
 pub use http::method;
 pub use http::Method;

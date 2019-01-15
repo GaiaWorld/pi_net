@@ -29,6 +29,9 @@ tempdir = "*"
 void = "*"
 twoway= "*"
 path-absolutize = "*"
+rustls = "0.14.0"
+tokio-rustls = "0.8.1"
+tokio-tcp = "0.1.3"
 
 atom = { path = "../../pi_lib/atom" }
 file = { path = "../../pi_lib/file" }
