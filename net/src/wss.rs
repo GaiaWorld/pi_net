@@ -110,15 +110,11 @@ pub fn recv(stream: Arc<RwLock<tls::TlsStream>>, size: usize, func: RecvFn) -> O
             let stream2 = stream.clone();
             let http_func = Box::new(move |r: Result<Upgrade<Cursor<Vec<u8>>>>| {
                 match r {
-                    Err(e) => println!("!!!> WS Handshake Error, e: {:?}", e),
+                    Err(e) => println!("!!!> Wss Handshake Error, e: {:?}", e),
                     Ok(mut ws) => {
                         let stream = stream2.clone();
                         {
-                            let socket2;
-                            {
-                                let stream = &stream.read().unwrap();
-                                socket2 = stream.socket.clone();
-                            }
+                            let socket2= stream.read().unwrap().socket.clone();
                             //发送回应包
                             let send_buf = get_send_buf(&mut ws).unwrap();
                             socket2.unwrap().send_bin(Arc::new(send_buf));
@@ -235,7 +231,6 @@ pub fn read_header(stream: Arc<RwLock<tls::TlsStream>>, buf: Vec<u8>, func: Box<
             });
             match request {
                 Ok(r) => {
-                    //println!("!!!!!!valid ws connect, method: {:?}, version: {:?}, headers: {:?}", &r.subject.0, &r.version, &r.headers);
                     match validate(&r.subject.0, r.version, &r.headers) {
                         Ok(_) => {
                             func(Ok(WsUpgrade {
@@ -252,7 +247,10 @@ pub fn read_header(stream: Arc<RwLock<tls::TlsStream>>, buf: Vec<u8>, func: Box<
             };
         })
     }
-    stream.write().unwrap().wakeup_readable(0, handle_func);
+    let result = stream.write().unwrap().wakeup_readable(0, handle_func);
+    if let Some((cb, r)) = result {
+        cb(r); //同步处理唤醒后读取的数据
+    }
 }
 
 #[cfg(not(test))]
@@ -302,13 +300,20 @@ fn recv_dataframe(stream: Arc<RwLock<tls::TlsStream>>, should_be_masked: bool, c
     read_header1(stream, Box::new(move |header: WebSocketResult<dfh::DataFrameHeader>|{
         let header = match header{
             Ok(h) => h,
-            Err(e) => {cb(Err(e)); return;},
+            Err(e) => {
+                cb(Err(e));
+                return;
+            },
         };
-        stream1.write().unwrap().wakeup_readable(header.len as usize, Box::new(
+
+        let result = stream1.write().unwrap().wakeup_readable(header.len as usize, Box::new(
             move |r: Result<Arc<Vec<u8>>>| {
                 cb(DataFrame::read_dataframe_body(header, Arc::try_unwrap(r.unwrap()).unwrap(), should_be_masked));
             }
         ));
+        if let Some((cb, r)) = result {
+            cb(r); //同步处理唤醒后读取的数据
+        }
     }));
 }
 
@@ -372,7 +377,7 @@ fn next_frame(stream: Arc<RwLock<tls::TlsStream>>, mask: bool, mut buffer: Vec<D
 #[cfg(not(test))]
 fn read_header1(stream: Arc<RwLock<tls::TlsStream>>, cb: Box<FnBox(WebSocketResult<dfh::DataFrameHeader>)>){
     let stream1 = stream.clone();
-    stream.write().unwrap().wakeup_readable(2, Box::new(
+    let result = stream.write().unwrap().wakeup_readable(2, Box::new(
         move |r: Result<Arc<Vec<u8>>>| {
             let mut r = Arc::try_unwrap(r.unwrap()).unwrap();
             let byte1 = r[1];
@@ -386,36 +391,48 @@ fn read_header1(stream: Arc<RwLock<tls::TlsStream>>, cb: Box<FnBox(WebSocketResu
             match byte1 & 0x7F {
                 0...125 => {
                     if mask == 4 {
-                        stream1.write().unwrap().wakeup_readable(mask, Box::new(
+                        let result = stream1.write().unwrap().wakeup_readable(mask, Box::new(
                             move |len: Result<Arc<Vec<u8>>>| {
                                 r.extend_from_slice(len.unwrap().as_slice());
                                 cb(dfh::read_header(&mut BufReader::new(r.as_slice())));
                             }
                         ));
+                        if let Some((cb, r)) = result {
+                            cb(r); //同步处理唤醒后读取的数据
+                        }
                     }else{
                         cb(dfh::read_header(&mut BufReader::new(r.as_slice())));
                     }
                 },
                 126 => {
-                    stream1.write().unwrap().wakeup_readable(2 + mask, Box::new(
+                    let result = stream1.write().unwrap().wakeup_readable(2 + mask, Box::new(
                         move |len: Result<Arc<Vec<u8>>>| {
                             r.extend_from_slice(len.unwrap().as_slice());
                             cb(dfh::read_header(&mut BufReader::new(r.as_slice())));
                         }
                     ));
+                    if let Some((cb, r)) = result {
+                        cb(r); //同步处理唤醒后读取的数据
+                    }
                 }
                 127 => {
-                    stream1.write().unwrap().wakeup_readable(8 + mask, Box::new(
+                    let result = stream1.write().unwrap().wakeup_readable(8 + mask, Box::new(
                         move |len: Result<Arc<Vec<u8>>>| {
                             r.extend_from_slice(len.unwrap().as_slice());
                             cb(dfh::read_header(&mut BufReader::new(r.as_slice())));
                         }
                     ));
+                    if let Some((cb, r)) = result {
+                        cb(r); //同步处理唤醒后读取的数据
+                    }
                 }
                 _ => unreachable!(),
             };
         }
     ));
+    if let Some((cb, r)) = result {
+        cb(r); //同步处理唤醒后读取的数据
+    }
 }
 
 #[cfg(not(test))]

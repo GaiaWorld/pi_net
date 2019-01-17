@@ -70,7 +70,7 @@ impl tls::TlsSocket {
 #[test]
 fn test_tls() {
     let mgr = TlsManager::new(tls::MAX_TLS_RECV_SIZE);
-    let config = tls::TlsConfig::new(Protocol::TCP, "0.0.0.0:443".parse().unwrap(), "./cert.crt", "./rsa_aes_private.key");
+    let config = tls::TlsConfig::new(Protocol::TCP, "0.0.0.0:443".parse().unwrap(), "./1595835_herominer.net.pem", "./1595835_herominer.net.key");
     mgr.bind(
         config,
         Box::new(move |peer, addr| {

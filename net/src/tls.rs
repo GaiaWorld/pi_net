@@ -127,7 +127,7 @@ pub struct TlsStream {
     pub recv_timer: Option<NetTimer<mio::Token>>,           //接收定时器
 
     pub recv_buf: Vec<u8>,                                  //接收缓冲区
-    pub recv_size: usize,                                   //待接收数据大小
+    pub recv_size: usize,                                   //待接收数据大小，由外部指定
     pub recv_buf_offset: usize,                             //当前接收缓冲区的当前偏移，recv_buf_offset >= recv_callback_offset
     pub recv_callback_offset: usize,                        //最近一次接收回调的偏移
 
@@ -240,7 +240,7 @@ impl TlsStream {
             let size2 = buf_offset - cb_offset;
             self.recv_callback_offset += size2;
             return Some((func, Ok(Arc::new(param))));
-        } else if size < buf_offset - cb_offset {
+        } else if size <= buf_offset - cb_offset {
             //从已接收缓冲区中读指定大小的未读数据，并立即同步返回
             let param = self.recv_buf[cb_offset..cb_offset + size]
                 .iter()
@@ -427,7 +427,6 @@ impl TlsConnection {
 
     //从tcp流中读取密文数据并解码，然后写入tls会话读缓冲区
     fn decode_tls(&mut self, socket: &mut TcpStream) {
-        // Read some TLS data.
         let rc = self.tls_session.read_tls(socket);
         if rc.is_err() {
             let err = rc.unwrap_err();
@@ -442,12 +441,10 @@ impl TlsConnection {
         }
 
         if rc.unwrap() == 0 {
-//            println!("!!!> EOF tls stream");
             self.closing = true;
             return;
         }
 
-        // Process newly-received TLS messages.
         let processed = self.tls_session.process_new_packets();
         if processed.is_err() {
             println!("!!!> Cannot process packet: {:?}", processed);
@@ -457,7 +454,7 @@ impl TlsConnection {
     }
 
     //尝试从tls会话读缓冲区中读取明文数据
-    fn try_read(&mut self, buf: &mut [u8]) -> Result<usize> {
+    fn  try_read(&mut self, buf: &mut [u8]) -> Result<usize> {
         let r = self.tls_session.read(buf);
         if let Err(ref e) = r {
             if e.kind() == ErrorKind::Interrupted {
@@ -805,8 +802,11 @@ pub fn startup(sender: Sender<TlsExtRequest>, receiver: Receiver<TlsExtRequest>,
         //事件处理间隔
         thread::sleep(Duration::from_millis(10));
 
-        //唤醒tcp流的读写事件
-        handle_wakeup_stream(&mut handler);
+        //唤醒tcp流的可读事件
+        handle_wakeup_readable(&mut handler);
+
+        //唤醒tcp流的可写事件
+        handle_wakeup_writable(&mut handler);
 
         //处理所有已注册的令牌产生的tcp连接和tcp流事件
         handle_event(&mut handler, &mut events, recv_buff_size);
@@ -821,29 +821,33 @@ pub fn startup(sender: Sender<TlsExtRequest>, receiver: Receiver<TlsExtRequest>,
     }
 }
 
-//处理所有待唤醒tcp流的读写事件
-fn handle_wakeup_stream(handler: &mut TlsHandler) {
+//处理所有待唤醒tcp流的可读事件
+fn handle_wakeup_readable(handler: &mut TlsHandler) {
     //唤醒所有待唤醒的可读事件
     for &mio::Token(id) in handler.wait_wakeup_readable.read().unwrap().iter() {
         let mut slab = handler.slab.borrow_mut();
         let origin = slab.get_mut(id).unwrap();
         match origin {
-            &mut TlsOrigin::TcpStream(ref mut stream, ref tcp_stream, _) => {
+            &mut TlsOrigin::TcpStream(ref mut stream, ref mut tcp_stream, _) => {
                 //指定令牌的tcp流存在，则同步更新外部流的关注，并重新注册tls流的可读事件
+                let token = mio::Token(id);
                 let mut s = &mut stream.write().unwrap();
-                handler.tls_server.as_ref().unwrap().borrow().reregister_readable(&handler.poll, tcp_stream, mio::Token(id));
+                handler.tls_server.as_ref().unwrap().borrow().reregister_readable(&handler.poll, tcp_stream, token);
             }
             _ => panic!("handle wakeup readable failed, id: {}", id),
         }
     }
     handler.wait_wakeup_readable.write().unwrap().clear(); //同步清理所有待唤醒可读事件的令牌
+}
 
+//处理所有待唤醒tcp流的可写事件
+fn handle_wakeup_writable(handler: &mut TlsHandler) {
     //唤醒所有待唤醒的可写事件
     for &mio::Token(id) in handler.wait_wakeup_writable.read().unwrap().iter() {
-        let mut slab = handler.slab.borrow_mut();
-        let origin = slab.get_mut(id).unwrap();
+        let mut slab = handler.slab.borrow();
+        let origin = slab.get(id).unwrap();
         match origin {
-            &mut TlsOrigin::TcpStream(ref stream, ref tcp_stream, _) => {
+            &TlsOrigin::TcpStream(ref stream, ref tcp_stream, _) => {
                 //指定令牌的tcp流存在，则同步更新外部流的关注，并重新注册tls流的可写事件
                 let token = mio::Token(id);
                 handler.tls_server.as_ref().unwrap().borrow().reregister_writable(&handler.poll, tcp_stream, token);
@@ -938,6 +942,7 @@ fn handle_event(handler: &mut TlsHandler, events: &mut mio::Events, recv_buff_si
                     } else if readiness.is_writable() {
                         //处理可写事件
                         let result = handle_write_stream_event(&mut handler.poll, tcp_stream, stream.clone(), handler.tls_server.as_ref().unwrap().clone(), &event);
+                        println!("tls handle write stream event, token: {:?}, result: {:?}", token, result);
                         if let Some(b) = result {
                             if b {
                                 //握手后，已写入待发送缓冲区的数据，则暂时让出当前tcp流的可写事件，等待外部请求发送数据时再次唤醒当前tcp流的可写事件
@@ -1054,7 +1059,7 @@ fn handle_read_stream_event(poll: &mut mio::Poll,
                 //从tcp流中读取数据失败
                 r = Some(ReadResult::Finish(Err(e)));
             },
-            Ok(lasted_size) if stream.read().unwrap().handshake => {
+            Ok(size) if stream.read().unwrap().handshake => {
                 //从tcp流中读取数据成功，且tls会话已握手
                 let s = &mut stream.write().unwrap();
                 if s.recv_size == 0 && s.recv_buf_offset > s.recv_callback_offset {
@@ -1062,7 +1067,7 @@ fn handle_read_stream_event(poll: &mut mio::Poll,
                     let start = s.recv_callback_offset;
                     let end = s.recv_buf_offset;
                     let callback = s.recv_callback.take().unwrap();
-                    if lasted_size == 0 {
+                    if size == 0 {
                         r = Some(ReadResult::Empty);
                     } else {
                         r = Some(ReadResult::Finish(Ok((callback, start..end))));
@@ -1071,15 +1076,13 @@ fn handle_read_stream_event(poll: &mut mio::Poll,
                     let size2 = end - start;
                     s.recv_callback_offset += size2;
                 } else {
-                    //读取指定大小的数据
-                    assert!(s.recv_buf_offset - s.recv_callback_offset <= s.recv_size);
-
-                    if s.recv_buf_offset - s.recv_callback_offset == s.recv_size && s.recv_size != 0 {
+                    //读取指定大小的数据，允许读取大于指定大小的数据
+                    if size == s.recv_size && s.recv_size != 0 {
                         //已填充指定大小的缓冲区，则返回接收回调函数和本次填充的缓冲区范围
                         let start = s.recv_callback_offset;
                         let end = start + s.recv_size;
                         let callback = s.recv_callback.take().unwrap();
-                        if lasted_size == 0 {
+                        if size == 0 {
                             r = Some(ReadResult::Empty);
                         } else {
                             r = Some(ReadResult::Finish(Ok((callback, start..end))));
@@ -1089,7 +1092,7 @@ fn handle_read_stream_event(poll: &mut mio::Poll,
                     }
                 }
             },
-            Ok(0) =>{
+            Ok(0) => {
                 //从tcp流中空读，且tls会话未握手
                 r = Some(ReadResult::Empty);
             }
@@ -1122,7 +1125,7 @@ fn handle_read_stream_event(poll: &mut mio::Poll,
                     }
                 }
             },
-            Ok(0) =>{
+            Ok(0) => {
                 //从tcp流中空读，且tls会话未握手
                 r = Some(ReadResult::Empty);
             }
@@ -1166,7 +1169,7 @@ fn fill_read_buffer(poll: &mut mio::Poll,
             //读取tcp流中不超过当前缓冲区剩余大小，且外部指定大小的数据
             let begin = stream.recv_buf_offset; //缓冲区已填充位置
             let end = stream.recv_callback_offset + stream.recv_size; //需要填充的缓冲区长度
-            match tls_server.handle_read_stream(poll, tcp_stream, token,&mut stream.recv_buf[begin..end]) {
+            match tls_server.handle_read_stream(poll, tcp_stream, token,&mut stream.recv_buf[begin..]) {
                 Ok(0) => {
                     //tcp流上没有数据，则结束本次读取
                     break Ok(0);
@@ -1174,9 +1177,9 @@ fn fill_read_buffer(poll: &mut mio::Poll,
                 Ok(size) => {
                     //tcp流上有数据，则移动已读取偏移
                     stream.recv_buf_offset += size;
-                    if stream.recv_buf_offset == end {
+                    if stream.recv_buf_offset >= end {
                         //已填充外部指定大小的缓冲区，则结束本次读取
-                        break Ok(size);
+                        break Ok(stream.recv_size);
                     }
                 }
                 Err(err) => {
@@ -1265,14 +1268,16 @@ fn callback_recv(stream: Arc<RwLock<TlsStream>>, recv_callback: RecvFn, range: R
 */
 pub fn handle_send(handler: &mut TlsHandler, token_id: usize, bin: Arc<Vec<u8>>) {
     let mut is_close = false;
-    let mut slab = handler.slab.borrow_mut();
-    if let Some(origin) = slab.get_mut(token_id) {
-        match origin {
-            &mut TlsOrigin::TcpStream(ref stream, ref mut tcp_stream, _) => {
-                let mut s = stream.write().unwrap();
-                is_close = send_tcp(&handler, tcp_stream, &mut s, mio::Token(token_id), bin);
+    {
+        let mut slab = handler.slab.borrow_mut();
+        if let Some(origin) = slab.get_mut(token_id) {
+            match origin {
+                &mut TlsOrigin::TcpStream(ref stream, ref mut tcp_stream, _) => {
+                    let mut s = stream.write().unwrap();
+                    is_close = send_tcp(&handler, tcp_stream, &mut s, mio::Token(token_id), bin);
+                }
+                _ => panic!("handle send failed, tls stream not exist"),
             }
-            _ => panic!("handle send failed, tls stream not exist"),
         }
     }
 
