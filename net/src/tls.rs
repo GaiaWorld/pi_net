@@ -383,10 +383,18 @@ impl TlsConnection {
     }
 
     //tls握手
-    fn handshake(&mut self, socket: &mut TcpStream) {
+    fn handshake(&mut self,
+                 poll: &mut mio::Poll,
+                 socket: &mut TcpStream) {
+        if !self.tls_session.is_handshaking() {
+            //不在握手中，则忽略
+            return;
+        }
+
         if let Err(e) = self.tls_session.complete_io::<TcpStream>(socket) {
             if let ErrorKind::WouldBlock = e.kind() {
-                //当前阻塞，则忽略本次握手，等待下次握手
+                //当前阻塞，则忽略本次握手，则重新注册当前tcp流，等待下次握手
+                self.reregister(socket, poll);
                 return;
             }
 
@@ -636,13 +644,13 @@ impl TlsServer {
     }
 
     //处理tls握手
-    fn handle_handshake(&mut self, socket: &mut TcpStream, token: mio::Token) {
+    fn handle_handshake(&mut self, poll: &mut mio::Poll, socket: &mut TcpStream, token: mio::Token) {
         if self.connections.contains_key(&token) {
             //令牌对应的tls流存在
             self.connections
                 .get_mut(&token)
                 .unwrap()
-                .handshake(socket);
+                .handshake(poll, socket);
 
             if self.connections[&token].is_closed() {
                 self.connections.remove(&token);
@@ -938,7 +946,7 @@ fn handle_event(handler: &mut TlsHandler, events: &mut mio::Events, recv_buff_si
                     //处理读写事件
                     if !stream.read().unwrap().handshake {
                         //当前tcp流还未完成tls握手，则同步阻塞执行握手
-                        handler.tls_server.as_ref().unwrap().borrow_mut().handle_handshake(tcp_stream, token.clone());
+                        handler.tls_server.as_ref().unwrap().borrow_mut().handle_handshake(&mut handler.poll, tcp_stream, token.clone());
 
                         //检查最新的tls握手状态
                         if handler.tls_server.as_ref().unwrap().borrow().is_handshake(token.clone()) {
