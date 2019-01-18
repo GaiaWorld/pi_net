@@ -942,7 +942,6 @@ fn handle_event(handler: &mut TlsHandler, events: &mut mio::Events, recv_buff_si
                     } else if readiness.is_writable() {
                         //处理可写事件
                         let result = handle_write_stream_event(&mut handler.poll, tcp_stream, stream.clone(), handler.tls_server.as_ref().unwrap().clone(), &event);
-                        println!("tls handle write stream event, token: {:?}, result: {:?}", token, result);
                         if let Some(b) = result {
                             if b {
                                 //握手后，已写入待发送缓冲区的数据，则暂时让出当前tcp流的可写事件，等待外部请求发送数据时再次唤醒当前tcp流的可写事件
