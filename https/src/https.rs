@@ -130,7 +130,7 @@ impl<H: Handler> Https<H> {
             .then(|r| match r {
                 Ok(x) => Ok::<_, IoError>(Some(x)),
                 Err(e) => {
-                    println!("!!!> Voluntary server halt due to client-connection error...");
+                    println!("!!!> Voluntary server halt due to client-connection error, e: {:?}", e);
                     Err(e)
                 }
             })
