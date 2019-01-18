@@ -385,6 +385,11 @@ impl TlsConnection {
     //tls握手
     fn handshake(&mut self, socket: &mut TcpStream) {
         if let Err(e) = self.tls_session.complete_io::<TcpStream>(socket) {
+            if let ErrorKind::WouldBlock = e.kind() {
+                //当前阻塞，则忽略本次握手，等待下次握手
+                return;
+            }
+
             println!("!!!> Handshake failed, e: {:?}", e);
             let _ = socket.shutdown(Shutdown::Both);
             self.closed = true; //设置tls连接状态为已关闭
