@@ -387,7 +387,7 @@ impl TlsConnection {
                  poll: &mut mio::Poll,
                  socket: &mut TcpStream) {
         if !self.tls_session.is_handshaking() {
-            //不在握手中，则忽略
+            //已握手，则忽略
             return;
         }
 
@@ -419,10 +419,7 @@ impl TlsConnection {
             self.closed = true; //设置tls连接状态为已关闭
         } else {
             //如果tls连接当前未关闭或当前tls会话可写
-            if self.tls_session.is_handshaking() {
-                //tls会话正在握手，则重新注册当前tcp流
-                self.reregister(socket, poll);
-            }
+            self.reregister(socket, poll);
         }
 
         r
@@ -440,10 +437,7 @@ impl TlsConnection {
             self.closed = true; //设置tls连接状态为已关闭
         } else {
             //如果tls连接当前未关闭或当前tls会话可写，则重新注册当前tcp流
-            if self.tls_session.is_handshaking() {
-                //tls会话正在握手，则重新注册当前tcp流
-                self.reregister(socket, poll);
-            }
+            self.reregister(socket, poll);
         }
     }
 
@@ -508,7 +502,7 @@ impl TlsConnection {
                 ()
             } else {
                 //写错误，则准备关闭tls会话
-                println!("!!!> Try tls write failed: {:?}", r);
+                println!("!!!> Try tls write failed, e: {:?}", e);
                 self.closing = true;
             }
         }
@@ -529,11 +523,6 @@ impl TlsConnection {
 
     //尝试刷新tls会话写缓冲区，检查tls会话当前缓冲区是否为空，则刷新
     fn try_flush(&mut self) -> Result<()> {
-        if !self.tls_session.wants_write() {
-            //tls会话当前缓冲区为空，则忽略
-            return Ok(());
-        }
-
         let r = self.tls_session.flush();
         if r.is_err() {
             //刷新错误，则准备关闭tls会话
@@ -945,9 +934,6 @@ fn handle_event(handler: &mut TlsHandler, events: &mut mio::Events, recv_buff_si
                 &mut TlsOrigin::TcpStream(ref stream, ref mut tcp_stream, _) => {
                     //处理读写事件
                     if !stream.read().unwrap().handshake {
-                        //当前tcp流还未完成tls握手，则同步阻塞执行握手
-                        handler.tls_server.as_ref().unwrap().borrow_mut().handle_handshake(&mut handler.poll, tcp_stream, token.clone());
-
                         //检查最新的tls握手状态
                         if handler.tls_server.as_ref().unwrap().borrow().is_handshake(token.clone()) {
                             //连接已握手
