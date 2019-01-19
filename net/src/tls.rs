@@ -386,21 +386,24 @@ impl TlsConnection {
     fn handshake(&mut self,
                  poll: &mut mio::Poll,
                  socket: &mut TcpStream) {
-        if !self.tls_session.is_handshaking() {
-            //已握手，则忽略
-            return;
-        }
-
         if let Err(e) = self.tls_session.complete_io::<TcpStream>(socket) {
             if let ErrorKind::WouldBlock = e.kind() {
                 //当前阻塞，则忽略本次握手，则重新注册当前tcp流，等待下次握手
-                self.reregister(socket, poll);
                 return;
             }
 
             println!("!!!> Handshake failed, e: {:?}", e);
             let _ = socket.shutdown(Shutdown::Both);
             self.closed = true; //设置tls连接状态为已关闭
+        }
+
+        if self.closing && !self.tls_session.wants_write() {
+            //如果tls连接正在关闭或当前tls会话不可写，则立即关闭当前tcp流
+            let _ = socket.shutdown(Shutdown::Both);
+            self.closed = true; //设置tls连接状态为已关闭
+        } else {
+            //如果tls连接当前未关闭或当前tls会话可写
+            self.reregister(socket, poll);
         }
     }
 
