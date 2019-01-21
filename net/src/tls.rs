@@ -536,9 +536,9 @@ impl TlsConnection {
     }
 
     //关闭tls会话
-    fn close(&mut self) {
-        self.closing = true;
-        self.tls_session.send_close_notify(); //将会话关闭消息写入tls会话写缓冲区
+    fn close(&mut self, socket: &TcpStream) {
+        let _ = socket.shutdown(Shutdown::Both); //立即关闭当前tcp流
+        self.closed = true; //设置tls连接状态为已关闭
     }
 }
 
@@ -729,13 +729,13 @@ impl TlsServer {
     }
 
     //关闭tls流
-    fn close(&mut self, token: mio::Token) {
+    fn close(&mut self, socket: &TcpStream, token: mio::Token) {
         if self.connections.contains_key(&token) {
             //令牌对应的tls流存在
             self.connections
                 .get_mut(&token)
                 .unwrap()
-                .close();
+                .close(socket);
 
             if self.connections[&token].is_closed() {
                 self.connections.remove(&token);
@@ -1482,7 +1482,7 @@ pub fn handle_close(handler: &TlsHandler, token_id: usize, force: bool) {
             },
             &TlsOrigin::TcpStream(ref stream, ref tcp_stream, _) => {
                 //关闭指定令牌对应的tcp连接，并回调关闭成功
-                handler.tls_server.as_ref().unwrap().borrow_mut().close(mio::Token(token_id)); //关闭tls流
+                handler.tls_server.as_ref().unwrap().borrow_mut().close(tcp_stream, mio::Token(token_id)); //关闭tls流
                 close_tcp(&handler.poll, &mut stream.write().unwrap(), tcp_stream, force); //关闭tcp流
                 let close_callback = &mut stream.write().unwrap().close_callback;
                 if close_callback.is_some() {
