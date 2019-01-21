@@ -536,9 +536,18 @@ impl TlsConnection {
     }
 
     //关闭tls会话
-    fn close(&mut self, socket: &TcpStream) {
-        let _ = socket.shutdown(Shutdown::Both); //立即关闭当前tcp流
-        self.closed = true; //设置tls连接状态为已关闭
+    fn close(&mut self,
+             poll: &mio::Poll,
+             socket: &TcpStream) {
+        self.closing = true;
+        if self.closing && !self.tls_session.wants_write() {
+            //如果tls连接正在关闭并且当前tls会话不可写，则立即关闭当前tcp流
+            let _ = socket.shutdown(Shutdown::Both);
+            self.closed = true; //设置tls连接状态为已关闭
+        } else {
+            //如果tls连接当前未关闭或当前tls会话可写，则重新注册当前tcp流
+            self.reregister(socket, poll);
+        }
     }
 }
 
@@ -729,13 +738,13 @@ impl TlsServer {
     }
 
     //关闭tls流
-    fn close(&mut self, socket: &TcpStream, token: mio::Token) {
+    fn close(&mut self, poll: &mio::Poll, socket: &TcpStream, token: mio::Token) {
         if self.connections.contains_key(&token) {
             //令牌对应的tls流存在
             self.connections
                 .get_mut(&token)
                 .unwrap()
-                .close(socket);
+                .close(poll, socket);
 
             if self.connections[&token].is_closed() {
                 self.connections.remove(&token);
@@ -1482,7 +1491,7 @@ pub fn handle_close(handler: &TlsHandler, token_id: usize, force: bool) {
             },
             &TlsOrigin::TcpStream(ref stream, ref tcp_stream, _) => {
                 //关闭指定令牌对应的tcp连接，并回调关闭成功
-                handler.tls_server.as_ref().unwrap().borrow_mut().close(tcp_stream, mio::Token(token_id)); //关闭tls流
+                handler.tls_server.as_ref().unwrap().borrow_mut().close(&handler.poll, tcp_stream, mio::Token(token_id)); //关闭tls流
                 close_tcp(&handler.poll, &mut stream.write().unwrap(), tcp_stream, force); //关闭tcp流
                 let close_callback = &mut stream.write().unwrap().close_callback;
                 if close_callback.is_some() {
@@ -1511,11 +1520,11 @@ fn close_tcp(poll: &mio::Poll, stream: &mut TlsStream, tcp_stream: &TcpStream, f
             stream.socket.as_ref().unwrap().state.swap(State::Closed as usize, Ordering::SeqCst);
         }
 
-        poll.deregister(tcp_stream).unwrap();
-        println!("===> Close tcp stream {:?}, shutdown", stream.token);
-        if let Err(e) = tcp_stream.shutdown(Shutdown::Both) {
-            println!("!!!> Close tcp stream err, e: {:?}", e);
-        }
+//        poll.deregister(tcp_stream).unwrap();
+//        println!("===> Close tcp stream {:?}, shutdown", stream.token);
+//        if let Err(e) = tcp_stream.shutdown(Shutdown::Both) {
+//            println!("!!!> Close tcp stream err, e: {:?}", e);
+//        }
     } else {
         if stream.socket.is_some() {
             //tcp socket存在，则改变状态
