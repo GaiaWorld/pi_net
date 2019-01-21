@@ -1039,9 +1039,6 @@ fn handle_tls_handshake(handler: &TlsHandler, token: mio::Token) {
                 //更新tcp流的握手状态
                 stream.write().unwrap().handshake = true;
 
-                //暂时让出当前tcp流的可读事件，等待外部再次唤醒当前tcp流的可读事件
-                yield_readable(handler, stream.clone(), tcp_stream, token.clone());
-
                 //构建外部使用的socket，与内部的tls处理共享同一个tls事件循环请求发送者
                 let socket = TlsSocket::new(token.0, handler.sender.clone());
 

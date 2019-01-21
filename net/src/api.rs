@@ -37,14 +37,6 @@ impl TlsManager {
         //启动TLS线程
         let sender_copy = sender.clone();
 
-        #[cfg(not(unix))]
-        thread::Builder::new()
-            .name("TlsManagerThread".to_string())
-            .stack_size(16 * 1024 * 1024)
-            .spawn(move || {
-                tls::startup(sender_copy, receiver, recv_buff_size);
-            });
-
         thread::Builder::new()
             .name("TlsManagerThread".to_string())
             .spawn(move || {

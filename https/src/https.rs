@@ -106,7 +106,7 @@ impl<H: Handler> Https<H> {
         let server = Server::bind(&addr)
                             .tcp_keepalive(self.keep_alive)
                             .serve(self)
-                            .map_err(|e| eprintln!("http server error: {}", e));
+                            .map_err(|e| eprintln!("!!!> Http server error: {}", e));
         hyper::rt::run(server);
     }
 
@@ -137,7 +137,6 @@ impl<H: Handler> Https<H> {
             .filter_map(|x| x);
 
         let server = Server::builder(tls)
-            .http1_keepalive(true)
             .serve(self)
             .map_err(|e| eprintln!("!!!> Https server error: {}", e));
         hyper::rt::run(server);
