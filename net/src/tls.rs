@@ -872,6 +872,7 @@ fn handle_wakeup_readable(handler: &mut TlsHandler) {
 //处理所有待唤醒tcp流的可写事件
 fn handle_wakeup_writable(handler: &mut TlsHandler) {
     //唤醒所有待唤醒的可写事件
+    let mut close_list = Vec::new();
     for &mio::Token(id) in handler.wait_wakeup_writable.read().unwrap().iter() {
         let mut slab = handler.slab.borrow();
         let origin = slab.get(id).unwrap();
@@ -889,7 +890,7 @@ fn handle_wakeup_writable(handler: &mut TlsHandler) {
                         continue;
                     } else {
                         //写入tls流错误，则立即关闭当前tcp流
-                        handle_close(handler, id, true);
+                        close_list.push(id);
                     }
                 }
             }
@@ -897,6 +898,11 @@ fn handle_wakeup_writable(handler: &mut TlsHandler) {
         }
     }
     handler.wait_wakeup_writable.write().unwrap().clear(); //同步清理所有待唤醒可写事件的令牌
+
+    //关闭需要立即关闭的tcp流
+    for id in close_list {
+        handle_close(handler, id, true);
+    }
 }
 
 //处理tcp连接和tcp流写事件
