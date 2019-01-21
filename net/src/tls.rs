@@ -240,7 +240,7 @@ impl TlsStream {
             let size2 = buf_offset - cb_offset;
             self.recv_callback_offset += size2;
             return Some((func, Ok(Arc::new(param))));
-        } else if size <= buf_offset - cb_offset {
+        } else if size > 0 && size <= buf_offset - cb_offset {
             //从已接收缓冲区中读指定大小的未读数据，并立即同步返回
             let param = self.recv_buf[cb_offset..cb_offset + size]
                 .iter()
@@ -1316,7 +1316,15 @@ pub fn handle_send(handler: &mut TlsHandler, token_id: usize, bin: Arc<Vec<u8>>)
 
 //tls连接发送数据
 fn send_tcp(handler: &TlsHandler, tcp_stream: &mut TcpStream, stream: &mut TlsStream, token: mio::Token, bin: Arc<Vec<u8>>) -> bool {
-    match State::from_usize(stream.socket.as_ref().expect("tls socket not exist").state.load(Ordering::SeqCst)) {
+    let state;
+    if let Some(ref s) = &stream.socket {
+        state = s.state.load(Ordering::SeqCst);
+    } else {
+        //tls socket不存在，则发送失败
+        return false;
+    }
+
+    match State::from_usize(state) {
         State::Closed => {
             //tls socket状态为已关闭
             panic!("send tcp failed, invalid tls socket state");
@@ -1397,12 +1405,12 @@ fn fill_write_buffer(stream: Arc<RwLock<TlsStream>>,
         Err(e) => {
             if let ErrorKind::WouldBlock = e.kind() {
                 //写入tls流阻塞，则还原待发送缓冲区，返回失败，并等待下次继续写
-                println!("!!!> Handle write stream would block: already write size: {}", offset);
+                println!("!!!> Write stream would block: already write size: {}", offset);
                 stream.write().unwrap().send_bufs.push_front(buf);
                 false
             } else {
                 //写入tls流错误，则返回失败
-                println!("!!!> Handle write stream error, e:{:?}", e);
+                println!("!!!> Write stream error, e:{:?}", e);
                 false
             }
         },
