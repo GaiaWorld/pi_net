@@ -951,14 +951,6 @@ fn handle_event(handler: &mut TlsHandler, events: &mut mio::Events, recv_buff_si
                 },
                 &mut TlsOrigin::TcpStream(ref stream, ref mut tcp_stream, _) => {
                     //处理读写事件
-                    if !stream.read().unwrap().handshake {
-                        //检查最新的tls握手状态
-                        if handler.tls_server.as_ref().unwrap().borrow().is_handshake(token.clone()) {
-                            //连接已握手
-                            handshaked = true;
-                        }
-                    }
-
                     if readiness.is_readable() {
                         //处理可读事件
                         let result = handle_read_stream_event(&mut handler.poll, tcp_stream, stream.clone(), handler.tls_server.as_ref().unwrap().clone(), &event);
@@ -990,6 +982,14 @@ fn handle_event(handler: &mut TlsHandler, events: &mut mio::Events, recv_buff_si
                             //握手过程中或握手后，写错误，则准备关闭当前tcp流
                             let mio::Token(id) = event.token();
                             close_id = Some(id);
+                        }
+                    }
+
+                    if !stream.read().unwrap().handshake {
+                        //检查最新的tls握手状态
+                        if handler.tls_server.as_ref().unwrap().borrow().is_handshake(token.clone()) {
+                            //连接已握手
+                            handshaked = true;
                         }
                     }
                 },
