@@ -914,7 +914,7 @@ fn handle_wakeup_writable(handler: &mut TlsHandler) {
     }
 }
 
-//处理tcp连接和tcp流写事件
+//处理tcp连接和tcp流读写事件
 fn handle_event(handler: &mut TlsHandler, events: &mut mio::Events, recv_buff_size: usize) {
     if handler.tls_server.is_none() {
         //tls服务器还未初始化，则忽略
@@ -1519,12 +1519,6 @@ fn close_tcp(poll: &mio::Poll, stream: &mut TlsStream, tcp_stream: &TcpStream, f
             //tcp socket存在，则改变状态
             stream.socket.as_ref().unwrap().state.swap(State::Closed as usize, Ordering::SeqCst);
         }
-
-//        poll.deregister(tcp_stream).unwrap();
-//        println!("===> Close tcp stream {:?}, shutdown", stream.token);
-//        if let Err(e) = tcp_stream.shutdown(Shutdown::Both) {
-//            println!("!!!> Close tcp stream err, e: {:?}", e);
-//        }
     } else {
         if stream.socket.is_some() {
             //tcp socket存在，则改变状态

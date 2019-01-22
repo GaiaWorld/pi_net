@@ -131,7 +131,7 @@ impl<H: Handler> Https<H> {
                 Ok(x) => Ok::<_, IoError>(Some(x)),
                 Err(e) => {
                     println!("!!!> Voluntary server halt due to client-connection error, e: {:?}", e);
-                    Err(e)
+                    Ok::<_, IoError>(None)
                 }
             })
             .filter_map(|x| x);
