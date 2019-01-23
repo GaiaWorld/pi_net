@@ -823,10 +823,15 @@ fn make_config(cert_file: &str, key_file: &str) -> Arc<rustls::ServerConfig> {
 */
 pub fn startup(sender: Sender<TlsExtRequest>, receiver: Receiver<TlsExtRequest>, recv_buff_size: usize) {
     //构建处理器
+    let poll = match mio::Poll::new() {
+        Err(e) => panic!("startup tls event loop failed, e: {:?}", e),
+        Ok(p) => p,
+    };
+
     let mut handler = TlsHandler {
         sender: sender,
         slab: Arc::new(RefCell::new(Slab::<TlsOrigin>::new())),
-        poll: mio::Poll::new().unwrap(),
+        poll,
         timers: Arc::new(RwLock::new(NetTimers::new())),
         wait_wakeup_readable: Arc::new(RwLock::new(Vec::<mio::Token>::new())),
         wait_wakeup_writable: Arc::new(RwLock::new(Vec::<mio::Token>::new())),
@@ -921,7 +926,10 @@ fn handle_event(handler: &mut TlsHandler, events: &mut mio::Events, recv_buff_si
         return;
     }
 
-    handler.poll.poll(events, Some(Duration::from_millis(0))).unwrap();
+    if let Err(e) = handler.poll.poll(events, Some(Duration::from_millis(0))) {
+        panic!("!!!> Handle event error, poll failed, e: {:?}", e);
+    }
+
     for event in events.iter() {
         let token = event.token();  //当前事件令牌
         let readiness = event.readiness();

@@ -33,10 +33,10 @@ const HTTPC_ASYNC_TASK_PRIORITY: usize = 100;
 */
 pub enum HttpClientOptions {
     Default,                                                                  //默认选项
-    Normal(bool, bool, isize, u64),                                           //一般选项
-    VaildHost(PathBuf, PathBuf, String, bool, bool, isize, u64),              //安全选项，所有https连接将验证主机证书
-    Proxy(Atom, bool, bool, isize, u64),                                      //代理选项
-    ValidHostProxy(PathBuf, PathBuf, String, Atom, bool, bool, isize, u64),   //安全代理选项，所有https连接将验证主机证书
+    Normal(bool, bool, bool, isize, u64),                                     //一般选项
+    VaildHost(PathBuf, PathBuf, String, bool, bool, isize, u64),              //安全选项，所有https连接将双向验证主机证书
+    Proxy(Atom, bool, bool, bool, isize, u64),                                //代理选项
+    ValidHostProxy(PathBuf, PathBuf, String, Atom, bool, bool, isize, u64),   //安全代理选项，所有https连接将双向验证主机证书
 }
 
 /*
@@ -188,29 +188,35 @@ impl SharedHttpc for HttpClient {
                             .danger_disable_hostname_verification()
                             .build()
             },
-            HttpClientOptions::Normal(gzip, referer, count, timeout) => {
-                ClientBuilder::new()
-                            .danger_disable_hostname_verification()
-                            .gzip(gzip)
-                            .referer(referer)
-                            .redirect(if count < 0 {
-                                RedirectPolicy::none()
-                            } else {
-                                RedirectPolicy::limited(count as usize)
-                            })
-                            .timeout(Duration::from_millis(timeout))
-                            .build()
+            HttpClientOptions::Normal(https, gzip, referer, count, timeout) => {
+                let mut client = ClientBuilder::new();
+                let client = if !https {
+                    client.danger_disable_hostname_verification()
+                } else {
+                    client.enable_hostname_verification()
+                };
+
+                client
+                    .gzip(gzip)
+                    .referer(referer)
+                    .redirect(if count < 0 {
+                        RedirectPolicy::none()
+                    } else {
+                        RedirectPolicy::limited(count as usize)
+                    })
+                    .timeout(Duration::from_millis(timeout))
+                    .build()
             },
             HttpClientOptions::VaildHost(cert_file, identity_file, pk, gzip, referer, count, timeout) => {
                 let mut cert_buf = Vec::new();
                 File::open(cert_file)?.read_to_end(&mut cert_buf)?;
                 let cert = Certificate::from_der(&cert_buf).or_else(|e| {
-                    Err(Error::new(ErrorKind::Other, e.description().to_string()))
+                    Err(Error::new(ErrorKind::Other, e))
                 })?;
                 let mut identity_buf = Vec::new();
                 File::open(identity_file)?.read_to_end(&mut identity_buf)?;
                 let identity = Identity::from_pkcs12_der(&identity_buf, &pk).or_else(|e| {
-                    Err(Error::new(ErrorKind::Other, e.description().to_string()))
+                    Err(Error::new(ErrorKind::Other, e))
                 })?;
                 ClientBuilder::new()
                             .add_root_certificate(cert)
@@ -225,36 +231,43 @@ impl SharedHttpc for HttpClient {
                             .timeout(Duration::from_millis(timeout))
                             .build()
             },
-            HttpClientOptions::Proxy(proxy_url, gzip, referer, count, timeout) => {
+            HttpClientOptions::Proxy(proxy_url, https, gzip, referer, count, timeout) => {
                 let proxy = Proxy::http(&*proxy_url).or_else(|e| {
-                    Err(Error::new(ErrorKind::Other, e.description().to_string()))
+                    Err(Error::new(ErrorKind::Other, e))
                 })?;
-                ClientBuilder::new()
-                            .danger_disable_hostname_verification()
-                            .proxy(proxy)
-                            .gzip(gzip)
-                            .referer(referer)
-                            .redirect(if count < 0 {
-                                RedirectPolicy::none()
-                            } else {
-                                RedirectPolicy::limited(count as usize)
-                            })
-                            .timeout(Duration::from_millis(timeout))
-                            .build()
+
+                let mut client = ClientBuilder::new();
+                let client = if !https {
+                    client.danger_disable_hostname_verification()
+                } else {
+                    client.enable_hostname_verification()
+                };
+
+                client
+                    .proxy(proxy)
+                    .gzip(gzip)
+                    .referer(referer)
+                    .redirect(if count < 0 {
+                        RedirectPolicy::none()
+                    } else {
+                        RedirectPolicy::limited(count as usize)
+                    })
+                    .timeout(Duration::from_millis(timeout))
+                    .build()
             },
             HttpClientOptions::ValidHostProxy(cert_file, identity_file, pk, proxy_url, gzip, referer, count, timeout) => {
                 let mut cert_buf = Vec::new();
                 File::open(cert_file)?.read_to_end(&mut cert_buf)?;
                 let cert = Certificate::from_der(&cert_buf).or_else(|e| {
-                    Err(Error::new(ErrorKind::Other, e.description().to_string()))
+                    Err(Error::new(ErrorKind::Other, e))
                 })?;
                 let mut identity_buf = Vec::new();
                 File::open(identity_file)?.read_to_end(&mut identity_buf)?;
                 let identity = Identity::from_pkcs12_der(&identity_buf, &pk).or_else(|e| {
-                    Err(Error::new(ErrorKind::Other, e.description().to_string()))
+                    Err(Error::new(ErrorKind::Other, e))
                 })?;
                 let proxy = Proxy::http(&*proxy_url).or_else(|e| {
-                    Err(Error::new(ErrorKind::Other, e.description().to_string()))
+                    Err(Error::new(ErrorKind::Other, e))
                 })?;
                 ClientBuilder::new()
                             .add_root_certificate(cert)
@@ -271,7 +284,7 @@ impl SharedHttpc for HttpClient {
                             .build()
             },
         }.or_else(|e| {
-            Err(Error::new(ErrorKind::Other, e.description().to_string()))
+            Err(Error::new(ErrorKind::Other, e))
         }).and_then(|inner| {
             Ok(Arc::new(HttpClient {
                 inner: inner,

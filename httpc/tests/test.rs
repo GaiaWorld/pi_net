@@ -103,5 +103,67 @@ fn test_httpc_basic() {
         }
     }));
 
+    let r = HttpClient::create(HttpClientOptions::Normal(true, true, true, 10, 10000));
+    if let Err(ref e) = r {
+        panic!("create http client failed, e: {:?}", e);
+    }
+    let mut client = r.unwrap();
+
+    let body = HttpClientBody::body("asdfasdfasf".to_string());
+    HttpClient::get(&mut client, Atom::from("https://www.baidu.com"), body, Box::new(move |_client: SharedHttpClient, result: Result<HttpClientResponse>| {
+        match result {
+            Err(s) => println!("!!!!!!reason: {}", s),
+            Ok(mut resp) => {
+                println!("!!!!!!resp url: {}", *resp.url());
+                println!("!!!!!!resp status: {}", resp.status());
+                for key in resp.headers_keys().unwrap() {
+                    match resp.get_header(key.clone()) {
+                        None => println!("!!!!!!resp header, key: {}, value:", &*key),
+                        Some(ref vec) if vec.len() == 0 => println!("!!!!!!resp header, key: {}, value:", &*key),
+                        Some(ref vec) => {
+                            print!("!!!!!!resp header, key: {}, value: {}", &*key, &*vec[0]);
+                            for key_ in vec {
+                                print!(" {:?}", &*key_);
+                            }
+                            println!("");
+                        }
+                    }
+                }
+                println!("!!!!!!resp body: {:?}", resp.text());
+            }
+        }
+    }));
+
+    let r = HttpClient::create(HttpClientOptions::VaildHost("./ca-cert.der".into(), "./client.p12".into(), "11111111".into(), true, true, 10, 10000));
+    if let Err(ref e) = r {
+        panic!("create http client failed, e: {:?}", e);
+    }
+    let mut client = r.unwrap();
+
+    let body = HttpClientBody::body("asdfasdfasf".to_string());
+    HttpClient::get(&mut client, Atom::from("https://www.baidu.com"), body, Box::new(move |_client: SharedHttpClient, result: Result<HttpClientResponse>| {
+        match result {
+            Err(s) => println!("!!!!!!reason: {}", s),
+            Ok(mut resp) => {
+                println!("!!!!!!resp url: {}", *resp.url());
+                println!("!!!!!!resp status: {}", resp.status());
+                for key in resp.headers_keys().unwrap() {
+                    match resp.get_header(key.clone()) {
+                        None => println!("!!!!!!resp header, key: {}, value:", &*key),
+                        Some(ref vec) if vec.len() == 0 => println!("!!!!!!resp header, key: {}, value:", &*key),
+                        Some(ref vec) => {
+                            print!("!!!!!!resp header, key: {}, value: {}", &*key, &*vec[0]);
+                            for key_ in vec {
+                                print!(" {:?}", &*key_);
+                            }
+                            println!("");
+                        }
+                    }
+                }
+                println!("!!!!!!resp body: {:?}", resp.text());
+            }
+        }
+    }));
+
     thread::sleep_ms(30000);
 }
