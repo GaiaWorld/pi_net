@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use std::io::{Error as IOError, Result as IOResult};
 
 use url;
-use http::StatusCode;
+use http::header::HeaderName;
+use http::{HttpTryFrom, StatusCode, HeaderMap};
 use hyper::body::Body;
 use modifier::Set;
 use modifier::Modifier;
@@ -75,6 +76,7 @@ impl Modifier<StaticFile> for Cache {
 #[derive(Clone)]
 pub struct StaticFile {
     root: PathBuf,
+    gen_res_headers: HeaderMap,
     cache: Option<Cache>,
 }
 
@@ -120,7 +122,7 @@ impl Handler for StaticFile {
                                 format!("load file error, get file metadata failed, path: {:?}", path)))))),    //文件未找到
             Some(path) => {
                 //异步加载指定文件
-                async_load_file(req, res, path);
+                async_load_file(req, self.fill_gen_resp_headers(res), path);
                 None
             },
         }
@@ -132,8 +134,39 @@ impl StaticFile {
     pub fn new<P: Into<PathBuf>>(root: P) -> Self {
         StaticFile {
             root: root.into(),
+            gen_res_headers: HeaderMap::new(),
             cache: None
         }
+    }
+
+    //增加指定通用响应头
+    pub fn add_gen_resp_header(&mut self, key: &str, value: &str) -> usize {
+        match HeaderName::try_from(key) {
+            Err(e) => panic!("add gen response header failed, key: {:?}, value: {:?}, e: {:?}", key, value, e),
+            Ok(k) => {
+                self.gen_res_headers.append(k, (&value).parse().unwrap());
+                self.gen_res_headers.len()
+            },
+        }
+    }
+
+    //移除指定通用响应头
+    pub fn remove_gen_resp_header(&mut self, key: &str) -> usize {
+        match HeaderName::try_from(key) {
+            Err(e) => panic!("remove gen response header failed, key: {:?}, e: {:?}", key, e),
+            Ok(k) => {
+                self.gen_res_headers.remove(k);
+                self.gen_res_headers.len()
+            },
+        }
+    }
+
+    //填充通用响应头
+    fn fill_gen_resp_headers(&self, mut res: Response) -> Response {
+        for (key, value) in self.gen_res_headers.iter() {
+            res.headers.append(key.clone(), value.clone());
+        }
+        res
     }
 }
 

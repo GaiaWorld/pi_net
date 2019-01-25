@@ -5,7 +5,8 @@ use std::fs::DirEntry;
 use std::path::{Path, PathBuf};
 use std::io::{Error as IOError, Result as IOResult, ErrorKind};
 
-use http::StatusCode;
+use http::header::HeaderName;
+use http::{HttpTryFrom, StatusCode, HeaderMap};
 use hyper::body::Body;
 use modifier::Set;
 use npnc::ConsumeError;
@@ -36,6 +37,7 @@ const HTTPS_ASYNC_FILE_LOAD_PRIORITY: usize = 100;
 #[derive(Clone)]
 pub struct StaticFileBatch {
     root: PathBuf,
+    gen_res_headers: HeaderMap,
     parse_files: fn(Option<&OsStr>, path: &PathBuf, result: &mut Vec<(u64, PathBuf)>),
 }
 
@@ -98,7 +100,7 @@ impl Handler for StaticFileBatch {
         //合并解析的所有文件，并异步加载所有文件
         dir_vec.append(&mut file_vec);
         // println!("!!!!!!files: {:?}", dir_vec.to_vec().iter_mut().map(|(_, x)| x).collect::<Vec<&mut PathBuf>>());
-        async_load_files(req, res, dir_vec, 0, Vec::new(), 0);
+        async_load_files(req, self.fill_gen_resp_headers(res), dir_vec, 0, Vec::new(), 0);
         None
     }
 }
@@ -108,6 +110,7 @@ impl StaticFileBatch {
     pub fn new<P: Into<PathBuf>>(root: P) -> Self {
         StaticFileBatch {
             root: root.into(),
+            gen_res_headers: HeaderMap::new(),
             parse_files: disk_files,
         }
     }
@@ -116,8 +119,39 @@ impl StaticFileBatch {
     pub fn with<P: Into<PathBuf>>(root: P, func: fn(Option<&OsStr>, path: &PathBuf, result: &mut Vec<(u64, PathBuf)>)) -> Self {
         StaticFileBatch {
             root: root.into(),
+            gen_res_headers: HeaderMap::new(),
             parse_files: func,
         }
+    }
+
+    //增加指定通用响应头
+    pub fn add_gen_resp_header(&mut self, key: &str, value: &str) -> usize {
+        match HeaderName::try_from(key) {
+            Err(e) => panic!("add gen response header failed, key: {:?}, value: {:?}, e: {:?}", key, value, e),
+            Ok(k) => {
+                self.gen_res_headers.append(k, (&value).parse().unwrap());
+                self.gen_res_headers.len()
+            },
+        }
+    }
+
+    //移除指定通用响应头
+    pub fn remove_gen_resp_header(&mut self, key: &str) -> usize {
+        match HeaderName::try_from(key) {
+            Err(e) => panic!("remove gen response header failed, key: {:?}, e: {:?}", key, e),
+            Ok(k) => {
+                self.gen_res_headers.remove(k);
+                self.gen_res_headers.len()
+            },
+        }
+    }
+
+    //填充通用响应头
+    fn fill_gen_resp_headers(&self, mut res: Response) -> Response {
+        for (key, value) in self.gen_res_headers.iter() {
+            res.headers.append(key.clone(), value.clone());
+        }
+        res
     }
 }
 

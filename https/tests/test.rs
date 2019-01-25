@@ -102,11 +102,17 @@ fn test_https_server() {
     // options.add_route(Atom::from("/app/"), Atom::from("./app/"));
     // options.add_route(Atom::from("/"), Atom::from("/app/"));
     let mut mount = Mount::new();
-    mount.mount("/fs", StaticFileBatch::new("./app/"));
+    let mut fs = StaticFileBatch::new("./app/");
+    fs.add_gen_resp_header("Access-Control-Allow-Origin", "*");
+    let mut root = StaticFile::new("./htdocs_tls/");
+    root.add_gen_resp_header("Access-Control-Allow-Origin", "*");
+    let mut app = StaticFile::new("./app/");
+    app.add_gen_resp_header("Access-Control-Allow-Origin", "*");
+    mount.mount("/fs", fs);
     mount.mount("/test", Test); //只支持前缀匹配，/表示匹配所有
     mount.mount("/upload", FileUpload::new("./upload_tls/"));
-    mount.mount("/", StaticFile::new("./htdocs_tls/"));
-    mount.mount("/app", StaticFile::new("./app/"));
+    mount.mount("/", root);
+    mount.mount("/app", app);
     start_https(mount, Atom::from("0.0.0.0"), 443, 5000, 10000, Atom::from("./cert.crt"), Atom::from("./rsa_aes_private.key"));
     loop {
         thread::sleep_ms(30000);
