@@ -300,7 +300,8 @@ fn handle_recv(
 
         let socket = socket.clone();
         let clients = node.clients.get(&id).unwrap();
-        let keep_alive = clients.keep_alive;
+        //mqtt协议要求keep_alive的1.5倍超时关闭连接
+        let keep_alive = ((clients.keep_alive as f32) * 1.5) as u64;
         if keep_alive > 0 {
             let stream = st.clone();
             match &stream {
@@ -338,9 +339,6 @@ fn handle_recv(
                     );
                 },
             }
-
-            //mqtt协议要求keep_alive的1.5倍超时关闭连接
-            let keep_alive = ((keep_alive as f32) * 1.5) as u64;
         }
     }
 

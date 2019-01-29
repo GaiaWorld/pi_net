@@ -382,22 +382,23 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
         thread::sleep(Duration::from_millis(10));
         // recv_comings
         for &Token(id) in handler.recv_comings.read().unwrap().iter() {
-            let data = handler.slab.get_mut(id).unwrap();
-            match data {
-                &mut NetData::TcpStream(ref mut s, ref mio) => {
-                    let mut stream = &mut s.write().unwrap();
-                    stream.interest.insert(Ready::readable());
-                    // println!(
-                    //     "recv_comings stream {:?}: reregister, interest = {:?}",
-                    //     stream.token, stream.interest
-                    // );
+            if let Some(data) = handler.slab.get_mut(id) {
+                match data {
+                    &mut NetData::TcpStream(ref mut s, ref mio) => {
+                        let mut stream = &mut s.write().unwrap();
+                        stream.interest.insert(Ready::readable());
+                        // println!(
+                        //     "recv_comings stream {:?}: reregister, interest = {:?}",
+                        //     stream.token, stream.interest
+                        // );
 
-                    handler
-                        .poll
-                        .reregister(mio, stream.token, stream.interest, PollOpt::level())
-                        .unwrap();
+                        handler
+                            .poll
+                            .reregister(mio, stream.token, stream.interest, PollOpt::level())
+                            .unwrap();
+                    }
+                    _ => panic!("recv_comings failed!"),
                 }
-                _ => panic!("recv_comings failed!"),
             }
         }
         handler.recv_comings.write().unwrap().clear();

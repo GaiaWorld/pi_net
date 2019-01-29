@@ -869,15 +869,16 @@ fn handle_wakeup_readable(handler: &mut TlsHandler) {
     //唤醒所有待唤醒的可读事件
     for &mio::Token(id) in handler.wait_wakeup_readable.read().unwrap().iter() {
         let mut slab = handler.slab.borrow_mut();
-        let origin = slab.get_mut(id).unwrap();
-        match origin {
-            &mut TlsOrigin::TcpStream(ref mut stream, ref mut tcp_stream, _) => {
-                //指定令牌的tcp流存在，则同步更新外部流的关注，并重新注册tls流的可读事件
-                let token = mio::Token(id);
-                let mut s = &mut stream.write().unwrap();
-                handler.tls_server.as_ref().unwrap().borrow().reregister_readable(&handler.poll, tcp_stream, token);
+        if let Some(origin) = slab.get_mut(id) {
+            match origin {
+                &mut TlsOrigin::TcpStream(ref mut stream, ref mut tcp_stream, _) => {
+                    //指定令牌的tcp流存在，则同步更新外部流的关注，并重新注册tls流的可读事件
+                    let token = mio::Token(id);
+                    let mut s = &mut stream.write().unwrap();
+                    handler.tls_server.as_ref().unwrap().borrow().reregister_readable(&handler.poll, tcp_stream, token);
+                }
+                _ => panic!("handle wakeup readable failed, id: {}", id),
             }
-            _ => panic!("handle wakeup readable failed, id: {}", id),
         }
     }
     handler.wait_wakeup_readable.write().unwrap().clear(); //同步清理所有待唤醒可读事件的令牌
@@ -889,26 +890,27 @@ fn handle_wakeup_writable(handler: &mut TlsHandler) {
     let mut close_list = Vec::new();
     for &mio::Token(id) in handler.wait_wakeup_writable.read().unwrap().iter() {
         let mut slab = handler.slab.borrow();
-        let origin = slab.get(id).unwrap();
-        match origin {
-            &TlsOrigin::TcpStream(ref stream, ref tcp_stream, _) => {
-                //指定令牌的tcp流存在，则同步更新外部流的关注，并重新注册tls流的可写事件
-                let token = mio::Token(id);
-                handler.tls_server.as_ref().unwrap().borrow().reregister_writable(&handler.poll, tcp_stream, token);
+        if let Some(origin) = slab.get(id) {
+            match origin {
+                &TlsOrigin::TcpStream(ref stream, ref tcp_stream, _) => {
+                    //指定令牌的tcp流存在，则同步更新外部流的关注，并重新注册tls流的可写事件
+                    let token = mio::Token(id);
+                    handler.tls_server.as_ref().unwrap().borrow().reregister_writable(&handler.poll, tcp_stream, token);
 
-                //将重新注册tls流可写事件的tcp流的待发送缓冲区中的首个数据，写入已握手的tls流，已保证唤醒tls流，剩余数据由唤醒的tls流完成写入
-                let buf = stream.write().unwrap().send_bufs.pop_front();
-                if let Some(bin) = buf {
-                    if fill_write_buffer(stream.clone(), handler.tls_server.as_ref().unwrap().clone(), token, bin) {
-                        //写入tls流成功，则继续
-                        continue;
-                    } else {
-                        //写入tls流错误，则立即关闭当前tcp流
-                        close_list.push(id);
+                    //将重新注册tls流可写事件的tcp流的待发送缓冲区中的首个数据，写入已握手的tls流，已保证唤醒tls流，剩余数据由唤醒的tls流完成写入
+                    let buf = stream.write().unwrap().send_bufs.pop_front();
+                    if let Some(bin) = buf {
+                        if fill_write_buffer(stream.clone(), handler.tls_server.as_ref().unwrap().clone(), token, bin) {
+                            //写入tls流成功，则继续
+                            continue;
+                        } else {
+                            //写入tls流错误，则立即关闭当前tcp流
+                            close_list.push(id);
+                        }
                     }
                 }
+                _ => panic!("handle wakeup writable failed, id: {}", id),
             }
-            _ => panic!("handle wakeup writable failed, id: {}", id),
         }
     }
     handler.wait_wakeup_writable.write().unwrap().clear(); //同步清理所有待唤醒可写事件的令牌
