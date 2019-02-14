@@ -293,55 +293,52 @@ fn handle_recv(
     //设置keep_alive定时器
     {
         let node = &mut node.lock().unwrap();
-        if node.clients.get(&id).is_none() {
-            return;
-        }
-
         let id = match &socket {
             &Socket::Raw(s) => s.socket,
             &Socket::Tls(s) => s.socket,
         };
 
         let socket = socket.clone();
-        let clients = node.clients.get(&id).unwrap();
-        //mqtt协议要求keep_alive的1.5倍超时关闭连接
-        let keep_alive = ((clients.keep_alive as f32) * 1.5) as u64;
-        if keep_alive > 0 {
-            let stream = st.clone();
-            match &stream {
-                &Stream::Raw(ref s) => {
-                    let n = now_millis();
-                    let ss = s.read().unwrap();
-                    ss.net_timers.write().unwrap().set_timeout(
-                        Atom::from(String::from("handle_recv") + &id.to_string()),
-                        Duration::from_millis(keep_alive as u64 * 1000),
-                        Box::new(move |_src: Atom| {
-                            println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  now_millis() - n, keep_alive as u64 * 1000);
-                            //关闭连接
-                            match &socket {
-                                &Socket::Raw(ref s) => s.close(true),
-                                &Socket::Tls(ref s) => s.close(true),
-                            }
-                        }),
-                    );
-                },
-                &Stream::Tls(ref s) => {
-                    let n = now_millis();
-                    let ss = s.read().unwrap();
-                    let timers = ss.get_timers();
-                    timers.write().unwrap().set_timeout(
-                        Atom::from(String::from("handle_recv") + &id.to_string()),
-                        Duration::from_millis(keep_alive as u64 * 1000),
-                        Box::new(move |_src: Atom| {
-                            println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  now_millis() - n, keep_alive as u64 * 1000);
-                            //关闭连接
-                            match &socket {
-                                &Socket::Raw(ref s) => s.close(true),
-                                &Socket::Tls(ref s) => s.close(true),
-                            }
-                        }),
-                    );
-                },
+        if let Some(clients) = node.clients.get(&id) {
+            //mqtt协议要求keep_alive的1.5倍超时关闭连接
+            let keep_alive = ((clients.keep_alive as f32) * 1.5) as u64;
+            if keep_alive > 0 {
+                let stream = st.clone();
+                match &stream {
+                    &Stream::Raw(ref s) => {
+                        let n = now_millis();
+                        let ss = s.read().unwrap();
+                        ss.net_timers.write().unwrap().set_timeout(
+                            Atom::from(String::from("handle_recv") + &id.to_string()),
+                            Duration::from_millis(keep_alive as u64 * 1000),
+                            Box::new(move |_src: Atom| {
+                                println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  now_millis() - n, keep_alive as u64 * 1000);
+                                //关闭连接
+                                match &socket {
+                                    &Socket::Raw(ref s) => s.close(true),
+                                    &Socket::Tls(ref s) => s.close(true),
+                                }
+                            }),
+                        );
+                    },
+                    &Stream::Tls(ref s) => {
+                        let n = now_millis();
+                        let ss = s.read().unwrap();
+                        let timers = ss.get_timers();
+                        timers.write().unwrap().set_timeout(
+                            Atom::from(String::from("handle_recv") + &id.to_string()),
+                            Duration::from_millis(keep_alive as u64 * 1000),
+                            Box::new(move |_src: Atom| {
+                                println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  now_millis() - n, keep_alive as u64 * 1000);
+                                //关闭连接
+                                match &socket {
+                                    &Socket::Raw(ref s) => s.close(true),
+                                    &Socket::Tls(ref s) => s.close(true),
+                                }
+                            }),
+                        );
+                    },
+                }
             }
         }
     }
