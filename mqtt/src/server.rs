@@ -293,6 +293,10 @@ fn handle_recv(
     //设置keep_alive定时器
     {
         let node = &mut node.lock().unwrap();
+        if node.clients.get(&id).is_none() {
+            return;
+        }
+
         let id = match &socket {
             &Socket::Raw(s) => s.socket,
             &Socket::Tls(s) => s.socket,

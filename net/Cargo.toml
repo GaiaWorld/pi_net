@@ -19,7 +19,7 @@ websocket = "0.20.4"
 # websocket = {path="../../rust-websocket"}
 # websocket = {path="../websocket"}
 sha1 = "0.2"
-rustls = "0.14.0"
+rustls = "0.15.1"
 fnv = "1.0.6"
 base64 = "0.5"
 vecio = "0.1.0"

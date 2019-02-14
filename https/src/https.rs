@@ -134,7 +134,9 @@ impl<H: Handler> Https<H> {
                     Ok::<_, IoError>(None)
                 }
             })
-            .filter_map(|x| x);
+            .filter_map(|x| {
+                x
+            });
 
         let server = Server::builder(tls)
             .serve(self)
