@@ -791,11 +791,11 @@ pub fn recv(stream: Arc<RwLock<RawStream>>, size: usize, func: RecvFn) -> Option
                                     if let Ok(bin) = data.into_bytes() {
                                         if let Ok(reason) = String::from_utf8(bin) {
                                             //返回客户端关闭原因
-                                            return s.send_control(WSControlType::Close(0, reason));
+                                            return s.send_control(WSControlType::Close(1000, reason));
                                         }
                                     }
                                 }
-                                s.send_control(WSControlType::Close(0, "client closed connect".to_string()));
+                                s.send_control(WSControlType::Close(1000, "client closed connect".to_string()));
                             }
                         }
                         _ => {
