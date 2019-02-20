@@ -443,7 +443,7 @@ impl HttpClientResponse{
     //获取文本格式的响应体
     pub fn text(&mut self) -> Result<String> {
         self.inner.text().or_else(|e| {
-            Err(Error::new(ErrorKind::Other, e.description().to_string()))
+            Err(Error::new(ErrorKind::Other, e))
         }).and_then(|text| {
             Ok(text)
         })
@@ -453,7 +453,7 @@ impl HttpClientResponse{
     pub fn bin(&mut self) -> Result<Vec<u8>> {
         let mut vec = Vec::new();
         self.inner.copy_to(&mut vec).or_else(|e| {
-            Err(Error::new(ErrorKind::Other, e.description().to_string()))
+            Err(Error::new(ErrorKind::Other, e))
         }).and(Ok(vec))
     }
 }
