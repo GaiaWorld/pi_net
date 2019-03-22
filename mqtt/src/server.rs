@@ -666,8 +666,11 @@ fn publish_impl(
         let atom = Atom::from(t.path.as_str());
         let has_topic = node.retain_topics.contains_key(&atom);
         if has_topic {
-            let m = node.retain_topics.get_mut(&atom).unwrap();
-            m.retain_msg = Some(payload.clone());
+            if let Some(m) = node.retain_topics.get_mut(&atom) {
+                m.retain_msg = Some(payload.clone());
+            } else {
+                return Err(Error::new(ErrorKind::Other, format!("publish impl, invalid retain topic, topic: {:?}", atom)));
+            }
         } else {
             node.retain_topics.insert(
                 topic,
@@ -682,15 +685,16 @@ fn publish_impl(
     for (_, top) in node.sub_topics.iter() {
         if top.meta.can_publish && top.path.is_match(&t) {
             for cid in top.clients.iter() {
-                let client = node.clients.get(cid).unwrap();
-                let socket = client.socket.clone();
-                util::send_publish(
-                    &socket,
-                    retain,
-                    mqtt3::QoS::AtMostOnce,
-                    t.path.as_str(),
-                    payload.clone(),
-                );
+                if let Some(client) = node.clients.get(cid) {
+                    let socket = client.socket.clone();
+                    util::send_publish(
+                        &socket,
+                        retain,
+                        mqtt3::QoS::AtMostOnce,
+                        t.path.as_str(),
+                        payload.clone(),
+                    );
+                }
             }
         }
     }
