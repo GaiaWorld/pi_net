@@ -447,8 +447,8 @@ fn recv_sub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) -> mqtt3::Su
         let topic = node.sub_topics.get_mut(&name);
         if topic.is_some() {
             let topic = topic.unwrap();
-            if topic.clients.iter().all(|e| *e != cid) {
-                topic.clients.push(cid);
+            if let None = topic.clients.iter().find(|&&e| e == cid) {
+                topic.clients.push(cid); //指定客户端没有订阅指定的主题，则订阅
             }
             return mqtt3::SubscribeReturnCodes::Success(mqtt3::QoS::AtMostOnce);
         }
@@ -641,6 +641,14 @@ fn recv_disconnect(node: Arc<Mutex<ServerNodeImpl>>, cid: usize) {
             Ok(Arc::new(new_ms)),
         );
     }
+    unsub_client(node, cid);
+}
+
+//退订指定客户端的所有订阅
+fn unsub_client(node: &mut ServerNodeImpl, cid: usize) {
+    node.sub_topics.iter_mut().map(|item| {
+        item.1.clients.retain(|e| *e != cid);
+    });
 }
 
 fn publish_impl(
@@ -674,6 +682,7 @@ fn publish_impl(
         } else {
             node.retain_topics.insert(
                 topic,
+
                 RetainTopic {
                     path: t.clone(),
                     retain_msg: Some(payload.clone()),
