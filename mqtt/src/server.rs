@@ -158,9 +158,8 @@ impl ServerNode {
         let node = self.0.clone();
         let handle = move |socket_id: usize, r: Result<()>| {
             //获取遗言消息
-            let node = node.lock().unwrap();
-            let client = node.clients.get(&socket_id).unwrap();
-            if let Some(last_will) = client.last_will.read().unwrap().clone() {
+            let mut node = node.lock().unwrap();
+            if let Some(last_will) = node.clients.get(&socket_id).unwrap().last_will.read().unwrap().clone() {
                 // let retain = last_will.retain;
                 // let qos = last_will.qos;
                 // let topic = Atom::from(last_will.topic.as_str());
@@ -174,6 +173,7 @@ impl ServerNode {
                     (meta.publish_func)(client_stub.clone(), Ok(Arc::new(payload)));
                 }
             }
+            unsub_client(&mut node, socket_id);
             func.call_box((socket_id, r));
         };
         stream.set_close_callback(Box::new(handle));
@@ -641,7 +641,6 @@ fn recv_disconnect(node: Arc<Mutex<ServerNodeImpl>>, cid: usize) {
             Ok(Arc::new(new_ms)),
         );
     }
-    unsub_client(node, cid);
 }
 
 //退订指定客户端的所有订阅
