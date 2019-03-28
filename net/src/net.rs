@@ -170,8 +170,9 @@ pub fn handle_close(handler: &mut NetHandler, socket: usize, force: bool) {
             &mut NetData::TcpServer(_, _) => panic!("invalid close: TcpServer "),
             &mut NetData::TcpStream(ref mut s, ref mut mio) => {
                 close_tcp(&mut handler.poll, &mut s.write().unwrap(), mio, force);
-                let func = s.write().unwrap().close_callback.take().unwrap();
-                func.call_box((socket, Ok(())));
+                if let Some(func) = s.write().unwrap().close_callback.take() {
+                    func.call_box((socket, Ok(())));
+                }
             }
         }
     }
