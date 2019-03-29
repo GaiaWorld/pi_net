@@ -206,19 +206,19 @@ fn stream_recv(stream: &mut RawStream, mio: &mut TcpStream) -> Option<Result<(Re
                 let begin = stream.recv_buf_offset;
                 match mio.read(&mut stream.recv_buf[begin..]) {
                     Ok(0) => {
-                        break Ok(());
+                        break Ok(0);
                     },
                     Ok(size) => {
                         stream.recv_buf_offset += size;
-                        break Ok(());
+                        break Ok(size);
                     }
                     Err(err) => {
                         if let ErrorKind::WouldBlock = err.kind() {
                             println!(
-                                "{:?} recv wouldblock, offset = {}",
+                                "{:?} recv wouldblock0, offset = {}",
                                 stream.token, stream.recv_buf_offset
                             );
-                            break Ok(());
+                            break Ok(0);
                         }
                         break Err(err);
                     }
@@ -226,23 +226,23 @@ fn stream_recv(stream: &mut RawStream, mio: &mut TcpStream) -> Option<Result<(Re
             } else {
                 let begin = stream.recv_buf_offset;
                 let end = stream.recv_callback_offset + stream.recv_size;
-                match mio.read(&mut stream.recv_buf[begin..end]) {
+                match mio.read(&mut stream.recv_buf[begin..]) {
                     Ok(size) => {
                         if size == 0 {
-                             break Ok(());
+                             break Ok(0);
                         }
                         stream.recv_buf_offset += size;
-                        if stream.recv_buf_offset == end {
-                            break Ok(());
+                        if stream.recv_buf_offset >= end {
+                            break Ok(stream.recv_size);
                         }
                     }
                     Err(err) => {
                         if let ErrorKind::WouldBlock = err.kind() {
                             println!(
-                                "{:?} recv wouldblock, offset = {}",
+                                "{:?} recv wouldblock1, offset = {}",
                                 stream.token, stream.recv_buf_offset
                             );
-                            break Ok(());
+                            break Ok(0);
                         }
                         break Err(err);
                     }
@@ -252,7 +252,7 @@ fn stream_recv(stream: &mut RawStream, mio: &mut TcpStream) -> Option<Result<(Re
         };
 
         match would_block {
-            Ok(_) => {
+            Ok(size) => {
                 if stream.recv_size == 0 && stream.recv_buf_offset > stream.recv_callback_offset {
                     let start = stream.recv_callback_offset;
                     let end = stream.recv_buf_offset;
@@ -262,9 +262,7 @@ fn stream_recv(stream: &mut RawStream, mio: &mut TcpStream) -> Option<Result<(Re
                     let size2 = end - start;
                     stream.recv_callback_offset += size2;
                 } else {
-                    assert!(stream.recv_buf_offset - stream.recv_callback_offset <= stream.recv_size);
-
-                    if stream.recv_buf_offset - stream.recv_callback_offset == stream.recv_size && stream.recv_size != 0 {
+                    if size == stream.recv_size && stream.recv_size != 0 {
                         let start = stream.recv_callback_offset;
                         let end = start + stream.recv_size;
                         let func = stream.recv_callback.take().unwrap();
@@ -660,7 +658,7 @@ impl RawStream {
             let size2 = buf_offset - cb_offset;
             self.recv_callback_offset += size2;
             return Some((func, Ok(Arc::new(param))));
-        } else if size < buf_offset - cb_offset {
+        } else if size > 0 && size <= buf_offset - cb_offset {
             let param = self.recv_buf[cb_offset..cb_offset + size]
                 .iter()
                 .cloned()

@@ -55,7 +55,10 @@ pub fn read_header(stream: Arc<RwLock<RawStream>>, buf: Vec<u8>, func: Box<FnBox
             };
         })
     }
-    stream.write().unwrap().recv_handle(0, handle_func);
+    let result = stream.write().unwrap().recv_handle(0, handle_func);
+    if let Some((cb, r)) = result {
+        cb(r);
+    }
 }
 
 pub fn read_ws_header(stream: Arc<RwLock<RawStream>>, func: Box<FnBox(Result<OwnedMessage>)>)
@@ -116,11 +119,14 @@ fn recv_dataframe(stream: Arc<RwLock<RawStream>>, should_be_masked: bool, cb: Bo
             Ok(h) => h,
             Err(e) => {cb(Err(e)); return;},
         };
-        stream1.write().unwrap().recv_handle(header.len as usize, Box::new(
+        let result = stream1.write().unwrap().recv_handle(header.len as usize, Box::new(
             move |r: Result<Arc<Vec<u8>>>| {
                 cb(DataFrame::read_dataframe_body(header, Arc::try_unwrap(r.unwrap()).unwrap(), should_be_masked));
             }
         ));
+        if let Some((cb, r)) = result {
+            cb(r);
+        }
     }));
 }
 
@@ -181,7 +187,7 @@ fn next_frame(stream: Arc<RwLock<RawStream>>, mask: bool, mut buffer: Vec<DataFr
 /// 解析前两个字节, 返回描述长度的字节数
 fn read_header1(stream: Arc<RwLock<RawStream>>, cb: Box<FnBox(WebSocketResult<dfh::DataFrameHeader>)>){
     let stream1 = stream.clone();
-    stream.write().unwrap().recv_handle(2, Box::new(
+    let result = stream.write().unwrap().recv_handle(2, Box::new(
         move |r: Result<Arc<Vec<u8>>>| {
             let mut r = Arc::try_unwrap(r.unwrap()).unwrap();
 	        let byte1 = r[1];
@@ -195,34 +201,46 @@ fn read_header1(stream: Arc<RwLock<RawStream>>, cb: Box<FnBox(WebSocketResult<df
             match byte1 & 0x7F {
                 0...125 => {
                     if mask == 4 {
-                        stream1.write().unwrap().recv_handle(mask, Box::new(
+                        let result = stream1.write().unwrap().recv_handle(mask, Box::new(
                             move |len: Result<Arc<Vec<u8>>>| {
                                 r.extend_from_slice(len.unwrap().as_slice());
                                 cb(dfh::read_header(&mut BufReader::new(r.as_slice())));
                             }
                         ));
+                        if let Some((cb, r)) = result {
+                            cb(r);
+                        }
                     }else{
                         cb(dfh::read_header(&mut BufReader::new(r.as_slice())));
                     }
                 },
                 126 => {
-                    stream1.write().unwrap().recv_handle(2 + mask, Box::new(
+                    let result = stream1.write().unwrap().recv_handle(2 + mask, Box::new(
                         move |len: Result<Arc<Vec<u8>>>| {
                             r.extend_from_slice(len.unwrap().as_slice());
                             cb(dfh::read_header(&mut BufReader::new(r.as_slice())));
                         }
                     ));
+                    if let Some((cb, r)) = result {
+                        cb(r);
+                    }
                 }
                 127 => {
-                    stream1.write().unwrap().recv_handle(8 + mask, Box::new(
+                    let result = stream1.write().unwrap().recv_handle(8 + mask, Box::new(
                         move |len: Result<Arc<Vec<u8>>>| {
                             r.extend_from_slice(len.unwrap().as_slice());
                             cb(dfh::read_header(&mut BufReader::new(r.as_slice())));
                         }
                     ));
+                    if let Some((cb, r)) = result {
+                        cb(r);
+                    }
                 }
                 _ => unreachable!(),
             };
         }
     ));
+    if let Some((cb, r)) = result {
+        cb(r);
+    }
 }
