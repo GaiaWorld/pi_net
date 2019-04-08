@@ -9,8 +9,6 @@
 extern crate mio;
 extern crate slab;
 extern crate mio_extras;
-extern crate atom;
-extern crate gray;
 extern crate rand;
 extern crate byteorder;
 extern crate hyper;
@@ -23,6 +21,13 @@ extern crate fnv;
 extern crate vecio;
 
 extern crate bitflags;
+
+#[macro_use]
+extern crate lazy_static;
+
+extern crate atom;
+extern crate apm;
+extern crate gray;
 
 
 pub mod tls;

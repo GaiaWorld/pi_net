@@ -16,9 +16,10 @@ use http::StatusCode;
 
 use modifier::Set;
 
-use atom::Atom;
 use worker::worker_pool::WorkerPool;
 use worker::impls::{STORE_WORKER_WALKER, NET_WORKER_WALKER, STORE_TASK_POOL, NET_TASK_POOL};
+use worker::worker::WorkerType;
+use atom::Atom;
 
 use https::Plugin;
 use https::https_impl::{start_https, start_http};
@@ -33,9 +34,9 @@ use https::params::{Params, Value};
 
 #[test]
 fn test_http_server() {
-    let store_pool = Box::new(WorkerPool::new(8, 1024 * 1024, 10000, STORE_WORKER_WALKER.clone()));
+    let store_pool = Box::new(WorkerPool::new("test http store".to_string(), WorkerType::Store, 8, 1024 * 1024, 10000, STORE_WORKER_WALKER.clone()));
     store_pool.run(STORE_TASK_POOL.clone());
-    let ext_pool = Box::new(WorkerPool::new(8, 1024 * 1024, 10000, NET_WORKER_WALKER.clone()));
+    let ext_pool = Box::new(WorkerPool::new("test http net".to_string(), WorkerType::Net, 8, 1024 * 1024, 10000, NET_WORKER_WALKER.clone()));
     ext_pool.run(NET_TASK_POOL.clone());
     
     struct Test;
@@ -74,9 +75,9 @@ fn test_http_server() {
 
 #[test]
 fn test_https_server() {
-    let store_pool = Box::new(WorkerPool::new(8, 1024 * 1024, 10000, STORE_WORKER_WALKER.clone()));
+    let store_pool = Box::new(WorkerPool::new("test https store".to_string(), WorkerType::Store, 8, 1024 * 1024, 10000, STORE_WORKER_WALKER.clone()));
     store_pool.run(STORE_TASK_POOL.clone());
-    let ext_pool = Box::new(WorkerPool::new(8, 1024 * 1024, 10000, NET_WORKER_WALKER.clone()));
+    let ext_pool = Box::new(WorkerPool::new("test https net".to_string(), WorkerType::Net, 8, 1024 * 1024, 10000, NET_WORKER_WALKER.clone()));
     ext_pool.run(NET_TASK_POOL.clone());
 
     struct Test;

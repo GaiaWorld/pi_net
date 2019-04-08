@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::str::Chars;
 use std::ffi::OsStr;
 use std::fs::DirEntry;
+use std::time::Instant;
 use std::path::{Path, PathBuf};
 use std::io::{Error as IOError, Result as IOResult, ErrorKind};
 
@@ -15,6 +16,7 @@ use worker::task::TaskType;
 use worker::impls::cast_store_task;
 use lib_file::file::{AsyncFileOptions, Shared, AsyncFile, SharedFile};
 use atom::Atom;
+use apm::counter::{GLOBAL_PREF_COLLECT, PrefCounter, PrefTimer};
 
 use mime;
 use Plugin;
@@ -31,6 +33,21 @@ use file::{HTTPS_ASYNC_OPEN_FILE_FAILED_STATUS, HTTPS_ASYNC_READ_FILE_FAILED_STA
 */
 const HTTPS_ASYNC_FILE_LOAD_PRIORITY: usize = 100;
 
+lazy_static! {
+    //http服务器批量文件加载处理器数量
+    static ref HTTPS_BATCH_LOAD_FILE_HANDLER_COUNT: PrefCounter = GLOBAL_PREF_COLLECT.new_static_counter(Atom::from("https_batch_load_file_handler_count"), 0).unwrap();
+    //http服务器批量文件加载成功数量
+    static ref HTTPS_BATCH_LOAD_FILE_OK_COUNT: PrefCounter = GLOBAL_PREF_COLLECT.new_static_counter(Atom::from("https_batch_load_file_ok_count"), 0).unwrap();
+    //http服务器批量文件加载失败数量
+    static ref HTTPS_BATCH_LOAD_FILE_ERROR_COUNT: PrefCounter = GLOBAL_PREF_COLLECT.new_static_counter(Atom::from("https_batch_load_file_error_count"), 0).unwrap();
+    //http服务器批量文件加载字节数量
+    static ref HTTPS_BATCH_LOAD_FILE_BYTE_COUNT: PrefCounter = GLOBAL_PREF_COLLECT.new_static_counter(Atom::from("https_batch_load_file_byte_count"), 0).unwrap();
+    //http服务器批量文件加载成功总时长
+    static ref HTTPS_BATCH_LOAD_FILE_OK_TIME: PrefTimer = GLOBAL_PREF_COLLECT.new_static_timer(Atom::from("https_batch_load_file_ok_time"), 0).unwrap();
+    //http服务器批量文件加载失败总时长
+    static ref HTTPS_BATCH_LOAD_FILE_ERROR_TIME: PrefTimer = GLOBAL_PREF_COLLECT.new_static_timer(Atom::from("https_batch_load_file_error_time"), 0).unwrap();
+}
+
 /*
 * 批量静态资源文件
 */
@@ -45,8 +62,13 @@ impl Set for StaticFileBatch {}
 
 impl Handler for StaticFileBatch {
     fn handle(&self, mut req: Request, res: Response) -> Option<(Request, Response, HttpsResult<()>)> {
+        let start = HTTPS_BATCH_LOAD_FILE_OK_TIME.start();
+
         if req.url.path().len() > 1 || req.url.path()[0] != "" {
             //无效的url路径，则忽略
+            HTTPS_BATCH_LOAD_FILE_ERROR_TIME.timing(start);
+            HTTPS_BATCH_LOAD_FILE_ERROR_COUNT.sum(1);
+
             return Some((req, res, 
                         Err(HttpsError::new(IOError::new(ErrorKind::NotFound, "load batch file error, invalid path")))));
         }
@@ -72,7 +94,10 @@ impl Handler for StaticFileBatch {
         let mut file_vec: Vec<(u64, PathBuf)>;
         let mut files: Vec<String> = Vec::new();
         match decode(&mut ds.chars(), &mut vec![], &mut vec![], &mut dirs, 0) {
-            Err(pos) => {            
+            Err(pos) => {
+                HTTPS_BATCH_LOAD_FILE_ERROR_TIME.timing(start);
+                HTTPS_BATCH_LOAD_FILE_ERROR_COUNT.sum(1);
+
                 let desc = format!("load batch file error, decode dir failed, dir: {}, pos: {}", ds, pos);
                 return Some((req, res, Err(HttpsError::new(IOError::new(ErrorKind::NotFound, desc)))));
             },
@@ -82,6 +107,9 @@ impl Handler for StaticFileBatch {
         }
         match decode(&mut fs.chars(), &mut vec![], &mut vec![], &mut files, 0) {
             Err(pos) => {
+                HTTPS_BATCH_LOAD_FILE_ERROR_TIME.timing(start);
+                HTTPS_BATCH_LOAD_FILE_ERROR_COUNT.sum(1);
+
                 let desc = format!("load batch file error, decode file failed, file: {}, pos: {}", fs, pos);
                 return Some((req, res, Err(HttpsError::new(IOError::new(ErrorKind::NotFound, desc)))));
             },
@@ -100,7 +128,7 @@ impl Handler for StaticFileBatch {
         //合并解析的所有文件，并异步加载所有文件
         dir_vec.append(&mut file_vec);
         // println!("!!!!!!files: {:?}", dir_vec.to_vec().iter_mut().map(|(_, x)| x).collect::<Vec<&mut PathBuf>>());
-        async_load_files(req, self.fill_gen_resp_headers(res), dir_vec, 0, Vec::new(), 0);
+        async_load_files(req, self.fill_gen_resp_headers(res), dir_vec, 0, Vec::new(), 0, start);
         None
     }
 }
@@ -108,6 +136,8 @@ impl Handler for StaticFileBatch {
 impl StaticFileBatch {
     //指定文件根目录，构建指定的批量静态资源文件，可以是绝对路径或相对路径，如果为空串，则表示以当前运行时路径作为文件根目录
     pub fn new<P: Into<PathBuf>>(root: P) -> Self {
+        HTTPS_BATCH_LOAD_FILE_HANDLER_COUNT.sum(1);
+
         StaticFileBatch {
             root: root.into(),
             gen_res_headers: HeaderMap::new(),
@@ -428,27 +458,27 @@ fn filter_file(suffix: Option<&OsStr>, entry: DirEntry, result: &mut Vec<(u64, P
 }
 
 //异步加载批量文件，并设置回应
-fn async_load_files(req: Request, res: Response, files: Vec<(u64, PathBuf)>, index: usize, mut data: Vec<u8>, mut size: u64) {
+fn async_load_files(req: Request, res: Response, files: Vec<(u64, PathBuf)>, index: usize, mut data: Vec<u8>, mut size: u64, time: Instant) {
     let file_len: u64;
     let file_path: PathBuf;
     if let Some((len, file)) = files.get(index) {
         if len == &0 {
             //无效文件，则忽略，并继续加载下一个文件
-            return async_load_files(req, res, files, index + 1, data, size);
+            return async_load_files(req, res, files, index + 1, data, size, time);
         }
 
         file_len = len.clone();
         file_path = file.clone();
     } else {
         //加载完成，则回应
-        return async_load_files_ok(req, res, size, data);
+        return async_load_files_ok(req, res, size, data, time);
     }
 
     let open = Box::new(move |f: IOResult<AsyncFile>| {
         match f {
             Err(e) => {
                 //打开失败
-                async_load_files_error(req, res, e, HTTPS_ASYNC_OPEN_FILE_FAILED_STATUS);
+                async_load_files_error(req, res, e, HTTPS_ASYNC_OPEN_FILE_FAILED_STATUS, time);
             },
             Ok(r) => {
                 //打开成功
@@ -457,13 +487,13 @@ fn async_load_files(req: Request, res: Response, files: Vec<(u64, PathBuf)>, ind
                     match result {
                         Err(e) => {
                             //读失败
-                            async_load_files_error(req, res, e, HTTPS_ASYNC_READ_FILE_FAILED_STATUS);
+                            async_load_files_error(req, res, e, HTTPS_ASYNC_READ_FILE_FAILED_STATUS, time);
                         },
                         Ok(mut bin) => {
                             //读成功，则继续异步加载下一个文件
                             size += file_len;
                             data.append(&mut bin);
-                            async_load_files(req, res, files, index + 1, data, size);
+                            async_load_files(req, res, files, index + 1, data, size, time);
                         },
                     }
                 });
@@ -475,18 +505,23 @@ fn async_load_files(req: Request, res: Response, files: Vec<(u64, PathBuf)>, ind
 }
 
 //异步加载文件错误
-fn async_load_files_error(req: Request, mut res: Response, err: IOError, err_no: u16) {
+fn async_load_files_error(req: Request, mut res: Response, err: IOError, err_no: u16, time: Instant) {
     match res.receiver.as_ref().unwrap().consume() {
         Err(e) => {
             match e {
                 ConsumeError::Empty => {
                     //未准备好，则继续异步等待返回错误
                     let func = Box::new(move |_lock| {
-                        async_load_files_error(req, res, err, err_no);
+                        async_load_files_error(req, res, err, err_no, time);
                     });
                     cast_store_task(TaskType::Async(false), HTTPS_ASYNC_FILE_LOAD_PRIORITY, None, func, Atom::from("async load files failed task"));
                 },
-                _ => println!("!!!> Https Async Load Files Error, task wakeup failed, task id: {}, err: {:?}, e: {:?}", req.uid, err, e),
+                _ => {
+                    HTTPS_BATCH_LOAD_FILE_ERROR_TIME.timing(time);
+                    HTTPS_BATCH_LOAD_FILE_ERROR_COUNT.sum(1);
+
+                    println!("!!!> Https Async Load Files Error, task wakeup failed, task id: {}, err: {:?}, e: {:?}", req.uid, err, e)
+                },
             }
         },
         Ok(waker) => {
@@ -496,23 +531,31 @@ fn async_load_files_error(req: Request, mut res: Response, err: IOError, err_no:
             res.write_back(&mut http_res);
             sender.produce(Ok(http_res)).is_ok();
             waker.notify();
+
+            HTTPS_BATCH_LOAD_FILE_ERROR_TIME.timing(time);
+            HTTPS_BATCH_LOAD_FILE_ERROR_COUNT.sum(1);
         },
     }
 }
 
 //异步加载文件成功
-fn async_load_files_ok(req: Request, mut res: Response, size: u64, data: Vec<u8>) {
+fn async_load_files_ok(req: Request, mut res: Response, size: u64, data: Vec<u8>, time: Instant) {
     match res.receiver.as_ref().unwrap().consume() {
         Err(e) => {
             match e {
                 ConsumeError::Empty => {
                     //未准备好，则继续异步等待返回成功
                     let func = Box::new(move |_lock| {
-                        async_load_files_ok(req, res, size, data);
+                        async_load_files_ok(req, res, size, data, time);
                     });
                     cast_store_task(TaskType::Async(false), HTTPS_ASYNC_FILE_LOAD_PRIORITY, None, func, Atom::from("async load files ok task"));
                 },
-                _ => println!("!!!> Https Async Load Files Ok, task wakeup failed, task id: {}, e: {:?}", req.uid, e),
+                _ => {
+                    HTTPS_BATCH_LOAD_FILE_ERROR_TIME.timing(time);
+                    HTTPS_BATCH_LOAD_FILE_ERROR_COUNT.sum(1);
+
+                    println!("!!!> Https Async Load Files Ok, task wakeup failed, task id: {}, e: {:?}", req.uid, e)
+                },
             }
         },
         Ok(waker) => {
@@ -525,6 +568,10 @@ fn async_load_files_ok(req: Request, mut res: Response, size: u64, data: Vec<u8>
             res.write_back(&mut http_res);
             sender.produce(Ok(http_res)).is_ok();
             waker.notify();
+
+            HTTPS_BATCH_LOAD_FILE_OK_TIME.timing(time);
+            HTTPS_BATCH_LOAD_FILE_BYTE_COUNT.sum(size as usize);
+            HTTPS_BATCH_LOAD_FILE_OK_COUNT.sum(1);
         },
     }
 }

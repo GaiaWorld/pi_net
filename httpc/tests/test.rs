@@ -9,15 +9,16 @@ use std::fs::File;
 use std::io::Result;
 use std::boxed::FnBox;
 
-use atom::Atom;
 use worker::worker_pool::WorkerPool;
 use worker::impls::{NET_WORKER_WALKER, NET_TASK_POOL};
+use worker::worker::WorkerType;
+use atom::Atom;
 
 use httpc::{HttpClientOptions, SharedHttpc, SharedHttpClient, HttpClient, HttpClientBody, HttpClientResponse};
 
 #[test]
 fn test_httpc_basic() {
-    let worker_pool = Box::new(WorkerPool::new(8, 1024 * 1024, 30000, NET_WORKER_WALKER.clone()));
+    let worker_pool = Box::new(WorkerPool::new("tset httpc".to_string(), WorkerType::Net, 8, 1024 * 1024, 30000, NET_WORKER_WALKER.clone()));
     worker_pool.run(NET_TASK_POOL.clone());
 
     let r = HttpClient::create(HttpClientOptions::Default);

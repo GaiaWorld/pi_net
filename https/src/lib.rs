@@ -58,10 +58,14 @@ extern crate void;
 extern crate twoway;
 extern crate path_absolutize;
 
-extern crate atom;
+#[macro_use]
+extern crate lazy_static;
+
 extern crate worker;
 extern crate file as lib_file;
 extern crate future;
+extern crate atom;
+extern crate apm;
 
 pub mod https_impl;
 pub mod modifiers;

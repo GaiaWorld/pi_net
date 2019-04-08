@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Sender};
 use std::io::{Cursor, Result};
 
+use fnv::FnvHashMap;
 use mio::Token;
 
 use tls;
@@ -336,3 +337,23 @@ impl Stream {
         }
     }
 }
+
+#[test]
+pub fn test_net() {
+    let mgr = NetManager::new();
+    let config = Config {
+        protocol: Protocol::TCP,
+        addr: "0.0.0.0:443".parse().unwrap(),
+    };
+
+    mgr.bind(
+        config,
+        Box::new(move |peer, addr| {
+            //连接成功
+            println!("!!!!!!connect ok, peer addr: {:?}", addr);
+        }),
+    );
+
+    thread::sleep_ms(1000000);
+}
+

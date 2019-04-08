@@ -5,9 +5,9 @@ use std::ops::Range;
 use std::boxed::FnBox;
 use std::cell::RefCell;
 use std::time::Duration;
-use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use std::collections::VecDeque;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::io::{Write, Read, BufReader, Result, ErrorKind, Error};
@@ -20,6 +20,8 @@ use gray::GrayVersion;
 use rustls::{RootCertStore, Session, NoClientAuth, AllowAnyAuthenticatedClient, AllowAnyAnonymousOrAuthenticatedClient};
 
 use atom::Atom;
+use apm::common::{register_server_port, unregister_server_port};
+use apm::counter::{GLOBAL_PREF_COLLECT, PrefCounter};
 use timer::{NetTimer, NetTimers, TimerCallback};
 
 use data::{CloseFn, Protocol, RecvFn, State, Websocket};
@@ -28,6 +30,19 @@ use data::{CloseFn, Protocol, RecvFn, State, Websocket};
 * tls连接最大接收缓冲区
 */
 pub const MAX_TLS_RECV_SIZE: usize = 16 * 1024;
+
+//TLS服务器前缀
+const TLS_SERVER_PREFIX: &'static str = "tls_server_";
+//TLS服务器请求连接数量后缀
+const TLS_SERVER_CONNECT_COUNT_SUFFIX: &'static str = "_connect_count";
+//TLS服务器接受连接数量后缀
+const TLS_SERVER_ACCEPTED_COUNT_SUFFIX: &'static str = "_accepted_count";
+//TLS服务器关闭连接数量后缀
+const TLS_SERVER_CLOSED_COUNT_SUFFIX: &'static str = "_closed_count";
+//TLS服务器连接输入字节数量后缀
+const TLS_SERVER_INPUT_BYTE_COUNT_SUFFIX: &'static str = "_input_byte_count";
+//TLS服务器连接输出字节数量后缀
+const TLS_SERVER_OUTPUT_BYTE_COUNT_SUFFIX: &'static str = "_output_byte_count";
 
 /*
 * tls外部请求
@@ -555,17 +570,55 @@ impl TlsConnection {
 * TLS服务器，用于绑定tcp连接监听器
 */
 struct TlsServer {
-    cfg: Arc<rustls::ServerConfig>,                     //TLS配置
-    connections: FnvHashMap<mio::Token, TlsConnection>, //安全连接表
+    cfg:            Arc<rustls::ServerConfig>,                      //TLS配置
+    connections:    FnvHashMap<mio::Token, TlsConnection>,          //安全连接表
+    addr:           SocketAddr,                                     //服务器地址
+    connect_count:  PrefCounter,                                    //请求连接计数
+    accepted_count: PrefCounter,                                    //接受连接计数
+    closed_count:   PrefCounter,                                    //关闭连接计数
+    input_byte:     PrefCounter,                                    //连接输入字节
+    output_byte:    PrefCounter,                                    //连接输出字节
 }
 
 impl TlsServer {
     //构建一个TLS服务器
-    fn new(cfg: Arc<rustls::ServerConfig>) -> Self {
+    fn new(addr: SocketAddr, cfg: Arc<rustls::ServerConfig>) -> Self {
+        let port = &addr.port().to_string();
         TlsServer {
             cfg,
             connections: FnvHashMap::default(),
+            addr,
+            connect_count: GLOBAL_PREF_COLLECT.
+                new_dynamic_counter(
+                    Atom::from(TLS_SERVER_PREFIX.to_string() + port + TLS_SERVER_CONNECT_COUNT_SUFFIX), 0).unwrap(),
+            accepted_count: GLOBAL_PREF_COLLECT.
+                new_dynamic_counter(
+                    Atom::from(TLS_SERVER_PREFIX.to_string() + port + TLS_SERVER_ACCEPTED_COUNT_SUFFIX), 0).unwrap(),
+            closed_count: GLOBAL_PREF_COLLECT.
+                new_dynamic_counter(
+                    Atom::from(TLS_SERVER_PREFIX.to_string() + port + TLS_SERVER_CLOSED_COUNT_SUFFIX), 0).unwrap(),
+            input_byte: GLOBAL_PREF_COLLECT.
+                new_dynamic_counter(
+                    Atom::from(TLS_SERVER_PREFIX.to_string() + port + TLS_SERVER_INPUT_BYTE_COUNT_SUFFIX), 0).unwrap(),
+            output_byte: GLOBAL_PREF_COLLECT.
+                new_dynamic_counter(
+                    Atom::from(TLS_SERVER_PREFIX.to_string() + port + TLS_SERVER_OUTPUT_BYTE_COUNT_SUFFIX), 0).unwrap(),
         }
+    }
+
+    //获取服务器ip
+    fn ip(&self) -> IpAddr {
+        self.addr.ip()
+    }
+
+    //获取服务器端口
+    fn port(&self) -> u16 {
+        self.addr.port()
+    }
+
+    //获取安全连接数量
+    fn size(&self) -> usize {
+        self.connections.len()
     }
 
     //判断指定tls连接是否握手
@@ -642,6 +695,8 @@ impl TlsServer {
         let tls_session = rustls::ServerSession::new(&self.cfg); //构建tls会话
         self.connections.insert(token, TlsConnection::new(token, tls_session)); //绑定tls会话
         self.connections[&token].register(socket, poll); //注册tcp流
+
+        self.accepted_count.sum(1);
     }
 
     //处理tls握手
@@ -676,6 +731,10 @@ impl TlsServer {
                 self.connections.remove(&token);
             }
 
+            if let &Ok(size) = &r {
+                self.input_byte.sum(size);
+            }
+
             return r;
         }
         Err(Error::new(ErrorKind::NotConnected, "handle read stream failed, invalid tls stream"))
@@ -694,6 +753,10 @@ impl TlsServer {
 
             if self.connections[&token].is_closed() {
                 self.connections.remove(&token);
+            }
+
+            if let &Ok(_) = &r {
+                self.output_byte.sum(buf.len());
             }
 
             return r;
@@ -749,7 +812,15 @@ impl TlsServer {
             if self.connections[&token].is_closed() {
                 self.connections.remove(&token);
             }
+
+            self.closed_count.sum(1);
         }
+    }
+
+    //请求连接计数
+    #[inline]
+    fn connect_count(&self) {
+        self.connect_count.sum(1);
     }
 }
 
@@ -757,6 +828,7 @@ impl TlsServer {
 * TLS处理器
 */
 pub struct TlsHandler {
+    port: u16,                                          //处理的端口
     poll: mio::Poll,                                    //轮询器
     slab: Arc<RefCell<Slab<TlsOrigin>>>,                //tls源相关数据的内存空间管理器
     sender: Sender<TlsExtRequest>,                      //tls事件循环请求发送者
@@ -764,6 +836,13 @@ pub struct TlsHandler {
     wait_wakeup_readable: Arc<RwLock<Vec<mio::Token>>>, //待唤醒可读事件的tcp流的令牌列表，与外部使用的TlsStream共享同一个令牌列表
     wait_wakeup_writable: Arc<RwLock<Vec<mio::Token>>>, //待唤醒可写事件的tcp流的令牌列表
     tls_server: Option<Arc<RefCell<TlsServer>>>,        //tls连接服务器，管理所有tls连接
+}
+
+impl Drop for TlsHandler {
+    fn drop(&mut self) {
+        //注销服务器端口信息
+        unregister_server_port(self.port);
+    }
 }
 
 /*
@@ -795,10 +874,14 @@ fn bind_tcp(handler: &mut TlsHandler, config: TlsConfig, func: ListenerHandler) 
 
             //根据证书和私钥，初始化tls服务器
             let tls_cfg = make_config(&config.cert_path, &config.key_path);
-            handler.tls_server = Some(Arc::new(RefCell::new(TlsServer::new(tls_cfg))));
+            handler.tls_server = Some(Arc::new(RefCell::new(TlsServer::new(config.addr, tls_cfg))));
 
             //将tcp连接监听器与监听回调函数打包，并写入分配的空间中
             entry.insert(TlsOrigin::TcpServer(func, listener));
+
+            //注册服务器端口信息
+            handler.port = config.addr.port();
+            register_server_port(config.addr);
         },
     }
 }
@@ -829,6 +912,7 @@ pub fn startup(sender: Sender<TlsExtRequest>, receiver: Receiver<TlsExtRequest>,
     };
 
     let mut handler = TlsHandler {
+        port: 0,
         sender: sender,
         slab: Arc::new(RefCell::new(Slab::<TlsOrigin>::new())),
         poll,
@@ -943,6 +1027,8 @@ fn handle_event(handler: &mut TlsHandler, events: &mut mio::Events, recv_buff_si
             match origin {
                 &mut TlsOrigin::TcpServer(_, ref listener) => {
                     //处理请求连接事件
+                    handler.tls_server.as_ref().unwrap().borrow().connect_count();
+
                     if readiness.is_readable() {
                         match listener.accept() {
                             Ok((tcp_stream, addr)) => {

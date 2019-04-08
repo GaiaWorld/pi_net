@@ -9,9 +9,25 @@ use std::collections::VecDeque;
 
 use slab::Slab;
 
+use atom::Atom;
+use apm::common::unregister_server_port;
+use apm::counter::{GLOBAL_PREF_COLLECT, PrefCounter};
 use mio::{Poll, Ready, Token};
 use mio::net::{TcpListener, TcpStream};
 use timer::{NetTimer, NetTimers, TimerCallback};
+
+//TCP服务器前缀
+const TCP_SERVER_PREFIX: &'static str = "tcp_server_";
+//TCP服务器请求连接数量后缀
+const TCP_SERVER_CONNECT_COUNT_SUFFIX: &'static str = "_connect_count";
+//TCP服务器接受连接数量后缀
+const TCP_SERVER_ACCEPTED_COUNT_SUFFIX: &'static str = "_accepted_count";
+//TCP服务器关闭连接数量后缀
+const TCP_SERVER_CLOSED_COUNT_SUFFIX: &'static str = "_closed_count";
+//TCP服务器连接输入字节数量后缀
+const TCP_SERVER_INPUT_BYTE_COUNT_SUFFIX: &'static str = "_input_byte_count";
+//TCP服务器连接输出字节数量后缀
+const TCP_SERVER_OUTPUT_BYTE_COUNT_SUFFIX: &'static str = "_output_byte_count";
 
 pub type SendClosureFn = Box<FnBox(&mut NetHandler) + Send>;
 
@@ -106,10 +122,50 @@ pub enum NetData {
     TcpStream(Arc<RwLock<RawStream>>, TcpStream),
 }
 
+pub struct NetCounter {
+    pub connect_count:  PrefCounter,    //请求连接计数
+    pub accepted_count: PrefCounter,    //接受连接计数
+    pub closed_count:   PrefCounter,    //关闭连接计数
+    pub input_byte:     PrefCounter,    //连接输入字节
+    pub output_byte:    PrefCounter,    //连接输出字节
+}
+
+impl NetCounter {
+    pub fn new(addr: SocketAddr) -> Self {
+        let port = &addr.port().to_string();
+        NetCounter {
+            connect_count: GLOBAL_PREF_COLLECT.
+                new_dynamic_counter(
+                    Atom::from(TCP_SERVER_PREFIX.to_string() + port + TCP_SERVER_CONNECT_COUNT_SUFFIX), 0).unwrap(),
+            accepted_count: GLOBAL_PREF_COLLECT.
+                new_dynamic_counter(
+                    Atom::from(TCP_SERVER_PREFIX.to_string() + port + TCP_SERVER_ACCEPTED_COUNT_SUFFIX), 0).unwrap(),
+            closed_count: GLOBAL_PREF_COLLECT.
+                new_dynamic_counter(
+                    Atom::from(TCP_SERVER_PREFIX.to_string() + port + TCP_SERVER_CLOSED_COUNT_SUFFIX), 0).unwrap(),
+            input_byte: GLOBAL_PREF_COLLECT.
+                new_dynamic_counter(
+                    Atom::from(TCP_SERVER_PREFIX.to_string() + port + TCP_SERVER_INPUT_BYTE_COUNT_SUFFIX), 0).unwrap(),
+            output_byte: GLOBAL_PREF_COLLECT.
+                new_dynamic_counter(
+                    Atom::from(TCP_SERVER_PREFIX.to_string() + port + TCP_SERVER_OUTPUT_BYTE_COUNT_SUFFIX), 0).unwrap(),
+        }
+    }
+}
+
 pub struct NetHandler {
+    pub port: u16,
     pub poll: Poll,
     pub slab: Slab<NetData>,
     pub sender: Sender<SendClosureFn>,
     pub recv_comings: Arc<RwLock<Vec<Token>>>,
     pub net_timers: Arc<RwLock<NetTimers<TimerCallback>>>,
+    pub counter: Option<NetCounter>,
+}
+
+impl Drop for NetHandler {
+    fn drop(&mut self) {
+        //注销服务器端口信息
+        unregister_server_port(self.port);
+    }
 }

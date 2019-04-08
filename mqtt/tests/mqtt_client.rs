@@ -1,4 +1,3 @@
-extern crate pi_lib;
 extern crate mqtt;
 extern crate mqtt3;
 extern crate net;
@@ -12,7 +11,9 @@ use std::time::Duration;
 
 use mqtt::client::ClientNode;
 use mqtt::data::Client;
-use pi_lib::atom::Atom;
+
+extern crate atom;
+use atom::Atom;
 
 use mqtt3::{LastWill, QoS};
 use net::{Config, NetManager, Protocol, RawSocket, RawStream};

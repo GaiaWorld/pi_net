@@ -18,9 +18,10 @@ use websocket::OwnedMessage;
 use websocket::server::upgrade::sync::Upgrade;
 
 use slab::Slab;
+use apm::common::register_server_port;
 
 use api::WSControlType;
-use data::{CloseFn, Config, ListenerFn, NetData, NetHandler, Protocol, RecvFn, SendClosureFn,
+use data::{CloseFn, Config, ListenerFn, NetData, NetCounter, NetHandler, Protocol, RecvFn, SendClosureFn,
            RawSocket, State, RawStream, Websocket};
 
 const MAX_RECV_SIZE: usize = 16 * 1024;
@@ -44,6 +45,10 @@ fn bind_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
 
         let data = NetData::TcpServer(func, lisn);
         entry.insert(data);
+
+        //注册服务器端口信息
+        handler.port = config.addr.port();
+        register_server_port(config.addr);
     }
 }
 
@@ -83,6 +88,8 @@ pub fn connect_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
         entry.insert(data);
 
         let socket = RawSocket::new(key, handler.sender.clone());
+
+        handler.counter = Some(NetCounter::new(config.addr.clone()));
 
         let param1 = Ok((socket, stream));
         let param2 = Ok(local_addr);
@@ -133,8 +140,12 @@ pub fn handle_send(handler: &mut NetHandler, socket: usize, v8: Arc<Vec<u8>>) {
     if let Some(data) = handler.slab.get_mut(socket) {
         should_close = match data {
             &mut NetData::TcpStream(ref s, ref mut mio) => {
+                let len = v8.len();
                 let mut s_data = s.write().unwrap();
                 let r = send_tcp(&mut handler.poll, &mut s_data, mio, v8);
+
+                handler.counter.as_ref().unwrap().output_byte.sum(len);
+
                 r
             }
             _ => panic!("handle_send failed, NetData's error"),
@@ -173,6 +184,7 @@ pub fn handle_close(handler: &mut NetHandler, socket: usize, force: bool) {
                 if let Some(func) = s.write().unwrap().close_callback.take() {
                     func.call_box((socket, Ok(())));
                 }
+                handler.counter.as_ref().unwrap().closed_count.sum(1);
             }
         }
     }
@@ -194,7 +206,7 @@ fn tcp_event(mio: &mut TcpListener, recv_comings: Arc<RwLock<Vec<Token>>>, net_t
 }
 
 //从tcp流上接收数据
-fn stream_recv(stream: &mut RawStream, mio: &mut TcpStream) -> Option<Result<(RecvFn, Range<usize>)>> {
+fn stream_recv(stream: &mut RawStream, mio: &mut TcpStream, counter: &NetCounter) -> Option<Result<(RecvFn, Range<usize>)>> {
     if stream.recv_callback.is_none() {
         panic!("stream_recv failed, stream.recv_callback == None");
     }
@@ -209,6 +221,8 @@ fn stream_recv(stream: &mut RawStream, mio: &mut TcpStream) -> Option<Result<(Re
                         break Ok(0);
                     },
                     Ok(size) => {
+                        counter.input_byte.sum(size);
+
                         stream.recv_buf_offset += size;
                         break Ok(size);
                     }
@@ -231,6 +245,9 @@ fn stream_recv(stream: &mut RawStream, mio: &mut TcpStream) -> Option<Result<(Re
                         if size == 0 {
                              break Ok(0);
                         }
+
+                        counter.input_byte.sum(size);
+
                         stream.recv_buf_offset += size;
                         if stream.recv_buf_offset >= end {
                             break Ok(stream.recv_size);
@@ -365,11 +382,13 @@ fn stream_send(poll: &mut Poll, stream: &mut RawStream, mio: &mut TcpStream) -> 
 //处理网络请求
 pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureFn>) {
     let mut handler = NetHandler {
+        port: 0,
         sender: sender,
         slab: Slab::<NetData>::new(),
         poll: Poll::new().unwrap(),
         recv_comings: Arc::new(RwLock::new(Vec::<Token>::new())),
         net_timers: Arc::new(RwLock::new(NetTimers::new())),
+        counter: None,
     }; //创建处理器
 
     let mut events = Events::with_capacity(1024); //初始化mio事件池
@@ -414,8 +433,12 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                 match data {
                     &mut NetData::TcpServer(_, ref mut mio) => {
                         //处理请求tcp连接事件
+                        handler.counter.as_ref().unwrap().connect_count.sum(1);
+
                         if readiness.is_readable() {
                             net_data = tcp_event(mio, handler.recv_comings.clone(), handler.net_timers.clone());
+
+                            handler.counter.as_ref().unwrap().accepted_count.sum(1);
                         } else if readiness.is_writable() {
                             // TODO error callback
                             panic!("TODO tcp_event error callback");
@@ -426,7 +449,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                         if readiness.is_readable() {
                             let mut is_close = false;
                             
-                            let recv_r = stream_recv(&mut s.write().unwrap(), mio);
+                            let recv_r = stream_recv(&mut s.write().unwrap(), mio, handler.counter.as_ref().unwrap());
 
                             if let Some(r) = recv_r {
                                 match r {

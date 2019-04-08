@@ -2,31 +2,59 @@
 
 extern crate reqwest;
 
-extern crate atom;
+#[macro_use]
+extern crate lazy_static;
+
 extern crate worker;
+extern crate atom;
+extern crate apm;
 
 use std::fs::File;
 use std::sync::Arc;
 use std::path::Path;
 use std::boxed::FnBox;
 use std::path::PathBuf;
-use std::time::Duration;
 use std::collections::HashMap;
 use std::error::Error as StdError;
+use std::time::{Instant, Duration};
 use std::io::{Read, Error, ErrorKind, Result};
 
 use reqwest::multipart::Form;
 use reqwest::header::{Raw, Headers};
-use reqwest::{ClientBuilder, Client, Certificate, Identity, Proxy, RedirectPolicy, Body, RequestBuilder, Response};
+use reqwest::{ClientBuilder, Client, Certificate, Identity, Proxy, RedirectPolicy, Method, Body, RequestBuilder, Response};
 
-use atom::Atom;
 use worker::task::TaskType;
 use worker::impls::cast_net_task;
+use apm::counter::{GLOBAL_PREF_COLLECT, PrefCounter, PrefTimer};
+use atom::Atom;
 
 /*
 * http客户端异步任务优先级
 */
 const HTTPC_ASYNC_TASK_PRIORITY: usize = 100;
+
+lazy_static! {
+    //http客户端创建数量
+    static ref HTTPC_CREATE_COUNT: PrefCounter = GLOBAL_PREF_COLLECT.new_static_counter(Atom::from("httpc_create_count"), 0).unwrap();
+    //http客户端移除数量
+    static ref HTTPC_REMOVE_COUNT: PrefCounter = GLOBAL_PREF_COLLECT.new_static_counter(Atom::from("httpc_remove_count"), 0).unwrap();
+    //http客户端get请求成功数量
+    static ref HTTPC_GET_OK_COUNT: PrefCounter = GLOBAL_PREF_COLLECT.new_static_counter(Atom::from("httpc_get_ok_count"), 0).unwrap();
+    //http客户端get请求失败数量
+    static ref HTTPC_GET_ERROR_COUNT: PrefCounter = GLOBAL_PREF_COLLECT.new_static_counter(Atom::from("httpc_get_error_count"), 0).unwrap();
+    //http客户端get请求成功总时长
+    static ref HTTPC_GET_OK_TIME: PrefTimer = GLOBAL_PREF_COLLECT.new_static_timer(Atom::from("httpc_get_ok_time"), 0).unwrap();
+    //http客户端get请求失败总时长
+    static ref HTTPC_GET_ERROR_TIME: PrefTimer = GLOBAL_PREF_COLLECT.new_static_timer(Atom::from("httpc_get_error_time"), 0).unwrap();
+    //http客户端post请求成功数量
+    static ref HTTPC_POST_OK_COUNT: PrefCounter = GLOBAL_PREF_COLLECT.new_static_counter(Atom::from("httpc_post_ok_count"), 0).unwrap();
+    //http客户端post请求失败数量
+    static ref HTTPC_POST_ERROR_COUNT: PrefCounter = GLOBAL_PREF_COLLECT.new_static_counter(Atom::from("httpc_post_error_count"), 0).unwrap();
+    //http客户端post请求成功总时长
+    static ref HTTPC_POST_OK_TIME: PrefTimer = GLOBAL_PREF_COLLECT.new_static_timer(Atom::from("httpc_post_ok_time"), 0).unwrap();
+    //http客户端post请求失败总时长
+    static ref HTTPC_POST_ERROR_TIME: PrefTimer = GLOBAL_PREF_COLLECT.new_static_timer(Atom::from("httpc_post_error_time"), 0).unwrap();
+}
 
 /*
 * http客户端选项
@@ -180,6 +208,12 @@ pub struct HttpClient {
     headers: Headers,   //请求头
 }
 
+impl Drop for HttpClient {
+    fn drop(&mut self) {
+        HTTPC_REMOVE_COUNT.sum(1);
+    }
+}
+
 impl SharedHttpc for HttpClient {
     fn create(options: HttpClientOptions) -> Result<Arc<Self>> {
         match options {
@@ -286,6 +320,8 @@ impl SharedHttpc for HttpClient {
         }.or_else(|e| {
             Err(Error::new(ErrorKind::Other, e))
         }).and_then(|inner| {
+            HTTPC_CREATE_COUNT.sum(1);
+
             Ok(Arc::new(HttpClient {
                 inner: inner,
                 headers: Headers::new(),
@@ -308,19 +344,23 @@ impl SharedHttpc for HttpClient {
     }
 
     fn get<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self>, Result<HttpClientResponse>)>) {
+        let start = HTTPC_GET_OK_TIME.start();
+
         let copy = client.clone();
         let func = move |_lock| {
             let get = &mut copy.inner.get((*url).as_str());
-            request(copy, get, body, callback);
+            request(copy, get, body, callback, start);
         };
         cast_net_task(TaskType::Async(false), HTTPC_ASYNC_TASK_PRIORITY, None, Box::new(func), Atom::from("httpc normal get request task"));
     }
 
     fn post<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self>, Result<HttpClientResponse>)>) {
+        let start = HTTPC_POST_OK_TIME.start();
+
         let copy = client.clone();
         let func = move |_lock| {
             let post = &mut copy.inner.post((*url).as_str());
-            request(copy, post, body, callback);
+            request(copy, post, body, callback, start);
         };
         cast_net_task(TaskType::Async(false), HTTPC_ASYNC_TASK_PRIORITY, None, Box::new(func), Atom::from("httpc normal post request task"));
     }
@@ -459,10 +499,11 @@ impl HttpClientResponse{
 }
 
 //发送http请求
-fn request<T: GenHttpClientBody>(client: SharedHttpClient, 
-                                request: &mut RequestBuilder, 
-                                body: HttpClientBody<T>, 
-                                callback: Box<FnBox(SharedHttpClient, Result<HttpClientResponse>)>) {
+fn request<T: GenHttpClientBody>(client: SharedHttpClient,
+                                 request: &mut RequestBuilder,
+                                 body: HttpClientBody<T>,
+                                 callback: Box<FnBox(SharedHttpClient, Result<HttpClientResponse>)>,
+                                 time: Instant) {
     match 
         match body {
             HttpClientBody::Body(body) => {
@@ -485,8 +526,38 @@ fn request<T: GenHttpClientBody>(client: SharedHttpClient,
             },
         }
     {
-        Err(e) => callback(client, Err(Error::new(ErrorKind::Other, e.description().to_string()))),
+        Err(e) => {
+            if let Ok(r) = request.build() {
+                match r.method() {
+                    Method::Get => {
+                        HTTPC_GET_ERROR_TIME.timing(time);
+                        HTTPC_GET_ERROR_COUNT.sum(1);
+                    },
+                    Method::Post => {
+                        HTTPC_POST_ERROR_TIME.timing(time);
+                        HTTPC_POST_ERROR_COUNT.sum(1);
+                    },
+                    _ => (),
+                }
+            }
+
+            callback(client, Err(Error::new(ErrorKind::Other, e.description().to_string())))
+        },
         Ok(inner) => {
+            if let Ok(r) = request.build() {
+                match r.method() {
+                    Method::Get => {
+                        HTTPC_GET_OK_TIME.timing(time);
+                        HTTPC_GET_OK_COUNT.sum(1);
+                    },
+                    Method::Post => {
+                        HTTPC_POST_OK_TIME.timing(time);
+                        HTTPC_POST_OK_COUNT.sum(1);
+                    },
+                    _ => (),
+                }
+            }
+
             callback(client, Ok(HttpClientResponse {
                 inner: inner,
             }));
