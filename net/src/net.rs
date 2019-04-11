@@ -49,6 +49,8 @@ fn bind_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
         //注册服务器端口信息
         handler.port = config.addr.port();
         register_server_port(config.addr);
+
+        handler.counter = Some(NetCounter::new(config.addr.clone()));
     }
 }
 
@@ -88,8 +90,6 @@ pub fn connect_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
         entry.insert(data);
 
         let socket = RawSocket::new(key, handler.sender.clone());
-
-        handler.counter = Some(NetCounter::new(config.addr.clone()));
 
         let param1 = Ok((socket, stream));
         let param2 = Ok(local_addr);
