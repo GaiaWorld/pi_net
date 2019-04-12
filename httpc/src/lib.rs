@@ -68,6 +68,14 @@ pub enum HttpClientOptions {
 }
 
 /*
+* 通用Method
+*/
+pub enum HttpMethod {
+    Get,
+    Post,
+}
+
+/*
 * 通用Body
 */
 pub trait GenHttpClientBody: Into<Body> + Send + Sync + 'static {}
@@ -349,7 +357,7 @@ impl SharedHttpc for HttpClient {
         let copy = client.clone();
         let func = move |_lock| {
             let get = &mut copy.inner.get((*url).as_str());
-            request(copy, get, body, callback, start);
+            request(copy, get, HttpMethod::Get, body, callback, start);
         };
         cast_net_task(TaskType::Async(false), HTTPC_ASYNC_TASK_PRIORITY, None, Box::new(func), Atom::from("httpc normal get request task"));
     }
@@ -360,7 +368,7 @@ impl SharedHttpc for HttpClient {
         let copy = client.clone();
         let func = move |_lock| {
             let post = &mut copy.inner.post((*url).as_str());
-            request(copy, post, body, callback, start);
+            request(copy, post, HttpMethod::Post, body, callback, start);
         };
         cast_net_task(TaskType::Async(false), HTTPC_ASYNC_TASK_PRIORITY, None, Box::new(func), Atom::from("httpc normal post request task"));
     }
@@ -501,6 +509,7 @@ impl HttpClientResponse{
 //发送http请求
 fn request<T: GenHttpClientBody>(client: SharedHttpClient,
                                  request: &mut RequestBuilder,
+                                 method: HttpMethod,
                                  body: HttpClientBody<T>,
                                  callback: Box<FnBox(SharedHttpClient, Result<HttpClientResponse>)>,
                                  time: Instant) {
@@ -527,35 +536,31 @@ fn request<T: GenHttpClientBody>(client: SharedHttpClient,
         }
     {
         Err(e) => {
-            if let Ok(r) = request.build() {
-                match r.method() {
-                    Method::Get => {
-                        HTTPC_GET_ERROR_TIME.timing(time);
-                        HTTPC_GET_ERROR_COUNT.sum(1);
-                    },
-                    Method::Post => {
-                        HTTPC_POST_ERROR_TIME.timing(time);
-                        HTTPC_POST_ERROR_COUNT.sum(1);
-                    },
-                    _ => (),
-                }
+            match method {
+                HttpMethod::Get => {
+                    HTTPC_GET_ERROR_TIME.timing(time);
+                    HTTPC_GET_ERROR_COUNT.sum(1);
+                },
+                HttpMethod::Post => {
+                    HTTPC_POST_ERROR_TIME.timing(time);
+                    HTTPC_POST_ERROR_COUNT.sum(1);
+                },
+                _ => (),
             }
 
             callback(client, Err(Error::new(ErrorKind::Other, e.description().to_string())))
         },
         Ok(inner) => {
-            if let Ok(r) = request.build() {
-                match r.method() {
-                    Method::Get => {
-                        HTTPC_GET_OK_TIME.timing(time);
-                        HTTPC_GET_OK_COUNT.sum(1);
-                    },
-                    Method::Post => {
-                        HTTPC_POST_OK_TIME.timing(time);
-                        HTTPC_POST_OK_COUNT.sum(1);
-                    },
-                    _ => (),
-                }
+            match method {
+                HttpMethod::Get => {
+                    HTTPC_GET_OK_TIME.timing(time);
+                    HTTPC_GET_OK_COUNT.sum(1);
+                },
+                HttpMethod::Post => {
+                    HTTPC_POST_OK_TIME.timing(time);
+                    HTTPC_POST_OK_COUNT.sum(1);
+                },
+                _ => (),
             }
 
             callback(client, Ok(HttpClientResponse {
