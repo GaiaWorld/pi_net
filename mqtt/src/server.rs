@@ -666,10 +666,9 @@ fn recv_disconnect(node: Arc<Mutex<ServerNodeImpl>>, cid: usize) {
 
 //退订指定客户端的所有订阅
 fn unsub_client(node: &mut ServerNodeImpl, client_id: &String) {
-    node.sub_topics.iter_mut().map(|item| {
-        item.1.clients.retain(|e| *e != client_id.clone());
-        println!("===> MQTT Client Unsub ok, client: {:?}", client_id);
-    });
+    for (x, y) in node.sub_topics.iter_mut() {
+        y.clients.retain(|e| *e != client_id.clone());
+    }
 }
 
 fn publish_impl(
