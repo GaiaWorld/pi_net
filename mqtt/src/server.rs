@@ -4,6 +4,7 @@ use std::io::{Error, ErrorKind, Result};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
+use std::collections::HashMap;
 
 use magnetic::buffer::dynamic::DynamicBuffer;
 use magnetic::mpsc::mpsc_queue;
@@ -46,7 +47,7 @@ struct SubTopic {
     // 主题对应的元信息
     meta: Arc<TopicMeta>,
     // 主题关联的客户端
-    clients: Vec<usize>,
+    clients: Vec<String>,
 }
 
 /// 保留的主题
@@ -99,7 +100,8 @@ impl Debug for ClientStub {
 }
 
 struct ServerNodeImpl {
-    clients: FnvHashMap<usize, Arc<ClientStub>>,
+    clients: HashMap<String, Arc<ClientStub>>,
+    client_map: FnvHashMap<usize, mqtt3::Connect>,
 
     sub_topics: FnvHashMap<Atom, SubTopic>,
     retain_topics: FnvHashMap<Atom, RetainTopic>,
@@ -146,7 +148,8 @@ impl ClientStub {
 impl ServerNode {
     pub fn new() -> ServerNode {
         ServerNode(Arc::new(Mutex::new(ServerNodeImpl {
-            clients: FnvHashMap::default(),
+            clients: HashMap::new(),
+            client_map: FnvHashMap::default(),
             sub_topics: FnvHashMap::default(),
             retain_topics: FnvHashMap::default(),
             metas: FnvHashMap::default(),
@@ -154,29 +157,23 @@ impl ServerNode {
         })))
     }
     //设置连接关闭回调(遗言发布)
-    pub fn set_close_callback(&self, stream: Stream, func: CloseFn) {
+    pub fn handle_close(&self, socket_id: usize) {
+        let mut iter = vec!["a"].into_iter().map(|x| { x.to_string() });
         let node = self.0.clone();
-        let handle = move |socket_id: usize, r: Result<()>| {
-            //获取遗言消息
-            let mut node = node.lock().unwrap();
-            if let Some(last_will) = node.clients.get(&socket_id).unwrap().last_will.read().unwrap().clone() {
-                // let retain = last_will.retain;
-                // let qos = last_will.qos;
-                // let topic = Atom::from(last_will.topic.as_str());
-                let payload = Vec::from(last_will.message);
 
-                //固定遗言topic 通过set_topic_meta设置回调
-                let will_topic = Atom::from("$last_will");
-                if let Some(meta) = node.metas.get(&will_topic) {
-                    let client_stub = node.clients.get(&socket_id).unwrap();
-                    let client_stub = &*client_stub.clone();
-                    (meta.publish_func)(client_stub.clone(), Ok(Arc::new(payload)));
+        let mut node = node.lock().unwrap();
+        if let Some(connect) = node.client_map.remove(&socket_id) {
+            //通过连接id获取客户端id，并移除绑定
+            let client_id = connect.client_id;
+            if let Some(client_sub) = node.clients.remove(&client_id) {
+                let client_sub_copy = (&*client_sub).clone();
+                if let Some(last_will) = client_sub.last_will.read().unwrap().clone() {
+                    //TODO...
                 }
+                println!("===> MQTT Client Closed By Callback, socket: {:?}, client: {:?}", socket_id, &client_id);
             }
-            unsub_client(&mut node, socket_id);
-            func.call_box((socket_id, r));
-        };
-        stream.set_close_callback(Box::new(handle));
+            unsub_client(&mut node, &client_id); //退订指定客户端的所有主题
+        }
     }
 }
 
@@ -298,8 +295,15 @@ fn handle_recv(
             &Socket::Tls(s) => s.socket,
         };
 
+        let client_id;
         let socket = socket.clone();
-        if let Some(clients) = node.clients.get(&id) {
+        if let Some(con) = node.client_map.get(&id) {
+            client_id = &con.client_id; //通过连接id获取客户端id
+        } else {
+            return;
+        }
+
+        if let Some(clients) = node.clients.get(client_id) {
             //mqtt协议要求keep_alive的1.5倍超时关闭连接
             let keep_alive = ((clients.keep_alive as f32) * 1.5) as u64;
             if keep_alive > 0 {
@@ -309,7 +313,7 @@ fn handle_recv(
                         let n = now_millis();
                         let ss = s.read().unwrap();
                         ss.net_timers.write().unwrap().set_timeout(
-                            Atom::from(String::from("handle_recv") + &id.to_string()),
+                            Atom::from(String::from("handle_recv client ") + client_id),
                             Duration::from_millis(keep_alive as u64 * 1000),
                             Box::new(move |_src: Atom| {
                                 println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  now_millis() - n, keep_alive as u64 * 1000);
@@ -326,7 +330,7 @@ fn handle_recv(
                         let ss = s.read().unwrap();
                         let timers = ss.get_timers();
                         timers.write().unwrap().set_timeout(
-                            Atom::from(String::from("handle_recv") + &id.to_string()),
+                            Atom::from(String::from("handle_recv client ") + client_id),
                             Duration::from_millis(keep_alive as u64 * 1000),
                             Box::new(move |_src: Atom| {
                                 println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  now_millis() - n, keep_alive as u64 * 1000);
@@ -381,7 +385,7 @@ fn recv_connect(
         let client_stub = Arc::new(ClientStub {
             socket: s,
             keep_alive: connect.keep_alive,
-            last_will: Arc::new(RwLock::new(connect.last_will)),
+            last_will: Arc::new(RwLock::new(connect.last_will.clone())),
             queue: Arc::new(mpsc_queue(DynamicBuffer::new(32).unwrap())),
             queue_size: Arc::new(AtomicUsize::new(0)),
         });
@@ -389,7 +393,18 @@ fn recv_connect(
             &Socket::Raw(s) => s.socket,
             &Socket::Tls(s) => s.socket,
         };
-        node.clients.insert(id, client_stub.clone());
+        let client_id = connect.client_id.clone();
+        if connect.clean_session {
+            //根据客户端要求，清理指定客户端的所有主题
+            unsub_client(node, &client_id);
+        }
+        if let Some(last_connect) = node.client_map.get(&id) {
+            //相同连接，重复连接，则忽略
+            println!("!!!> MQTT Socket Repeated Connection, socket: {:?}, client: {:?}", id, last_connect.client_id);
+            return;
+        }
+        node.clients.insert(client_id, client_stub.clone());
+        node.client_map.insert(id, connect); //socket绑定客户端
         //模拟客户端发送主题消息
         let name = Atom::from(String::from("$open"));
         if let Some(meta) = node.metas.get(&name) {
@@ -442,13 +457,14 @@ fn recv_sub(node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket, sub: mqtt3::Subsc
 }
 
 fn recv_sub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) -> mqtt3::SubscribeReturnCodes {
+    let client_id = node.client_map.get(&cid).unwrap().client_id.clone(); //通过连接id获取客户端id
     {
         // 已经有主题的情况
         let topic = node.sub_topics.get_mut(&name);
         if topic.is_some() {
             let topic = topic.unwrap();
-            if let None = topic.clients.iter().find(|&&e| e == cid) {
-                topic.clients.push(cid); //指定客户端没有订阅指定的主题，则订阅
+            if let None = topic.clients.iter().find(| e| **e == client_id) {
+                topic.clients.push(client_id); //指定客户端没有订阅指定的主题，则订阅
             }
             return mqtt3::SubscribeReturnCodes::Success(mqtt3::QoS::AtMostOnce);
         }
@@ -487,7 +503,7 @@ fn recv_sub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) -> mqtt3::Su
             SubTopic {
                 meta: meta.clone(),
                 path: mqtt3::TopicPath::from_str(name).unwrap(),
-                clients: vec![cid],
+                clients: vec![client_id],
             },
         );
     }
@@ -527,12 +543,13 @@ fn recv_unsub(node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket, unsub: mqtt3::U
 }
 
 fn recv_unsub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) {
+    let client_id = node.client_map.get(&cid).unwrap().client_id.clone(); //通过连接id获取客户端id
     {
         // 已经有主题的情况
         let topic = node.sub_topics.get_mut(&name);
         if topic.is_some() {
             let topic = topic.unwrap();
-            topic.clients.retain(|e| *e != cid);
+            topic.clients.retain(|e| *e != client_id);
             return;
         }
     }
@@ -591,7 +608,8 @@ fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish, socke
                     &Socket::Raw(s) => s.socket,
                     &Socket::Tls(s) => s.socket,
                 };
-                r = Some((node.clients.get(&id).unwrap().clone(), meta.clone()));
+                let client_id = &node.client_map.get(&id).unwrap().client_id; //通过连接id获取客户端id
+                r = Some((node.clients.get(client_id).unwrap().clone(), meta.clone()));
                 break;
             }
         }
@@ -628,11 +646,14 @@ fn recv_pingreq(_node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket) {
 
 fn recv_disconnect(node: Arc<Mutex<ServerNodeImpl>>, cid: usize) {
     let node = &mut node.lock().unwrap();
-    node.clients.remove(&cid);
+    let client_id = node.client_map.get(&cid).unwrap().client_id.clone(); //通过连接id获取客户端id
+    if let Some(_) = node.clients.remove(&client_id) {
+        println!("===> MQTT Client Closed By Disconnect, socket: {:?}, client: {:?}", cid, &client_id);
+    }
     //模拟客户端发送主题消息
     let name = Atom::from(String::from("$close"));
     if let Some(meta) = node.metas.get(&name) {
-        let client_stub = node.clients.get(&cid).unwrap();
+        let client_stub = node.clients.get(&client_id).unwrap();
         let client_stub = &*client_stub.clone();
         let new_ms = util::encode(session::encode_reps(0, 10, vec![]));
 
@@ -644,9 +665,10 @@ fn recv_disconnect(node: Arc<Mutex<ServerNodeImpl>>, cid: usize) {
 }
 
 //退订指定客户端的所有订阅
-fn unsub_client(node: &mut ServerNodeImpl, cid: usize) {
+fn unsub_client(node: &mut ServerNodeImpl, client_id: &String) {
     node.sub_topics.iter_mut().map(|item| {
-        item.1.clients.retain(|e| *e != cid);
+        item.1.clients.retain(|e| *e != client_id.clone());
+        println!("===> MQTT Client Unsub ok, client: {:?}", client_id);
     });
 }
 
@@ -692,8 +714,8 @@ fn publish_impl(
 
     for (_, top) in node.sub_topics.iter() {
         if top.meta.can_publish && top.path.is_match(&t) {
-            for cid in top.clients.iter() {
-                if let Some(client) = node.clients.get(cid) {
+            for client_id in top.clients.iter() {
+                if let Some(client) = node.clients.get(client_id) {
                     let socket = client.socket.clone();
                     util::send_publish(
                         &socket,

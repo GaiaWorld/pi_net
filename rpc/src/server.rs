@@ -5,7 +5,7 @@ use std::io::Result;
  * 第一字节：前2位表示压缩算法,第3位表示差异比较，后5位表示版本（灰度）
  * 压缩算法：0：不压缩，1：lz4, 2:zstd
  */
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use atom::Atom;
@@ -42,8 +42,8 @@ impl RPCServer {
         self.mqtt.unset_topic_meta(topic).is_ok();
     }
     //设置连接关闭回调
-    pub fn set_close_callback(&self, stream: Stream, func: CloseFn) {
-        self.mqtt.set_close_callback(stream, func)
+    pub fn handle_close(&self, socket_id: usize) {
+        self.mqtt.handle_close(socket_id)
     }
     //
     pub fn add_stream(&self, socket: Socket, stream: Stream) {
