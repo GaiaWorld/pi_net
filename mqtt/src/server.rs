@@ -457,7 +457,13 @@ fn recv_sub(node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket, sub: mqtt3::Subsc
 }
 
 fn recv_sub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) -> mqtt3::SubscribeReturnCodes {
-    let client_id = node.client_map.get(&cid).unwrap().client_id.clone(); //通过连接id获取客户端id
+    let client_id;
+    if let Some(connect) = node.client_map.get(&cid) {
+        client_id = connect.client_id.clone(); //通过连接id获取客户端id
+    } else {
+        return mqtt3::SubscribeReturnCodes::Failure;
+    }
+
     {
         // 已经有主题的情况
         let topic = node.sub_topics.get_mut(&name);
@@ -543,7 +549,12 @@ fn recv_unsub(node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket, unsub: mqtt3::U
 }
 
 fn recv_unsub_impl(node: &mut ServerNodeImpl, cid: usize, name: Atom) {
-    let client_id = node.client_map.get(&cid).unwrap().client_id.clone(); //通过连接id获取客户端id
+    let client_id;
+    if let Some(connect) = node.client_map.get(&cid) {
+        client_id = connect.client_id.clone(); //通过连接id获取客户端id
+    } else {
+        return;
+    }
     {
         // 已经有主题的情况
         let topic = node.sub_topics.get_mut(&name);
@@ -608,8 +619,10 @@ fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish, socke
                     &Socket::Raw(s) => s.socket,
                     &Socket::Tls(s) => s.socket,
                 };
-                let client_id = &node.client_map.get(&id).unwrap().client_id; //通过连接id获取客户端id
-                r = Some((node.clients.get(client_id).unwrap().clone(), meta.clone()));
+                if let Some(connect) = &node.client_map.get(&id) {
+                    let client_id = &connect.client_id; //通过连接id获取客户端id
+                    r = Some((node.clients.get(client_id).unwrap().clone(), meta.clone()));
+                }
                 break;
             }
         }
@@ -646,7 +659,12 @@ fn recv_pingreq(_node: Arc<Mutex<ServerNodeImpl>>, socket: &Socket) {
 
 fn recv_disconnect(node: Arc<Mutex<ServerNodeImpl>>, cid: usize) {
     let node = &mut node.lock().unwrap();
-    let client_id = node.client_map.get(&cid).unwrap().client_id.clone(); //通过连接id获取客户端id
+    let client_id;
+    if let Some(connect) = node.client_map.get(&cid) {
+        client_id = connect.client_id.clone(); //通过连接id获取客户端id
+    } else {
+        return;
+    }
     if let Some(_) = node.clients.remove(&client_id) {
         println!("===> MQTT Client Closed By Disconnect, socket: {:?}, client: {:?}", cid, &client_id);
     }
