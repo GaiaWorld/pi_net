@@ -621,7 +621,9 @@ fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish, socke
                 };
                 if let Some(connect) = &node.client_map.get(&id) {
                     let client_id = &connect.client_id; //通过连接id获取客户端id
-                    r = Some((node.clients.get(client_id).unwrap().clone(), meta.clone()));
+                    if let Some(stub) = node.clients.get(client_id) {
+                        r = Some((stub.clone(), meta.clone()));
+                    }
                 }
                 break;
             }
@@ -671,14 +673,15 @@ fn recv_disconnect(node: Arc<Mutex<ServerNodeImpl>>, cid: usize) {
     //模拟客户端发送主题消息
     let name = Atom::from(String::from("$close"));
     if let Some(meta) = node.metas.get(&name) {
-        let client_stub = node.clients.get(&client_id).unwrap();
-        let client_stub = &*client_stub.clone();
-        let new_ms = util::encode(session::encode_reps(0, 10, vec![]));
+        if let Some(stub) = node.clients.get(&client_id) {
+            let client_stub = &*stub.clone();
+            let new_ms = util::encode(session::encode_reps(0, 10, vec![]));
 
-        (meta.publish_func)(
-            client_stub.clone(),
-            Ok(Arc::new(new_ms)),
-        );
+            (meta.publish_func)(
+                client_stub.clone(),
+                Ok(Arc::new(new_ms)),
+            );
+        }
     }
 }
 
@@ -732,8 +735,8 @@ fn publish_impl(
     for (_, top) in node.sub_topics.iter() {
         if top.meta.can_publish && top.path.is_match(&t) {
             for client_id in top.clients.iter() {
-                if let Some(client) = node.clients.get(client_id) {
-                    let socket = client.socket.clone();
+                if let Some(stub) = node.clients.get(client_id) {
+                    let socket = stub.socket.clone();
                     util::send_publish(
                         &socket,
                         retain,
