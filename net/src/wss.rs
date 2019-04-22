@@ -131,6 +131,7 @@ pub fn recv(stream: Arc<RwLock<tls::TlsStream>>, size: usize, func: RecvFn) -> O
         },
 
         Websocket::Bin(offset, len) => {
+            println!("!!!!!!wss, websocket frame, token: {:?}, offset: {}, len: {}, size: {}", &stream.read().unwrap().token, offset, len, size);
             //判断缓存中是否取完
             if len >= size {
                 let stream = stream2.clone();
@@ -201,6 +202,7 @@ pub fn recv(stream: Arc<RwLock<tls::TlsStream>>, size: usize, func: RecvFn) -> O
 
 
                 });
+                println!("!!!!!!wss, wait websocket frame, token: {:?}", &stream.read().unwrap().token);
                 //从网络中等待websocket包
                 read_ws_header(stream, ws_func);
             }
