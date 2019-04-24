@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::time::Duration;
 use std::sync::{Arc, RwLock};
 use std::collections::VecDeque;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{SocketAddr, IpAddr, Ipv4Addr};
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::io::{Write, Read, BufReader, Result, ErrorKind, Error};
@@ -94,6 +94,8 @@ pub struct TlsSocket {
     pub socket: usize,                  //对应的tcp流的令牌id
     pub sender: Sender<TlsExtRequest>,  //tls事件循环请求发送者
     pub gray: Option<usize>,            //灰度
+    pub peer: Option<SocketAddr>,       //对端网络地址
+    pub local: SocketAddr,              //本地网络地址
 }
 
 unsafe impl Sync for TlsSocket {}
@@ -101,12 +103,14 @@ unsafe impl Send for TlsSocket {}
 
 impl TlsSocket {
     //构建tls socket
-    pub fn new(id: usize, sender: Sender<TlsExtRequest>) -> Self {
+    pub fn new(id: usize, local: SocketAddr, peer: Option<SocketAddr>, sender: Sender<TlsExtRequest>) -> Self {
         Self {
             state: Arc::new(AtomicUsize::new(State::Run as usize)),
             socket: id,
             sender,
             gray: None,
+            peer,
+            local,
         }
     }
 }
@@ -1020,6 +1024,7 @@ fn handle_event(handler: &mut TlsHandler, events: &mut mio::Events, recv_buff_si
         let token = event.token();  //当前事件令牌
         let readiness = event.readiness();
         let mut accepted = None; //已接受连接
+        let mut peer_addr = None; //对端网络地址
         let mut handshaked = false; //连接已握手
         let mut close_id: Option<usize> = None; //准备关闭的tcp流标记
 
@@ -1035,6 +1040,7 @@ fn handle_event(handler: &mut TlsHandler, events: &mut mio::Events, recv_buff_si
                                 //接受连接请求，返回tcp流
                                 println!("===> Accepting new connection from {:?}", addr);
                                 accepted = Some(tcp_stream);
+                                peer_addr = Some(addr);
                             },
                             Err(e) => {
                                 println!("!!!> Encountered error while accepting connection; e: {:?}", e);
@@ -1099,7 +1105,7 @@ fn handle_event(handler: &mut TlsHandler, events: &mut mio::Events, recv_buff_si
 
         if handshaked {
             //已握手，则tls连接完成
-            handle_tls_handshake(handler, token.clone());
+            handle_tls_handshake(handler, token.clone(), peer_addr);
         }
 
         if let Some(id) = close_id {
@@ -1131,7 +1137,7 @@ fn handle_connect_event(handler: &TlsHandler, tcp_stream: TcpStream, acceptor_to
 }
 
 //处理tls连接握手
-fn handle_tls_handshake(handler: &TlsHandler, token: mio::Token) {
+fn handle_tls_handshake(handler: &TlsHandler, token: mio::Token, peer_addr: Option<SocketAddr>) {
     let slab = handler.slab.borrow();
     if let Some(origin) = slab.get(token.0) {
         match origin {
@@ -1140,7 +1146,11 @@ fn handle_tls_handshake(handler: &TlsHandler, token: mio::Token) {
                 stream.write().unwrap().handshake = true;
 
                 //构建外部使用的socket，与内部的tls处理共享同一个tls事件循环请求发送者
-                let socket = TlsSocket::new(token.0, handler.sender.clone());
+                let socket;
+                socket = TlsSocket::new(token.0,
+                                        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), handler.port),
+                                        peer_addr,
+                                        handler.sender.clone());
 
                 if let Some(origin) = slab.get(acceptor_token.0) {
                     //获取接受器对应的连接回调

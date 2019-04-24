@@ -5,7 +5,7 @@ use std::io::{Error, ErrorKind, Read, Result, Write, Cursor};
 use std::time::{Duration};
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
-use std::net::{Shutdown};
+use std::net::{Shutdown, IpAddr, Ipv4Addr, SocketAddr};
 use std::thread;
 
 use mio::{Events, Poll, PollOpt, Ready, Token};
@@ -89,7 +89,7 @@ pub fn connect_tcp(handler: &mut NetHandler, config: Config, func: ListenerFn) {
         let data = NetData::TcpStream(stream.clone(), s);
         entry.insert(data);
 
-        let socket = RawSocket::new(key, handler.sender.clone());
+        let socket = RawSocket::new(key, local_addr.clone(), None, handler.sender.clone());
 
         let param1 = Ok((socket, stream));
         let param2 = Ok(local_addr);
@@ -198,11 +198,11 @@ pub fn handle_close(handler: &mut NetHandler, socket: usize, force: bool) {
 }
 
 //接受连接请求，建立tcp流，并为tcp流申请缓冲区
-fn tcp_event(mio: &mut TcpListener, recv_comings: Arc<RwLock<Vec<Token>>>, net_timers: Arc<RwLock<NetTimers<TimerCallback>>>) -> Option<NetData> {
-    let (tcp_stream, _) = mio.accept().unwrap();
+fn tcp_event(mio: &mut TcpListener, recv_comings: Arc<RwLock<Vec<Token>>>, net_timers: Arc<RwLock<NetTimers<TimerCallback>>>) -> (NetData, SocketAddr) {
+    let (tcp_stream, addr) = mio.accept().unwrap();
     let s = RawStream::new(0, recv_comings, net_timers);
     tcp_stream.set_recv_buffer_size(MAX_RECV_SIZE).unwrap();
-    Some(NetData::TcpStream(Arc::new(RwLock::new(s)), tcp_stream))
+    (NetData::TcpStream(Arc::new(RwLock::new(s)), tcp_stream), addr)
 }
 
 //从tcp流上接收数据
@@ -427,6 +427,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
             let Token(token) = event.token();
             let readiness = event.readiness();
             let mut net_data: Option<NetData> = None;
+            let mut net_addr: Option<SocketAddr> = None;
 
             let mut close_id: Option<usize> = None;
             if let Some(data) = handler.slab.get_mut(token) {
@@ -436,7 +437,9 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                         handler.counter.as_ref().unwrap().connect_count.sum(1);
 
                         if readiness.is_readable() {
-                            net_data = tcp_event(mio, handler.recv_comings.clone(), handler.net_timers.clone());
+                            let (data, addr) = tcp_event(mio, handler.recv_comings.clone(), handler.net_timers.clone());
+                            net_data = Some(data);
+                            net_addr = Some(addr);
 
                             handler.counter.as_ref().unwrap().accepted_count.sum(1);
                         } else if readiness.is_writable() {
@@ -551,11 +554,16 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
             }
 
             if let Some(k) = key {
-                let socket = RawSocket::new(k, handler.sender.clone());
+                let socket;
+                socket = RawSocket::new(k,
+                                        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), handler.port),
+                                        net_addr,
+                                        handler.sender.clone());
                 match handler.slab.get(token).unwrap() {
                     &NetData::TcpServer(ref callback, _) => {
                         let tcp_data = handler.slab.get(k).unwrap();
                         if let &NetData::TcpStream(ref stream, ref mio) = tcp_data {
+
                             callback(Ok((socket, stream.clone())), mio.peer_addr());
                         } else {
                             // TODO: UDP
@@ -857,12 +865,14 @@ pub fn recv(stream: Arc<RwLock<RawStream>>, size: usize, func: RecvFn) -> Option
 // }
 
 impl RawSocket {
-    pub fn new(id: usize, sender: Sender<SendClosureFn>) -> Self {
+    pub fn new(id: usize, local: SocketAddr, peer: Option<SocketAddr>, sender: Sender<SendClosureFn>) -> Self {
         Self {
             state: Arc::new(AtomicUsize::new(State::Run as usize)),
             socket: id,
             sender: sender,
             gray: None,
+            peer,
+            local,
         }
     }
 }

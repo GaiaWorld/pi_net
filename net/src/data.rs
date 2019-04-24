@@ -45,6 +45,8 @@ pub struct RawSocket {
     pub socket: usize,
     pub sender: Sender<SendClosureFn>,
     pub gray: Option<usize>,
+    pub peer: Option<SocketAddr>,
+    pub local: SocketAddr,
 }
 
 unsafe impl Sync for RawSocket {}

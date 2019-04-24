@@ -7,6 +7,7 @@ use std::io::Result;
  */
 use std::sync::Arc;
 use std::time::SystemTime;
+use std::net::SocketAddr;
 
 use atom::Atom;
 
@@ -63,8 +64,8 @@ impl RPCServerTraits for RPCServer {
         handle: Arc<
             Handler<
                 A = u8,
-                B = Arc<Vec<u8>>,
-                C = (),
+                B = Option<SocketAddr>,
+                C = Arc<Vec<u8>>,
                 D = (),
                 E = (),
                 F = (),
@@ -101,7 +102,7 @@ impl RPCServerTraits for RPCServer {
                     handle.clone().handle(
                         session.clone(),
                         topic2.clone(),
-                        Args::TwoArgs(0, Arc::new(Vec::from(&rdata[5..]))),
+                        Args::ThreeArgs(0, client.get_socket().peer_addr(), Arc::new(Vec::from(&rdata[5..]))),
                     )
                 });
             }

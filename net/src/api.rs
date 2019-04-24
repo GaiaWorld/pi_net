@@ -4,6 +4,7 @@ use std::sync::{Arc, RwLock};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Sender};
 use std::io::{Cursor, Result};
+use std::net::SocketAddr;
 
 use fnv::FnvHashMap;
 use mio::Token;
@@ -236,12 +237,31 @@ unsafe impl Sync for Socket {}
 unsafe impl Send for Socket {}
 
 impl Socket {
-    pub fn new_raw(id: usize, sender: Sender<SendClosureFn>) -> Self {
-        Socket::Raw(RawSocket::new(id, sender))
+    pub fn new_raw(id: usize, local: SocketAddr, peer: Option<SocketAddr>, sender: Sender<SendClosureFn>) -> Self {
+        Socket::Raw(RawSocket::new(id, local, peer, sender))
     }
 
-    pub fn new_tls(id: usize, sender: Sender<tls::TlsExtRequest>) -> Self {
-        Socket::Tls(tls::TlsSocket::new(id, sender))
+    pub fn new_tls(id: usize, local: SocketAddr, peer: Option<SocketAddr>, sender: Sender<tls::TlsExtRequest>) -> Self {
+        Socket::Tls(tls::TlsSocket::new(id, local, peer, sender))
+    }
+
+    pub fn peer_addr(&self) -> Option<SocketAddr> {
+        match self {
+            Socket::Raw(socket) => {
+                if let Some(addr) = socket.peer.as_ref() {
+                    Some(addr.clone())
+                } else {
+                    None
+                }
+            },
+            Socket::Tls(socket) => {
+                if let Some(addr) = socket.peer.as_ref() {
+                    Some(addr.clone())
+                } else {
+                    None
+                }
+            },
+        }
     }
 }
 

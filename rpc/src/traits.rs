@@ -4,6 +4,7 @@ use atom::Atom;
 
 use std::io::Result;
 use std::sync::Arc;
+use std::net::SocketAddr;
 
 pub trait RPCClientTraits {
     // 最终变为：$r，payload: params
@@ -30,8 +31,8 @@ pub trait RPCServerTraits {
         handle: Arc<
             Handler<
                 A = u8,
-                B = Arc<Vec<u8>>,
-                C = (),
+                B = Option<SocketAddr>,
+                C = Arc<Vec<u8>>,
                 D = (),
                 E = (),
                 F = (),
