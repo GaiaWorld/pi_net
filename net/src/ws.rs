@@ -63,7 +63,7 @@ pub fn read_header(stream: Arc<RwLock<RawStream>>, buf: Vec<u8>, func: Box<FnBox
 
 pub fn read_ws_header(stream: Arc<RwLock<RawStream>>, func: Box<FnBox(Result<OwnedMessage>)>)
 {
-    println!("read_ws_header------------------------------------------------------------------------");
+    // println!("read_ws_header------------------------------------------------------------------------");
 	let stream2 = stream.clone();
 	recv_message_dataframes(stream, true, Box::new(move |r| {
         match r {
