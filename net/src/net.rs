@@ -255,10 +255,10 @@ fn stream_recv(stream: &mut RawStream, mio: &mut TcpStream, counter: &NetCounter
                     }
                     Err(err) => {
                         if let ErrorKind::WouldBlock = err.kind() {
-                            println!(
-                                "{:?} recv wouldblock1, offset = {}",
-                                stream.token, stream.recv_buf_offset
-                            );
+                            // println!(
+                            //     "{:?} recv wouldblock1, offset = {}",
+                            //     stream.token, stream.recv_buf_offset
+                            // );
                             break Ok(0);
                         }
                         break Err(err);
@@ -461,10 +461,10 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                                             let stream = &mut s.write().unwrap();
                                             stream.interest.remove(Ready::readable());
 
-                                            println!(
-                                                "recv_buf1 stream {:?}: reregister, interest = {:?}",
-                                                stream.token, stream.interest
-                                            );
+                                            // println!(
+                                            //     "recv_buf1 stream {:?}: reregister, interest = {:?}",
+                                            //     stream.token, stream.interest
+                                            // );
 
                                             handler
                                                 .poll
@@ -512,7 +512,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                                 close_id = Some(id);
                             }
                         } else if readiness.is_writable() {
-                            println!("write_buf1 stream");
+                            // println!("write_buf1 stream");
                             let close =
                                 stream_send(&mut handler.poll, &mut s.write().unwrap(), mio);
                             if close {
