@@ -13,4 +13,4 @@ magnetic = "2.0.0"
 atom = {path="../../pi_lib/atom"}
 time = {path="../../pi_lib/time"}
 gray = {path="../../pi_lib/gray"}
-util = {path="../../pi_lib/util"}
+compress = { path = "../../pi_lib/compress"}

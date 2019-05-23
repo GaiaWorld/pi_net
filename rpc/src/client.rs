@@ -21,7 +21,7 @@ use net::timer::{NetTimers, TimerCallback};
 
 use net::api::{Socket, Stream};
 
-use util::{compress, uncompress, CompressLevel};
+use compress::{compress, uncompress, CompressLevel};
 use traits::RPCClientTraits;
 
 #[derive(Clone)]

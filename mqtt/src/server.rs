@@ -12,9 +12,9 @@ use magnetic::mpsc::{MPSCConsumer, MPSCProducer};
 use magnetic::{Consumer, Producer};
 
 use atom::Atom;
-use time::now_millis;
+use time::run_millis;
 use gray::GrayVersion;
-use lib_util::uncompress;
+use compress::uncompress;
 use data::{Server, SetAttrFun};
 use fnv::FnvHashMap;
 use mqtt3::{self, Packet};
@@ -310,13 +310,13 @@ fn  handle_recv(
                 let stream = st.clone();
                 match &stream {
                     &Stream::Raw(ref s) => {
-                        let n = now_millis();
+                        let n = run_millis();
                         let ss = s.read().unwrap();
                         ss.net_timers.write().unwrap().set_timeout(
                             Atom::from(String::from("handle_recv client ") + client_id),
                             Duration::from_millis(keep_alive as u64 * 1000),
                             Box::new(move |_src: Atom| {
-                                println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  now_millis() - n, keep_alive as u64 * 1000);
+                                println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  run_millis() - n, keep_alive as u64 * 1000);
                                 //关闭连接
                                 match &socket {
                                     &Socket::Raw(ref s) => s.close(true),
@@ -326,14 +326,14 @@ fn  handle_recv(
                         );
                     },
                     &Stream::Tls(ref s) => {
-                        let n = now_millis();
+                        let n = run_millis();
                         let ss = s.read().unwrap();
                         let timers = ss.get_timers();
                         timers.write().unwrap().set_timeout(
                             Atom::from(String::from("handle_recv client ") + client_id),
                             Duration::from_millis(keep_alive as u64 * 1000),
                             Box::new(move |_src: Atom| {
-                                println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  now_millis() - n, keep_alive as u64 * 1000);
+                                println!("keep_alive timeout con close!!!!!!!!!!!!{}, {}",  run_millis() - n, keep_alive as u64 * 1000);
                                 //关闭连接
                                 match &socket {
                                     &Socket::Raw(ref s) => s.close(true),

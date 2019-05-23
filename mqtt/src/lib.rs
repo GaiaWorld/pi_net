@@ -10,8 +10,8 @@ extern crate magnetic;
 extern crate gray;
 extern crate time;
 extern crate atom;
-extern crate util as lib_util;
 extern crate rustc_serialize;
+extern crate compress;
 
 pub mod client;
 pub mod data;
