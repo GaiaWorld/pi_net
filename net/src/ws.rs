@@ -68,12 +68,15 @@ pub fn read_ws_header(stream: Arc<RwLock<RawStream>>, func: Box<FnBox(Result<Own
 	recv_message_dataframes(stream, true, Box::new(move |r| {
         match r {
             Ok(dataframes) => {
-                let msg = Message::from_dataframes(dataframes).unwrap();
-                let o_msg = OwnedMessage::from(msg);
-                func(Ok(o_msg));
+                if let Ok(msg) = Message::from_dataframes(dataframes) {
+                    let o_msg = OwnedMessage::from(msg);
+                    func(Ok(o_msg));
+                } else {
+                    read_ws_header(stream2, func);
+                }
             }
             Err(_e) => {
-                read_ws_header(stream2, func)
+                read_ws_header(stream2, func);
             }
         }
     }));
