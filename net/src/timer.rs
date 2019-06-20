@@ -29,7 +29,7 @@ pub type TimerCallback = Box<FnBox(Atom) + Send>;
 impl<T> NetTimer<T> {
     pub fn new() -> NetTimer<T> {
         NetTimer {
-            timer: Arc::new(RefCell::new(Builder::default().tick_duration(Duration::from_millis(10)).build())),
+            timer: Arc::new(RefCell::new(Builder::default().tick_duration(Duration::from_micros(200)).build())),
         }
     }
 
