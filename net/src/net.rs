@@ -397,7 +397,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
 
     //tcp事件处理循环
     loop {
-        thread::sleep(Duration::from_millis(10));
+        thread::sleep(Duration::from_micros(100));
         // recv_comings
         for &Token(id) in handler.recv_comings.read().unwrap().iter() {
             if let Some(data) = handler.slab.get_mut(id) {
