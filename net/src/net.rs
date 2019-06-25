@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::io::{Error, ErrorKind, Read, Result, Write, Cursor};
-use std::time::{Duration};
+use std::time::{Duration, Instant};
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
 use std::net::{Shutdown, IpAddr, Ipv4Addr, SocketAddr};
@@ -395,9 +395,12 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
 
     let one_sec = Duration::from_millis(10);
 
+    let slow = Duration::from_millis(1);
     //tcp事件处理循环
     loop {
-//        thread::sleep(Duration::from_micros(100));
+        thread::sleep(Duration::from_millis(1));
+        let now = Instant::now();
+        let start = Instant::now();
         // recv_comings
         for &Token(id) in handler.recv_comings.read().unwrap().iter() {
             if let Some(data) = handler.slab.get_mut(id) {
@@ -421,9 +424,17 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
         }
         handler.recv_comings.write().unwrap().clear();
 
+        if start.elapsed() >= slow {
+            println!("!!!!!!net poll recv coming, time: {:?}", start.elapsed());
+        }
+        let start = Instant::now();
+
         // handle event from net
         handler.poll.poll(&mut events, Some(Duration::from_millis(0))).unwrap();
+        let mut events_len = 0;
         for event in &events {
+            events_len += 1;
+
             let Token(token) = event.token();
             let readiness = event.readiness();
             let mut net_data: Option<NetData> = None;
@@ -574,10 +585,20 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
             }
         }
 
+        if start.elapsed() >= slow {
+            println!("!!!!!!net poll handle events, size: {:?}, time: {:?}", events_len, start.elapsed());
+        }
+        let start = Instant::now();
+
         // handle recv from logic thread
         while let Ok(func) = receiver.try_recv() {
             func.call_box((&mut handler,));
         }
+
+        if start.elapsed() >= slow {
+            println!("!!!!!!net poll handle ext function, time: {:?}", start.elapsed());
+        }
+        let start = Instant::now();
         
         //轮询定时器
         handler.net_timers.write().unwrap().poll();
@@ -603,11 +624,24 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
             }
         }
 
+        if start.elapsed() >= slow {
+            println!("!!!!!!net poll handle timeout, time: {:?}", start.elapsed());
+        }
+        let start = Instant::now();
+
         if tokens.len() > 0 {
             println!("---------- close tokens's len = {}", tokens.len());
         }
         for id in tokens {
             handle_close(&mut handler, id, true);
+        }
+
+        if start.elapsed() >= slow {
+            println!("!!!!!!net poll handle close connect, time: {:?}", start.elapsed());
+        }
+
+        if now.elapsed() >= slow {
+            println!("!!!!!!net poll time: {:?}", now.elapsed());
         }
     }
 }
