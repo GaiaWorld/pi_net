@@ -159,13 +159,17 @@ fn test_rpc() {
     match RPCClient::create("ws://127.0.0.1:1234") {
         Err(e) => println!("!!!!!!create rpc client failed, e: {:?}", e),
         Ok(client) => {
+            println!("!!!!!!create rpc client ok");
             let client_copy = client.clone();
             let connect_cb = Arc::new(move |result| {
                 println!("!!!!!!rpc client connect, result: {:?}", result);
                 let request_cb = Arc::new(move |result| {
                     println!("!!!!!!rpc client request, result: {:?}", result);
                 });
-                client_copy.request("game/app_a/user/server/user_base_rpc_call.login".to_string(), vec![10, 10, 10], 10, request_cb);
+
+                for x in 0..10 {
+                    client_copy.request("game/app_a/user/server/user_base_rpc_call.login".to_string(), vec![x, x, x], 10, request_cb.clone());
+                }
             });
             let closed_cb = Arc::new(move |result| {
                 println!("!!!!!!rpc client closed, result: {:?}", result);

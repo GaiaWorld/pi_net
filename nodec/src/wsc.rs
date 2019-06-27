@@ -1,6 +1,7 @@
 use std::boxed::FnBox;
 use std::time::{SystemTime, Duration};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
+use std::collections::HashMap;
 use std::io::{Error, Result, ErrorKind};
 use std::sync::atomic::{AtomicUsize, Ordering, AtomicBool};
 
@@ -33,6 +34,13 @@ const WSC_CLOSED_BY_DROP_CODE: u16 = 1001;
 const WSC_CLOSED_BY_DROP_REASON: &'static str = "wsc client droped";
 
 /*
+* websocket客户端表
+*/
+lazy_static! {
+    pub static ref WSC_TABLE: Arc<RwLock<HashMap<String, SharedWSClient>>> = Arc::new(RwLock::new(HashMap::new()));
+}
+
+/*
 * 共享websocket客户端
 */
 #[derive(Clone)]
@@ -44,15 +52,25 @@ unsafe impl Sync for SharedWSClient {}
 impl SharedWSClient {
     //构建websocket客户端
     pub fn create(url: &str) -> Result<Self> {
+        let url_str = url.to_string();
+        if let Some(wsc) = WSC_TABLE.read().unwrap().get(&url_str) {
+            //连接指定url的客户端已存在，则返回
+            return Ok(wsc.clone());
+        }
+
+        //连接指定url的客户端不存在，则构建
         match ClientBuilder::new(url) {
             Err(e) => Err(Error::new(ErrorKind::AddrNotAvailable, e)),
             Ok(builder) => {
-                Ok(SharedWSClient(Arc::new(Mutex::new(WSClient {
+                let wsc = SharedWSClient(Arc::new(Mutex::new(WSClient {
                     status: WSClientStatus::NotConnected,
                     url: url.to_string(),
                     builder: Some(builder),
                     client: None,
-                }))))
+                })));
+                WSC_TABLE.write().unwrap().insert(url_str, wsc.clone());
+
+                Ok(wsc)
             },
         }
     }
@@ -152,6 +170,7 @@ impl SharedWSClient {
                 Err(Error::new(ErrorKind::InvalidData, e.to_string()))
             } else {
                 wsc.status = WSClientStatus::Closed(now_second());
+                WSC_TABLE.write().unwrap().remove(&self.get_url());
                 Ok(())
             }
         } else {

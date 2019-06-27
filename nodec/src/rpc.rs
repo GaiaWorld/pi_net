@@ -120,13 +120,23 @@ impl RPCClient {
                     true
                 },
                 Ok(Some(bin)) => {
-                    if let Some((id, data)) = binary_to_rpc(bin) {
+                    if let Some((id, data)) = binary_to_rpc(&bin) {
                         if uid != id {
-                            //非法回应，则忽略，并继续等待本次请求的回应
-                            true
+                            let receive_callback: Arc<Fn(Result<Option<Vec<u8>>>) -> bool>;
+                            if let Some(cb) = client.resp_tab.lock().unwrap().get(&id) {
+                                //是其它请求的回应
+                                receive_callback = cb.clone();
+                            } else {
+                                //非法回应，则忽略，并继续等待本次请求的回应
+                                return true;
+                            }
+
+                            //执行用户其它请求的接收回调
+                            receive_callback(Ok(Some(bin)))
                         } else {
-                            //是本次请求的回应，则执行用户的请求回调
+                            //是本次请求的回应，则执行用户的请求回调，并移除当前请求的接收回调
                             callback(Ok(data));
+                            client.resp_tab.lock().unwrap().remove(&uid);
                             false
                         }
                     } else {
@@ -136,7 +146,7 @@ impl RPCClient {
                 },
             }
         });
-        self.resp_tab.lock().unwrap().insert(uid, receive_callback);
+        self.resp_tab.lock().unwrap().insert(uid, receive_callback.clone());
 
         //异步发送请求，并异步等待回应
         let now = Instant::now(); //请求开始时间
@@ -150,14 +160,14 @@ impl RPCClient {
         };
         let client = self.clone();
         let request_callback = Arc::new(move |result: Result<Option<Vec<u8>>>| {
-            let receive_callback = match client.resp_tab.lock().unwrap().remove(&uid) {
+            let receive_callback = match client.resp_tab.lock().unwrap().get(&uid) {
                 None => {
                     //未注册本次请求回调
                     Arc::new(move |result: Result<Option<Vec<u8>>>| false)
                 },
                 Some(cb) => {
                     //注册了本次请求回调
-                    cb
+                    cb.clone()
                 },
             };
             match result {
@@ -229,7 +239,7 @@ fn rpc_to_binary(compress_level: u8, version: u8, uid: u32, timeout: u8, body: V
 }
 
 //将binary反序列化为rpc回应
-fn binary_to_rpc(bin: Vec<u8>) -> Option<(u32, Option<Vec<u8>>)> {
+fn binary_to_rpc(bin: &[u8]) -> Option<(u32, Option<Vec<u8>>)> {
     if bin.len() < 7 {
         return None;
     }
