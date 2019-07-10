@@ -2,7 +2,6 @@ use std::fs;
 use std::thread;
 use std::path::Path;
 use std::ops::Range;
-use std::boxed::FnBox;
 use std::cell::RefCell;
 use std::time::Duration;
 use std::sync::{Arc, RwLock};
@@ -47,7 +46,7 @@ const TLS_SERVER_OUTPUT_BYTE_COUNT_SUFFIX: &'static str = "_output_byte_count";
 /*
 * tls外部请求
 */
-pub type TlsExtRequest = Box<FnBox(&mut TlsHandler) + Send>;
+pub type TlsExtRequest = Box<FnOnce(&mut TlsHandler) + Send>;
 
 /*
 * tcp监听处理器
@@ -944,7 +943,7 @@ pub fn startup(sender: Sender<TlsExtRequest>, receiver: Receiver<TlsExtRequest>,
 
         //处理外部发送到线程的所有请求
         while let Ok(req) = receiver.try_recv() {
-            req.call_box((&mut handler,));
+            req(&mut handler);
         }
 
         //处理所有已注册的令牌产生的tcp流超时事件
@@ -1603,7 +1602,7 @@ pub fn handle_close(handler: &TlsHandler, token_id: usize, force: bool) {
                 if close_callback.is_some() {
                     //关闭回调存在，则取出并调用
                     let closed = close_callback.take().unwrap();
-                    closed.call_box((token_id, Ok(())));
+                    closed(token_id, Ok(()));
                 }
             },
         }

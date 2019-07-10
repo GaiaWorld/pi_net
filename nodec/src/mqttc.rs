@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::boxed::FnBox;
 use std::time::{Duration, Instant};
 use std::io::{Error, Result, ErrorKind, BufWriter, BufReader};
 

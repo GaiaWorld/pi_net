@@ -1,4 +1,3 @@
-use std::boxed::FnBox;
 use std::collections::VecDeque;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::{Arc, Mutex, RwLock};
@@ -33,7 +32,7 @@ pub struct ClientNodeImpl {
     topic_patterns: FnvHashMap<Atom, TopicData>,
 
     // 当socket和stream还没准备好时候的缓冲区
-    socket_handlers: VecDeque<Box<FnBox(&Socket, Stream)>>,
+    socket_handlers: VecDeque<Box<FnOnce(&Socket, Stream)>>,
     keep_alive: u16,
 }
 
@@ -118,7 +117,7 @@ impl Client for ClientNode {
 
         while !node.socket_handlers.is_empty() {
             let func = node.socket_handlers.pop_front().unwrap();
-            func.call_box((&socket, stream.clone()));
+            func(&socket, stream.clone());
         }
 
         node.socket = Some(socket);
@@ -435,7 +434,7 @@ fn recv_connect_ack(node: Arc<Mutex<ClientNodeImpl>>, ack: mqtt3::Connack) {
     };
 
     if let Some(func) = node.lock().unwrap().connect_func.take() {
-        func.call_box((r,));
+        func(r);
     }
 }
 
@@ -444,7 +443,7 @@ fn recv_sub_ack(node: Arc<Mutex<ClientNodeImpl>>, ack: mqtt3::Suback) {
     let PacketIdentifier(id) = ack.pid;
     let id = (1 + id * 2) as usize;
     if let Some(Some(func)) = node.sub_map.remove(&id) {
-        func.call_box((Ok(()),));
+        func(Ok(()));
     }
 }
 
@@ -452,7 +451,7 @@ fn recv_unsub_ack(node: Arc<Mutex<ClientNodeImpl>>, id: u16) {
     let node = &mut node.lock().unwrap();
     let id = (id * 2) as usize;
     if let Some(Some(func)) = node.sub_map.remove(&id) {
-        func.call_box((Ok(()),));
+        func(Ok(()));
     }
 }
 
@@ -477,7 +476,7 @@ fn recv_publish(node: Arc<Mutex<ClientNodeImpl>>, publish: mqtt3::Publish) {
     }
 }
 
-fn handle_slot(node: Arc<Mutex<ClientNodeImpl>>, func: Box<FnBox(&Socket, Stream)>) {
+fn handle_slot(node: Arc<Mutex<ClientNodeImpl>>, func: Box<FnOnce(&Socket, Stream)>) {
     let node = node.clone();
     {
         
@@ -491,7 +490,7 @@ fn handle_slot(node: Arc<Mutex<ClientNodeImpl>>, func: Box<FnBox(&Socket, Stream
 
         if let Some(ref socket) = node.socket.as_ref() {
             let stream = node.stream.as_ref().unwrap();
-            func.call_box((socket, stream.clone()));
+            func(socket, stream.clone());
         }
     }
     let client = ClientNode(node.clone());

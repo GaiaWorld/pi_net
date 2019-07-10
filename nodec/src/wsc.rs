@@ -1,4 +1,3 @@
-use std::boxed::FnBox;
 use std::time::{SystemTime, Duration};
 use std::sync::{Arc, Mutex, RwLock};
 use std::collections::HashMap;
@@ -179,7 +178,7 @@ impl SharedWSClient {
     }
 
     //异步接收websocket消息，通过抢占式控制，可以在超时后退出阻塞的接收线程
-    pub fn receive(&self, timeout: Option<u32>, callback: Box<FnBox(Self, Result<Option<Vec<u8>>>)>) {
+    pub fn receive(&self, timeout: Option<u32>, callback: Box<FnOnce(Self, Result<Option<Vec<u8>>>)>) {
         let client = self.clone();
         let handle = client.0.lock().unwrap().client.as_ref().unwrap().is_running.clone();
         let handle_copy = handle.clone();

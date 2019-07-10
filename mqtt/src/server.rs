@@ -1,4 +1,3 @@
-use std::boxed::FnBox;
 use std::fmt::{Debug, Formatter, Result as DebugResult};
 use std::io::{Error, ErrorKind, Result};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -64,8 +63,8 @@ pub struct ClientStub {
     keep_alive: u16,
     last_will: Arc<RwLock<Option<mqtt3::LastWill>>>,
     queue: Arc<(
-        MPSCProducer<Box<FnBox()>, DynamicBuffer<Box<FnBox()>>>,
-        MPSCConsumer<Box<FnBox()>, DynamicBuffer<Box<FnBox()>>>,
+        MPSCProducer<Box<FnOnce()>, DynamicBuffer<Box<FnOnce()>>>,
+        MPSCConsumer<Box<FnOnce()>, DynamicBuffer<Box<FnOnce()>>>,
     )>,
     queue_size: Arc<AtomicUsize>,
 }
@@ -118,13 +117,13 @@ impl ClientStub {
         self.queue_size.load(Ordering::Relaxed)
     }
     //增加队列消息
-    pub fn queue_push(&self, handle: Box<FnBox()>) {
+    pub fn queue_push(&self, handle: Box<FnOnce()>) {
         self.queue.0.push(handle).is_ok();
         self.queue_size
             .store(self.get_queue_size() + 1, Ordering::Relaxed)
     }
     //弹出队列消息
-    pub fn queue_pop(&self) -> Option<Box<FnBox()>> {
+    pub fn queue_pop(&self) -> Option<Box<FnOnce()>> {
         if self.get_queue_size() > 0 {
             let v = self.queue.1.pop().unwrap();
             self.queue_size

@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::boxed::FnBox;
 use std::str::FromStr;
 use std::net::SocketAddr;
 use std::string::ToString;
@@ -179,7 +178,7 @@ pub struct Request {
     pub method: Method,
     pub extensions: TypeMap,
     pub version: HttpVersion,
-    pub executor: fn(TaskType, usize, Option<isize>, Box<FnBox(Option<isize>)>, Atom) -> Option<isize>,
+    pub executor: fn(TaskType, usize, Option<isize>, Box<FnOnce(Option<isize>)>, Atom) -> Option<isize>,
     pub uid: usize,
 }
 
@@ -212,7 +211,7 @@ impl Extensible for Request {
 
 impl Request {
     //处理来自http的请求
-    pub fn from_http(executor: fn(TaskType, usize, Option<isize>, Box<FnBox(Option<isize>)>, Atom) -> Option<isize>,
+    pub fn from_http(executor: fn(TaskType, usize, Option<isize>, Box<FnOnce(Option<isize>)>, Atom) -> Option<isize>,
                     req: HttpRequest<Body>, 
                     local_addr: Option<SocketAddr>, 
                     protocol: &Protocol, 

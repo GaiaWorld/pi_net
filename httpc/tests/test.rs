@@ -1,5 +1,3 @@
-#![feature(fnbox)]
-
 extern crate atom;
 extern crate worker;
 extern crate httpc;
@@ -7,7 +5,6 @@ extern crate httpc;
 use std::thread;
 use std::fs::File;
 use std::io::Result;
-use std::boxed::FnBox;
 
 use worker::worker_pool::WorkerPool;
 use worker::impls::{NET_WORKER_WALKER, NET_TASK_POOL};

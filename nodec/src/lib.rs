@@ -1,4 +1,3 @@
-#![feature(fnbox)]
 #![feature(bufreader_buffer)]
 
 extern crate url;

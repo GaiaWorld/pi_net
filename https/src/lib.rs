@@ -1,5 +1,4 @@
 #![feature(nll)]
-#![feature(fnbox)]
 #![feature(extern_prelude)]
 #![feature(type_ascription)]
 

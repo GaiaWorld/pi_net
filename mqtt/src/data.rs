@@ -1,4 +1,3 @@
-use std::boxed::FnBox;
 use std::io::Result;
 use std::sync::{Arc, RwLock};
 use std::any::Any;
@@ -13,7 +12,7 @@ use net::api::{Socket, Stream};
 
 use atom::Atom;
 
-pub type ClientCallback = Box<FnBox(Result<()>)>;
+pub type ClientCallback = Box<FnOnce(Result<()>)>;
 pub type SetAttrFun = Box<Fn(&mut FnvHashMap<Atom, Arc<Any>>, Socket, mqtt3::Connect)>;
 
 // mqtt客户端接口

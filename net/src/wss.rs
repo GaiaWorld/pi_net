@@ -1,5 +1,4 @@
 use std::thread;
-use std::boxed::FnBox;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Sender};
@@ -213,7 +212,7 @@ pub fn recv(stream: Arc<RwLock<tls::TlsStream>>, size: usize, func: RecvFn) -> O
 
 //读websocket握手数据中的http头
 #[cfg(not(test))]
-pub fn read_header(stream: Arc<RwLock<tls::TlsStream>>, buf: Vec<u8>, func: Box<FnBox(Result<Upgrade<Cursor<Vec<u8>>>>)>) {
+pub fn read_header(stream: Arc<RwLock<tls::TlsStream>>, buf: Vec<u8>, func: Box<FnOnce(Result<Upgrade<Cursor<Vec<u8>>>>)>) {
     let stream2 = stream.clone();
     let handle_func;
     {
@@ -256,7 +255,7 @@ pub fn read_header(stream: Arc<RwLock<tls::TlsStream>>, buf: Vec<u8>, func: Box<
 }
 
 #[cfg(not(test))]
-pub fn read_ws_header(stream: Arc<RwLock<tls::TlsStream>>, func: Box<FnBox(Result<OwnedMessage>)>)
+pub fn read_ws_header(stream: Arc<RwLock<tls::TlsStream>>, func: Box<FnOnce(Result<OwnedMessage>)>)
 {
     // println!("read_ws_header------------------------------------------------------------------------");
     let stream2 = stream.clone();
@@ -300,7 +299,7 @@ pub fn read_ws_header(stream: Arc<RwLock<tls::TlsStream>>, func: Box<FnBox(Resul
 
 // Reads a single data frame from the remote endpoint.
 #[cfg(not(test))]
-fn recv_dataframe(stream: Arc<RwLock<tls::TlsStream>>, should_be_masked: bool, cb: Box<FnBox(WebSocketResult<DataFrame>)>){
+fn recv_dataframe(stream: Arc<RwLock<tls::TlsStream>>, should_be_masked: bool, cb: Box<FnOnce(WebSocketResult<DataFrame>)>){
     let stream1 = stream.clone();
     read_header1(stream, Box::new(move |header: WebSocketResult<dfh::DataFrameHeader>|{
         let header = match header{
@@ -324,7 +323,7 @@ fn recv_dataframe(stream: Arc<RwLock<tls::TlsStream>>, should_be_masked: bool, c
 
 // Returns the data frames that constitute one message.
 #[cfg(not(test))]
-fn recv_message_dataframes(stream: Arc<RwLock<tls::TlsStream>>, mask: bool, cb: Box<FnBox(WebSocketResult<Vec<DataFrame>>)>){
+fn recv_message_dataframes(stream: Arc<RwLock<tls::TlsStream>>, mask: bool, cb: Box<FnOnce(WebSocketResult<Vec<DataFrame>>)>){
     let mut buffer = Vec::new();
     recv_dataframe(stream.clone(), mask,  Box::new(
         move |r: WebSocketResult<DataFrame>| {
@@ -350,7 +349,7 @@ fn recv_message_dataframes(stream: Arc<RwLock<tls::TlsStream>>, mask: bool, cb: 
 
 // Returns the data frames that constitute one message.
 #[cfg(not(test))]
-fn next_frame(stream: Arc<RwLock<tls::TlsStream>>, mask: bool, mut buffer: Vec<DataFrame>, cb: Box<FnBox(WebSocketResult<Vec<DataFrame>>)>){
+fn next_frame(stream: Arc<RwLock<tls::TlsStream>>, mask: bool, mut buffer: Vec<DataFrame>, cb: Box<FnOnce(WebSocketResult<Vec<DataFrame>>)>){
     recv_dataframe(stream.clone(), mask,  Box::new(
         move |r: WebSocketResult<DataFrame>| {
             let frame = match r {
@@ -380,7 +379,7 @@ fn next_frame(stream: Arc<RwLock<tls::TlsStream>>, mask: bool, mut buffer: Vec<D
 
 // 解析前两个字节, 返回描述长度的字节数
 #[cfg(not(test))]
-fn read_header1(stream: Arc<RwLock<tls::TlsStream>>, cb: Box<FnBox(WebSocketResult<dfh::DataFrameHeader>)>){
+fn read_header1(stream: Arc<RwLock<tls::TlsStream>>, cb: Box<FnOnce(WebSocketResult<dfh::DataFrameHeader>)>){
     let stream1 = stream.clone();
     let result = stream.write().unwrap().wakeup_readable(2, Box::new(
         move |r: Result<Arc<Vec<u8>>>| {

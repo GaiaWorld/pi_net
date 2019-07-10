@@ -182,7 +182,7 @@ pub fn handle_close(handler: &mut NetHandler, socket: usize, force: bool) {
             &mut NetData::TcpStream(ref mut s, ref mut mio) => {
                 close_tcp(&mut handler.poll, &mut s.write().unwrap(), mio, force);
                 if let Some(func) = s.write().unwrap().close_callback.take() {
-                    func.call_box((socket, Ok(())));
+                    func(socket, Ok(()));
                 }
                 handler.counter.as_ref().unwrap().closed_count.sum(1);
             }
@@ -592,7 +592,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
 
         // handle recv from logic thread
         while let Ok(func) = receiver.try_recv() {
-            func.call_box((&mut handler,));
+            func(&mut handler);
         }
 
         if start.elapsed() >= slow {
@@ -878,7 +878,7 @@ pub fn recv(stream: Arc<RwLock<RawStream>>, size: usize, func: RecvFn) -> Option
     None
 }
 
-// pub fn get_websocket_buf(stream: Arc<RwLock<Stream>>, pack: Vec<u8>, size: usize, func: Box<FnBox(Result<Arc<Vec<u8>>>)>) {
+// pub fn get_websocket_buf(stream: Arc<RwLock<Stream>>, pack: Vec<u8>, size: usize, func: Box<FnOnce(Result<Arc<Vec<u8>>>)>) {
 //     let func2;
 //     {
 //         let stream = stream.clone();

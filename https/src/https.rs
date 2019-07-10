@@ -1,6 +1,5 @@
 use std::fs;
 use std::sync::Arc;
-use std::boxed::FnBox;
 use std::time::Duration;
 use std::sync::atomic::AtomicUsize;
 use std::io::{BufReader, Result as IoResult, ErrorKind, Error as IoError};
@@ -206,7 +205,7 @@ impl<H: Handler> Service for HttpsHandler<H> {
         let proto = self.protocol.clone();
         let handler = self.handler.clone();
 
-        let callback = Box::new(move |executor: fn(TaskType, usize, Option<isize>, Box<FnBox(Option<isize>)>, Atom) -> Option<isize>,
+        let callback = Box::new(move |executor: fn(TaskType, usize, Option<isize>, Box<FnOnce(Option<isize>)>, Atom) -> Option<isize>,
                                                             sender: Arc<Producer<Result<HttpResponse<Self::ResBody>, Self::Error>>>,
                                                             receiver: Arc<Consumer<task::Task>>, uid: usize| {
             let func = Box::new(move |_lock| {

@@ -1,5 +1,3 @@
-#![feature(fnbox)]
-
 extern crate atom;
 extern crate worker;
 extern crate file as lib_file;

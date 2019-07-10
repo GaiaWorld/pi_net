@@ -1,6 +1,5 @@
 //! non-blocking Net APIs with rust
 //!
-#![feature(fnbox)]
 #![feature(pointer_methods)]
 #![feature(fn_traits)]
 #![feature(proc_macro)]

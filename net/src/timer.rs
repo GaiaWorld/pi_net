@@ -5,7 +5,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread;
-use std::boxed::FnBox;
 
 use std::time::Duration;
 
@@ -24,7 +23,7 @@ pub struct NetTimers<T> {
 // unsafe impl Send for NetTimers<TimerCallback> {}
 
 //回调函数
-pub type TimerCallback = Box<FnBox(Atom) + Send>;
+pub type TimerCallback = Box<FnOnce(Atom) + Send>;
 
 impl<T> NetTimer<T> {
     pub fn new() -> NetTimer<T> {
@@ -77,7 +76,7 @@ impl NetTimers<TimerCallback> {
                 Some(cb) => {
                     let src1 = src.clone();
                     thread::spawn(move || {
-                        cb.call_box((src1,))
+                        cb(src1)
                     });
                     let src2 = src.clone();
                     vec.push(src2)

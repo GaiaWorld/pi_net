@@ -1,7 +1,5 @@
 //! mqtt 实现
 //!
-#![feature(fnbox)]
-
 extern crate mqtt3;
 extern crate net;
 extern crate rand;

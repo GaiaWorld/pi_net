@@ -1,5 +1,4 @@
 use std::thread;
-use std::boxed::FnBox;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Sender};

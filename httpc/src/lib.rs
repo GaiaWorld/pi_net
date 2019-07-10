@@ -1,5 +1,3 @@
-#![feature(fnbox)]
-
 extern crate reqwest;
 
 #[macro_use]
@@ -12,7 +10,6 @@ extern crate apm;
 use std::fs::File;
 use std::sync::Arc;
 use std::path::Path;
-use std::boxed::FnBox;
 use std::path::PathBuf;
 use std::collections::HashMap;
 use std::error::Error as StdError;
@@ -191,9 +188,9 @@ pub trait SharedHttpc {
     //清空http头条目
     fn clear_headers(client: &mut SharedHttpClient);
     //异步发送get请求
-    fn get<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self>, Result<HttpClientResponse>)>);
+    fn get<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnOnce(Arc<Self>, Result<HttpClientResponse>)>);
     //异步发送post请求
-    fn post<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self>, Result<HttpClientResponse>)>);
+    fn post<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnOnce(Arc<Self>, Result<HttpClientResponse>)>);
     //获取当前http头条目数量
     fn headers_size(&self) -> usize;
     //获取所有http头条目关键字
@@ -351,7 +348,7 @@ impl SharedHttpc for HttpClient {
         Arc::make_mut(client).headers.clear();
     }
 
-    fn get<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self>, Result<HttpClientResponse>)>) {
+    fn get<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnOnce(Arc<Self>, Result<HttpClientResponse>)>) {
         let start = HTTPC_GET_OK_TIME.start();
 
         let copy = client.clone();
@@ -362,7 +359,7 @@ impl SharedHttpc for HttpClient {
         cast_net_task(TaskType::Async(false), HTTPC_ASYNC_TASK_PRIORITY, None, Box::new(func), Atom::from("httpc normal get request task"));
     }
 
-    fn post<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnBox(Arc<Self>, Result<HttpClientResponse>)>) {
+    fn post<T: GenHttpClientBody>(client: &SharedHttpClient, url: Atom, body: HttpClientBody<T>, callback: Box<FnOnce(Arc<Self>, Result<HttpClientResponse>)>) {
         let start = HTTPC_POST_OK_TIME.start();
 
         let copy = client.clone();
@@ -511,7 +508,7 @@ fn request<T: GenHttpClientBody>(client: SharedHttpClient,
                                  request: &mut RequestBuilder,
                                  method: HttpMethod,
                                  body: HttpClientBody<T>,
-                                 callback: Box<FnBox(SharedHttpClient, Result<HttpClientResponse>)>,
+                                 callback: Box<FnOnce(SharedHttpClient, Result<HttpClientResponse>)>,
                                  time: Instant) {
     match 
         match body {

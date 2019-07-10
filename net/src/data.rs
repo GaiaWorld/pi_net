@@ -1,5 +1,4 @@
 use std::io::Result;
-use std::boxed::FnBox;
 use std::sync::{Arc, RwLock};
 use std::sync::mpsc::Sender;
 use std::sync::atomic::AtomicUsize;
@@ -29,13 +28,13 @@ const TCP_SERVER_INPUT_BYTE_COUNT_SUFFIX: &'static str = "_input_byte_count";
 //TCP服务器连接输出字节数量后缀
 const TCP_SERVER_OUTPUT_BYTE_COUNT_SUFFIX: &'static str = "_output_byte_count";
 
-pub type SendClosureFn = Box<FnBox(&mut NetHandler) + Send>;
+pub type SendClosureFn = Box<FnOnce(&mut NetHandler) + Send>;
 
 // close_callback(stream_id: usize, reason: Result<()>);
-pub type CloseFn = Box<FnBox(usize, Result<()>)>;
+pub type CloseFn = Box<FnOnce(usize, Result<()>)>;
 
 // recv_callback(vec: Result<Arc<Vec<u8>>>);
-pub type RecvFn = Box<FnBox(Result<Arc<Vec<u8>>>)>;
+pub type RecvFn = Box<FnOnce(Result<Arc<Vec<u8>>>)>;
 
 pub type ListenerFn = Box<Fn(Result<(RawSocket, Arc<RwLock<RawStream>>)>, Result<SocketAddr>) + Send>;
 
