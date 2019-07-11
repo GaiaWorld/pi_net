@@ -21,6 +21,7 @@ use rustls::{RootCertStore, Session, NoClientAuth, AllowAnyAuthenticatedClient, 
 use atom::Atom;
 use apm::common::{register_server_port, unregister_server_port};
 use apm::counter::{GLOBAL_PREF_COLLECT, PrefCounter};
+use lib_timer::{TIMER, FuncRuner};
 use timer::{NetTimer, NetTimers, TimerCallback};
 
 use data::{CloseFn, Protocol, RecvFn, State, Websocket};
@@ -142,7 +143,7 @@ pub struct TlsStream {
     pub send_bufs: VecDeque<Arc<Vec<u8>>>,                  //发送缓冲区列表
 
     pub recv_timeout: Option<Duration>,                     //接收超时时长
-    pub recv_timer: Option<NetTimer<mio::Token>>,           //接收定时器
+    pub recv_timer: Arc<AtomicUsize>,                       //接收定时器
 
     pub recv_buf: Vec<u8>,                                  //接收缓冲区
     pub recv_size: usize,                                   //待接收数据大小，由外部指定
@@ -196,7 +197,7 @@ impl TlsStream {
             recv_size: 0,
             temp_recv_buf_offset: 0,
             wait_wakeup_readable,
-            recv_timer: None,
+            recv_timer: Arc::new(AtomicUsize::new(usize::max_value())),
             temp_recv_buf: None,
 
             recv_callback: None,
@@ -286,11 +287,13 @@ impl TlsStream {
             self.recv_buf_offset = len;
         }
         let timeout = self.recv_timeout.unwrap();
-        let timer = NetTimer::new();
-        timer.set_timeout(timeout, self.token);
+        let mio::Token(token_id) = self.token;
+        let recv_timer = self.recv_timer.clone();
+        TIMER.set_timeout(FuncRuner::new(Box::new(move || {
+            recv_timer.swap(token_id, Ordering::Relaxed);
+        })), timeout.as_millis() as u32);
         self.recv_size = size;
         self.recv_callback = Some(func);
-        self.recv_timer = Some(timer);
         self.wait_wakeup_readable.write().unwrap().push(self.token);
 
         return None;
@@ -1558,18 +1561,14 @@ fn handle_timeout(handler: &TlsHandler) {
             &TlsOrigin::TcpStream(ref stream, _, _) => {
                 //处理tcp连接流的超时事件
                 let s = &mut stream.read().unwrap();
-                if s.recv_callback.is_none() || s.recv_timer.is_none() {
+                let token_id = s.recv_timer.load(Ordering::Relaxed);
+                if s.recv_callback.is_none() || (token_id == usize::max_value()) {
                     //接收回调或接收定时器不存在，则忽略
                     continue;
                 }
-                let timer = s.recv_timer.as_ref().unwrap();
-                match timer.poll() {
-                    Some(mio::Token(id)) => {
-                        //记录已超时的tcp连接流对应的令牌
-                        tokens.push(id);
-                    },
-                    None => (),
-                }
+
+                //记录已超时的tcp连接流对应的令牌
+                tokens.push(token_id);
             }
             _ => (), //忽略tcp连接监听器的超时事件
         }

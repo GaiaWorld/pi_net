@@ -19,6 +19,7 @@ use websocket::server::upgrade::sync::Upgrade;
 
 use slab::Slab;
 use apm::common::register_server_port;
+use lib_timer::{TIMER, FuncRuner};
 
 use api::WSControlType;
 use data::{CloseFn, Config, ListenerFn, NetData, NetCounter, NetHandler, Protocol, RecvFn, SendClosureFn,
@@ -609,16 +610,11 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
             match val {
                 &NetData::TcpStream(ref s, ref _mio) => {
                     let s = &mut s.read().unwrap();
-                    if s.recv_callback.is_none() || s.recv_timer.is_none() {
+                    let token_id = s.recv_timer.load(Ordering::Relaxed);
+                    if s.recv_callback.is_none() || (token_id == usize::max_value()) {
                         continue;
                     }
-                    let timer = s.recv_timer.as_ref().unwrap();
-                    match timer.poll() {
-                        Some(Token(id)) => {
-                            tokens.push(id);
-                        },
-                        None => (),
-                    }
+                    tokens.push(token_id);
                 }
                 _ => {}
             }
@@ -670,7 +666,7 @@ impl RawStream {
             recv_size: 0,
             temp_recv_buf_offset: 0,
             recv_comings: recv_comings,
-            recv_timer: None,
+            recv_timer: Arc::new(AtomicUsize::new(usize::max_value())),
             temp_recv_buf: None,
 
             recv_callback: None,
@@ -748,11 +744,16 @@ impl RawStream {
             self.recv_buf_offset = len;
         }
         let timeout = self.recv_timeout.unwrap();
-        let timer = NetTimer::new();
-        timer.set_timeout(timeout, self.token);
+        let Token(token_id) = self.token;
+        let recv_timer = self.recv_timer.clone();
+        TIMER.set_timeout(FuncRuner::new(Box::new(move || {
+            recv_timer.swap(token_id, Ordering::Relaxed);
+        })), timeout.as_millis() as u32);
+//        let timer = NetTimer::new();
+//        timer.set_timeout(timeout, self.token);
         self.recv_size = size;
         self.recv_callback = Some(func);
-        self.recv_timer = Some(timer);
+//        self.recv_timer = Some(timer);
         self.recv_comings.write().unwrap().push(self.token);
 
         return None;
