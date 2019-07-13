@@ -144,6 +144,7 @@ pub struct TlsStream {
 
     pub recv_timeout: Option<Duration>,                     //接收超时时长
     pub recv_timer: Arc<AtomicUsize>,                       //接收定时器
+    pub timeout_token: Arc<AtomicUsize>,                    //超时的流令牌
 
     pub recv_buf: Vec<u8>,                                  //接收缓冲区
     pub recv_size: usize,                                   //待接收数据大小，由外部指定
@@ -198,6 +199,7 @@ impl TlsStream {
             temp_recv_buf_offset: 0,
             wait_wakeup_readable,
             recv_timer: Arc::new(AtomicUsize::new(usize::max_value())),
+            timeout_token: Arc::new(AtomicUsize::new(usize::max_value())),
             temp_recv_buf: None,
 
             recv_callback: None,
@@ -286,12 +288,21 @@ impl TlsStream {
             self.recv_callback_offset = 0;
             self.recv_buf_offset = len;
         }
+
+        //移除未执行的定时器
+        let last_timer_ref = self.recv_timer.load(Ordering::Relaxed);
+        if last_timer_ref != usize::max_value() {
+            TIMER.cancel(last_timer_ref);
+        }
+
         let timeout = self.recv_timeout.unwrap();
         let mio::Token(token_id) = self.token;
         let recv_timer = self.recv_timer.clone();
-        TIMER.set_timeout(FuncRuner::new(Box::new(move || {
+        let new_timer_ref = TIMER.set_timeout(FuncRuner::new(Box::new(move || {
             recv_timer.swap(token_id, Ordering::Relaxed);
         })), timeout.as_millis() as u32);
+        self.recv_timer.store(new_timer_ref, Ordering::Relaxed);
+
         self.recv_size = size;
         self.recv_callback = Some(func);
         self.wait_wakeup_readable.write().unwrap().push(self.token);
@@ -1561,9 +1572,9 @@ fn handle_timeout(handler: &TlsHandler) {
             &TlsOrigin::TcpStream(ref stream, _, _) => {
                 //处理tcp连接流的超时事件
                 let s = &mut stream.read().unwrap();
-                let token_id = s.recv_timer.load(Ordering::Relaxed);
+                let token_id = s.timeout_token.load(Ordering::Relaxed);
                 if s.recv_callback.is_none() || (token_id == usize::max_value()) {
-                    //接收回调或接收定时器不存在，则忽略
+                    //接收回调或接收未超时，则忽略
                     continue;
                 }
 

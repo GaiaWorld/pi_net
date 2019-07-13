@@ -78,6 +78,7 @@ pub struct RawStream {
 
     pub recv_timeout: Option<Duration>,
     pub recv_timer: Arc<AtomicUsize>,
+    pub timeout_token: Arc<AtomicUsize>,
 
     pub recv_buf: Vec<u8>,
     pub recv_size: usize,

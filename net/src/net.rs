@@ -610,7 +610,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
             match val {
                 &NetData::TcpStream(ref s, ref _mio) => {
                     let s = &mut s.read().unwrap();
-                    let token_id = s.recv_timer.load(Ordering::Relaxed);
+                    let token_id = s.timeout_token.load(Ordering::Relaxed);
                     if s.recv_callback.is_none() || (token_id == usize::max_value()) {
                         continue;
                     }
@@ -667,6 +667,7 @@ impl RawStream {
             temp_recv_buf_offset: 0,
             recv_comings: recv_comings,
             recv_timer: Arc::new(AtomicUsize::new(usize::max_value())),
+            timeout_token: Arc::new(AtomicUsize::new(usize::max_value())),
             temp_recv_buf: None,
 
             recv_callback: None,
@@ -743,17 +744,24 @@ impl RawStream {
             self.recv_callback_offset = 0;
             self.recv_buf_offset = len;
         }
+
+        //移除未执行的定时器
+        let last_timer_ref = self.recv_timer.load(Ordering::Relaxed);
+        if last_timer_ref != usize::max_value() {
+            TIMER.cancel(last_timer_ref);
+        }
+
+        //设置新的接收超时定时器
         let timeout = self.recv_timeout.unwrap();
         let Token(token_id) = self.token;
-        let recv_timer = self.recv_timer.clone();
-        TIMER.set_timeout(FuncRuner::new(Box::new(move || {
-            recv_timer.swap(token_id, Ordering::Relaxed);
+        let timeout_token = self.timeout_token.clone();
+        let new_timer_ref = TIMER.set_timeout(FuncRuner::new(Box::new(move || {
+            timeout_token.store(token_id, Ordering::Relaxed);
         })), timeout.as_millis() as u32);
-//        let timer = NetTimer::new();
-//        timer.set_timeout(timeout, self.token);
+        self.recv_timer.store(new_timer_ref, Ordering::Relaxed);
+
         self.recv_size = size;
         self.recv_callback = Some(func);
-//        self.recv_timer = Some(timer);
         self.recv_comings.write().unwrap().push(self.token);
 
         return None;
