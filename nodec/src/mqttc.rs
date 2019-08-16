@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::time::{Duration, Instant};
 use std::io::{Error, Result, ErrorKind, BufWriter, BufReader};
 
@@ -7,9 +8,14 @@ use mqtt311::{MqttWrite, MqttRead, Protocol, ConnectReturnCode, Packet, Connect,
               Subscribe, Suback, Unsubscribe};
 
 use worker::task::TaskType;
-use worker::impls::cast_net_task;
+use worker::impls::{unlock_net_task_queue, cast_net_task};
 use wsc::SharedWSClient;
 use atom::Atom;
+
+/*
+* Mqtt同步访问任务类型
+*/
+const SYNC_MQTTC_TASK_TYPE: TaskType = TaskType::Sync(true);
 
 /*
 * Mqtt异步访问任务类型
@@ -30,7 +36,7 @@ const MQTT_CONNECT_PROTOCOL: Protocol = Protocol::MQTT(0x4);
 * 共享Mqtt客户端
 */
 #[derive(Clone)]
-pub struct SharedMqttClient(Arc<MqttClient>);
+pub struct SharedMqttClient(Arc<MqttClient>, isize);
 
 unsafe impl Send for SharedMqttClient {}
 unsafe impl Sync for SharedMqttClient {}
@@ -41,12 +47,18 @@ impl SharedMqttClient {
         match SharedWSClient::create(url) {
             Err(e) => Err(e),
             Ok(connect) => {
+                let queue = connect.get_queue();
                 Ok(SharedMqttClient(Arc::new(MqttClient {
                     pkid: PacketIdentifier::zero(),
                     connect,
-                })))
+                }), queue))
             },
         }
+    }
+
+    //获取当前客户端通讯id生成器
+    pub fn get_id_gen(&self) -> Arc<AtomicU32> {
+        self.0.connect.get_id_gen()
     }
 
     //连接Broker
@@ -174,7 +186,7 @@ impl SharedMqttClient {
         });
 
         let client = self.clone();
-        let request = Box::new(move |_lock| {
+        let request = Box::new(move |lock: Option<isize>| {
             match send_packet(&client, &packet) {
                 Err(e) => {
                     callback(Err(e));
@@ -184,8 +196,10 @@ impl SharedMqttClient {
                     callback(Ok(None));
                 }
             }
+
+            unlock_net_task_queue(lock.unwrap()); //解锁同步任务队列，以保证下一个同步任务被处理
         });
-        cast_net_task(ASYNC_MQTTC_TASK_TYPE, ASYNC_MQTTC_PRIORITY, None, request, Atom::from("mqttc publish task"));
+        cast_net_task(SYNC_MQTTC_TASK_TYPE, 0, Some(self.1), request, Atom::from("mqttc publish task"));
     }
 
     //发送ping消息

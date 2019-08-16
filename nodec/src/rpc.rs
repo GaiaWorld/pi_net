@@ -5,10 +5,9 @@ use std::io::{Error, Result, ErrorKind};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use worker::task::TaskType;
-use worker::impls::cast_net_task;
 use mqttc::SharedMqttClient;
-use atom::Atom;
 use compress::{CompressLevel, compress, uncompress};
+use atom::Atom;
 
 /*
 * 默认压缩标记
@@ -47,7 +46,7 @@ impl RPCClient {
             Err(e) => Err(e),
             Ok(connect) => {
                 Ok(RPCClient {
-                    id: Arc::new(AtomicU32::new(1)),
+                    id: connect.get_id_gen(),
                     connect,
                     resp_tab: Arc::new(Mutex::new(HashMap::new())),
                 })
@@ -103,7 +102,7 @@ impl RPCClient {
                    timeout: u8,
                    callback: Arc<Fn(Result<Option<Vec<u8>>>)>) {
         //分配本次请求的消息唯一id
-        let uid = self.id.fetch_add(1, Ordering::SeqCst);
+        let uid = self.id.fetch_add(1, Ordering::Relaxed);
 
         //注册本次请求回调
         let client = self.clone();
@@ -245,7 +244,7 @@ fn binary_to_rpc(bin: &[u8]) -> Option<(u32, Option<Vec<u8>>)> {
 
     let compress_level = bin[0] >> 5;
     let version = bin[0] & 0x1f;
-    let uid = (bin[1] as u32) << 24 & 0xff | (bin[2] as u32) << 16 & 0xff | (bin[3] as u32) << 8 & 0xff | (bin[4] & 0xff) as u32;
+    let uid = (bin[1] as u32) << 24 & 0xffffffff | (bin[2] as u32) << 16 & 0xffffff | (bin[3] as u32) << 8 & 0xffff | (bin[4] & 0xff) as u32;
 
     match compress_level {
         0 => Some((uid, Some(Vec::from(&bin[6..])))),

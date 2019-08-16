@@ -2,23 +2,23 @@ use std::time::{SystemTime, Duration};
 use std::sync::{Arc, Mutex, RwLock};
 use std::collections::HashMap;
 use std::io::{Error, Result, ErrorKind};
-use std::sync::atomic::{AtomicUsize, Ordering, AtomicBool};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering, AtomicBool};
 
 use wsc_lite::{Opcode, Message, NetworkStream, ClientBuilder, Client};
 
 use worker::task::TaskType;
-use worker::impls::cast_net_task;
+use worker::impls::{create_net_task_queue, unlock_net_task_queue, cast_net_task};
 use apm::counter::{GLOBAL_PREF_COLLECT, PrefCounter, PrefTimer};
 use atom::Atom;
 use timer::{FuncRuner, TIMER};
 
 /*
-* Mqtt异步访问任务类型
+* Websocket同步访问任务类型
 */
-const ASYNC_WSC_TASK_TYPE: TaskType = TaskType::Async(false);
+const SYNC_WSC_TASK_TYPE: TaskType = TaskType::Sync(true);
 
 /*
-* Mqtt异步访问任务优先级
+* Websocket异步访问任务优先级
 */
 const ASYNC_WSC_PRIORITY: usize = 100;
 
@@ -43,7 +43,7 @@ lazy_static! {
 * 共享websocket客户端
 */
 #[derive(Clone)]
-pub struct SharedWSClient(Arc<Mutex<WSClient>>);
+pub struct SharedWSClient(Arc<Mutex<WSClient>>, Arc<AtomicU32>, isize);
 
 unsafe impl Send for SharedWSClient {}
 unsafe impl Sync for SharedWSClient {}
@@ -66,7 +66,7 @@ impl SharedWSClient {
                     url: url.to_string(),
                     builder: Some(builder),
                     client: None,
-                })));
+                })), Arc::new(AtomicU32::new(1)), create_net_task_queue(ASYNC_WSC_PRIORITY, false));
                 WSC_TABLE.write().unwrap().insert(url_str, wsc.clone());
 
                 Ok(wsc)
@@ -82,6 +82,16 @@ impl SharedWSClient {
     //获取当前客户端的对端url
     pub fn get_url(&self) -> String {
         self.0.lock().unwrap().url.clone()
+    }
+
+    //获取当前客户端通讯id生成器
+    pub fn get_id_gen(&self) -> Arc<AtomicU32> {
+        self.1.clone()
+    }
+
+    //获取当前客户端同步任务队列
+    pub fn get_queue(&self) -> isize {
+        self.2
     }
 
     //建立websocket连接
@@ -193,7 +203,7 @@ impl SharedWSClient {
             },
         };
 
-        let func = Box::new(move |_lock| {
+        let func = Box::new(move |lock: Option<isize>| {
             let mut receive_result = Ok(None);
             match client.0.lock().unwrap().client.as_mut().unwrap().preemptive_receive() {
                 Err(e) => {
@@ -218,8 +228,10 @@ impl SharedWSClient {
             };
 
             callback(client.clone(), receive_result);
+
+            unlock_net_task_queue(lock.unwrap()); //解锁同步任务队列，以保证下一个同步任务被处理
         });
-        cast_net_task(ASYNC_WSC_TASK_TYPE, ASYNC_WSC_PRIORITY, None, func, Atom::from("wsc receive task"));
+        cast_net_task(SYNC_WSC_TASK_TYPE, 0, Some(self.2), func, Atom::from("wsc receive task"));
     }
 }
 
