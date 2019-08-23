@@ -22,6 +22,9 @@ use net::CloseFn;
 
 use net::api::{Socket, Stream};
 
+/**
+* RPC服务器
+*/
 #[derive(Clone)]
 pub struct RPCServer {
     pub mqtt: ServerNode,
@@ -35,6 +38,11 @@ pub struct RPCServer {
 // }
 
 impl RPCServer {
+    /**
+    * 构建一个RPC服务器
+    * @param mqtt Mqtt服务器
+    * @returns 返回RPC服务器
+    */
     pub fn new(mqtt: ServerNode) -> Self {
         RPCServer { mqtt }
     }

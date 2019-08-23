@@ -18,3 +18,4 @@ pub fn pause() {
 pub fn pause() {
     thread::sleep(Duration::from_millis(1));
 }
+

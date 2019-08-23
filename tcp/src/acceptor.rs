@@ -1,22 +1,19 @@
 use std::thread;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use std::net::SocketAddr;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use std::io::{ErrorKind, Result, Error};
 
 use mio::{
-    Event, Events, Poll, PollOpt, Token, Ready,
-    net::{TcpListener, TcpStream}
+    Events, Poll, PollOpt, Token, Ready,
+    net::TcpListener
 };
 use slab::Slab;
-use crossbeam_channel::{Sender, Receiver, unbounded, TryRecvError};
+use crossbeam_channel::{Sender, Receiver, unbounded};
 use fnv::FnvBuildHasher;
 
-use atom::Atom;
-
-use driver::{Socket, Stream, SocketAdapter, AcceptorCmd, SocketDriver};
-use util::pause;
+use crate::driver::{Socket, Stream, SocketAdapter, AcceptorCmd, SocketDriver};
+use crate::util::pause;
 
 /*
 * Tcp连接接受器上下文
@@ -30,12 +27,12 @@ struct AcceptorContext<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
 * Tcp连接接受器
 */
 pub struct Acceptor<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
-    name:       String,                                         //Tcp连接接受器名称
-    poll:       Poll,                                           //TCP连接事件轮询器
-    contexts:   Slab<AcceptorContext<S, A>>,                    //Tcp连接上下文表
-    listeners:  HashMap<SocketAddr, Token, FnvBuildHasher>,     //Tcp连接监听器表
-    sender:     Sender<Box<FnOnce() -> AcceptorCmd + Send>>,    //Tcp连接接受器的控制发送器
-    receiver:   Receiver<Box<FnOnce() -> AcceptorCmd + Send>>,  //Tcp连接接受器的控制接收器
+    name:       String,                                             //Tcp连接接受器名称
+    poll:       Poll,                                               //TCP连接事件轮询器
+    contexts:   Slab<AcceptorContext<S, A>>,                        //Tcp连接上下文表
+    listeners:  HashMap<SocketAddr, Token, FnvBuildHasher>,         //Tcp连接监听器表
+    sender:     Sender<Box<dyn FnOnce() -> AcceptorCmd + Send>>,    //Tcp连接接受器的控制发送器
+    receiver:   Receiver<Box<dyn FnOnce() -> AcceptorCmd + Send>>,  //Tcp连接接受器的控制接收器
 }
 
 unsafe impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Send for Acceptor<S, A> {}
@@ -120,7 +117,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
     }
 
     //获取连接控制器
-    pub fn get_controller(&self) -> Sender<Box<FnOnce() -> AcceptorCmd + Send>> {
+    pub fn get_controller(&self) -> Sender<Box<dyn FnOnce() -> AcceptorCmd + Send>> {
         self.sender.clone()
     }
 

@@ -43,7 +43,7 @@ impl fmt::Display for NoMatch {
     }
 }
 
-/*
+/**
 * 挂载器
 */
 pub struct Mount {
@@ -96,14 +96,22 @@ impl Handler for Mount {
 }
 
 impl Mount {
-    //构建一个挂载器
+    /**
+    * 构建一个挂载器
+    * @returns 返回挂载器
+    */
     pub fn new() -> Self {
         Mount {
             inner: SequenceTrie::new()
         }
     }
 
-    //在指定路由上挂载指定的处理器，路由必须为绝对路径
+    /**
+    * 在指定路由上挂载指定的处理器，路由必须为绝对路径
+    * @param route 路由
+    * @param handler 处理器
+    * @returns 返回挂载器
+    */
     pub fn mount<H: Handler>(&mut self, route: &str, handler: H) -> &mut Mount {
         let key: Vec<&str> = Path::new(route).components().flat_map(|c|
             match c {

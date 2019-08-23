@@ -48,7 +48,7 @@ lazy_static! {
     static ref HTTPS_BATCH_LOAD_FILE_ERROR_TIME: PrefTimer = GLOBAL_PREF_COLLECT.new_static_timer(Atom::from("https_batch_load_file_error_time"), 0).unwrap();
 }
 
-/*
+/**
 * 批量静态资源文件
 */
 #[derive(Clone)]
@@ -134,7 +134,11 @@ impl Handler for StaticFileBatch {
 }
 
 impl StaticFileBatch {
-    //指定文件根目录，构建指定的批量静态资源文件，可以是绝对路径或相对路径，如果为空串，则表示以当前运行时路径作为文件根目录
+    /**
+    * 指定文件根目录，构建指定的批量静态资源文件，可以是绝对路径或相对路径，如果为空串，则表示以当前运行时路径作为文件根目录
+    * @param root 批量静态资源文件所在根路径
+    * @returns 返回批量静态资源文件
+    */
     pub fn new<P: Into<PathBuf>>(root: P) -> Self {
         HTTPS_BATCH_LOAD_FILE_HANDLER_COUNT.sum(1);
 
@@ -154,7 +158,12 @@ impl StaticFileBatch {
         }
     }
 
-    //增加指定通用响应头
+    /**
+    * 增加批量静态资源文件访问时的指定通用响应头
+    * @param key 关键字
+    * @param value 值
+    * @returns 返回通用响应头数量
+    */
     pub fn add_gen_resp_header(&mut self, key: &str, value: &str) -> usize {
         match HeaderName::try_from(key) {
             Err(e) => panic!("add gen response header failed, key: {:?}, value: {:?}, e: {:?}", key, value, e),
@@ -165,7 +174,11 @@ impl StaticFileBatch {
         }
     }
 
-    //移除指定通用响应头
+    /**
+    * 移除指定通用响应头
+    * @param key 关键字
+    * @returns 返回通用响应头数量
+    */
     pub fn remove_gen_resp_header(&mut self, key: &str) -> usize {
         match HeaderName::try_from(key) {
             Err(e) => panic!("remove gen response header failed, key: {:?}, e: {:?}", key, e),

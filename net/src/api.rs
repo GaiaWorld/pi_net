@@ -108,12 +108,18 @@ fn test_tls() {
     thread::sleep_ms(1000000);
 }
 
+/**
+* Tcp服务器
+*/
 pub struct NetManager {
     net_sender: Sender<SendClosureFn>,
 }
 
 impl NetManager {
-    /// call by logic thread
+    /**
+    * 构建一个Tcp服务器
+    * @returns 返回Tcp服务器
+    */
     pub fn new() -> Self {
         let (s, r) = mpsc::channel::<SendClosureFn>();
         let net_sender = s.clone();

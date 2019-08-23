@@ -175,7 +175,7 @@ impl<T: GenHttpClientBody> HttpClientBody<T> {
     }
 }
 
-/*
+/**
 * 共享http客户端
 */
 pub trait SharedHttpc {
@@ -204,7 +204,7 @@ pub trait SharedHttpc {
 */
 pub type SharedHttpClient = Arc<HttpClient>;
 
-/*
+/**
 * http客户端
 */
 #[derive(Clone)]
@@ -334,16 +334,33 @@ impl SharedHttpc for HttpClient {
         })
     }
 
+    /**
+    * 增加指定关键字的http头条目，返回头条目数量，一个关键字可以有多个条目
+    * @param client http客户端
+    * @param key 关键字
+    * @param value 值
+    * @returns 返回http头条目数量
+    */
     fn add_header(client: &mut Arc<HttpClient>, key: Atom, value: Atom) -> usize {
         Arc::make_mut(client).headers.append_raw((*key).clone(), (*value).as_str());
         client.headers.len()
     }
 
+    /**
+    * 移除指定关键字的http头条目，返回头条目数量
+    * @param client http客户端
+    * @param key 关键字
+    * @returns 返回http头条目数量
+    */
     fn remove_header(client: &mut Arc<HttpClient>, key: Atom) -> usize {
         Arc::make_mut(client).headers.remove_raw((*key).as_str());
         client.headers.len()
     }
 
+    /**
+    * 清空http头条目
+    * @param client http客户端
+    */
     fn clear_headers(client: &mut Arc<HttpClient>) {
         Arc::make_mut(client).headers.clear();
     }
@@ -370,10 +387,18 @@ impl SharedHttpc for HttpClient {
         cast_net_task(TaskType::Async(false), HTTPC_ASYNC_TASK_PRIORITY, None, Box::new(func), Atom::from("httpc normal post request task"));
     }
 
+    /**
+    * 获取当前http头条目数量
+    * @returns 返回当前http头条目数量
+    */
     fn headers_size(&self) -> usize {
         self.headers.len()
     }
 
+    /**
+    * 获取所有http头条目关键字
+    * @returns 返回所有http头条目关键字
+    */
     fn headers_keys(&self) -> Option<Vec<Atom>> {
         let len = self.headers_size();
         if len == 0 {
@@ -387,6 +412,11 @@ impl SharedHttpc for HttpClient {
         Some(vec)
     }
 
+    /**
+    * 获取指定关键字的http头条目，一个关键字可以有多个条目
+    * @param key 关键字
+    * @returns 返回http头条目
+    */
     fn get_header(&self, key: Atom) -> Option<Vec<Atom>> {
         self.headers.get_raw(&*key).and_then(|val: &Raw| {
             let len = val.len();
@@ -399,7 +429,7 @@ impl SharedHttpc for HttpClient {
     }
 }
 
-/*
+/**
 * http响应
 */
 pub struct HttpClientResponse {
@@ -407,59 +437,92 @@ pub struct HttpClientResponse {
 }
 
 impl HttpClientResponse{
-    //获取响应url
+    /**
+    * 获取响应url
+    * @returns 返回响应url
+    */
     pub fn url(&self) -> Atom {
         Atom::from(self.inner.url().as_str())
     }
 
-    //判断是否是消息
+    /**
+    * 判断是否是消息
+    * @returns 返回是否是消息
+    */
     pub fn is_info(&self) -> bool {
         self.inner.status().is_informational()
     }
 
-    //判断是否成功
+    /**
+    * 判断是否成功
+    * @returns 返回是否成功
+    */
     pub fn is_ok(&self) -> bool {
         self.inner.status().is_success()
     }
 
-    //判断是否是重定向
+    /**
+    * 判断是否是重定向
+    * @returns 返回是否是重定向
+    */
     pub fn is_redirect(self) -> bool {
         self.inner.status().is_redirection()
     }
 
-    //判断是否是客户端错误
+    /**
+    * 判断是否是客户端错误
+    * @returns 返回是否是客户端错误
+    */
     pub fn is_client_error(self) -> bool {
         self.inner.status().is_client_error()
     }
 
-    //判断是否是服务器端错误
+    /**
+    * 判断是否是服务器端错误
+    * @returns 返回是否是服务器端错误
+    */
     pub fn is_server_error(self) -> bool {
         self.inner.status().is_server_error()
     }
 
-    //判断是否是未知状态
+    /**
+    * 判断是否是未知状态
+    * @returns 返回是否是未知状态
+    */
     pub fn is_undefined(self) -> bool {
         self.inner.status().is_strange_status()
     }
 
-    //获取响应状态
+    /**
+    * 获取响应状态
+    * @returns 返回响应状态
+    */
     pub fn status(&self) -> u16 {
         self.inner.status().as_u16()
     }
 
-    //获取响应状态描述
+    /**
+    * 获取响应状态描述
+    * @returns 返回响应状态描述
+    */
     pub fn status_info(&self) -> Option<Atom> {
         self.inner.status().canonical_reason().and_then(|reason| {
             Some(Atom::from(reason))
         })
     }
 
-    //获取响应头条目数量
+    /**
+    * 获取响应头条目数量
+    * @returns 返回响应头条目数量
+    */
     pub fn headers_size(&self) -> usize {
         self.inner.headers().len()
     }
 
-    //获取响应头所有条目关键字
+    /**
+    * 获取响应头所有条目关键字
+    * @returns 返回响应头所有条目关键字
+    */
     pub fn headers_keys(&self) -> Option<Vec<Atom>> {
         let len = self.headers_size();
         if len == 0 {
@@ -473,7 +536,11 @@ impl HttpClientResponse{
         Some(vec)
     }
 
-    //获取指定关键字的响应头条目，一个关键字可以有多个条目
+    /**
+    * 获取指定关键字的响应头条目，一个关键字可以有多个条目
+    * @param key 关键字
+    * @returns 返回响应头条目
+    */
     pub fn get_header(&self, key: Atom) -> Option<Vec<Atom>> {
         self.inner.headers().get_raw(&*key).and_then(|val: &Raw| {
             let len = val.len();
@@ -485,7 +552,10 @@ impl HttpClientResponse{
         })
     }
 
-    //获取文本格式的响应体
+    /**
+    * 获取文本格式的响应体
+    * @returns 返回文本格式的响应体
+    */
     pub fn text(&mut self) -> Result<String> {
         self.inner.text().or_else(|e| {
             Err(Error::new(ErrorKind::Other, e))
@@ -494,7 +564,10 @@ impl HttpClientResponse{
         })
     }
 
-    //获取二进制的响应体
+    /**
+    * 获取二进制的响应体
+    * @returns 返回二进制的响应体
+    */
     pub fn bin(&mut self) -> Result<Vec<u8>> {
         let mut vec = Vec::new();
         self.inner.copy_to(&mut vec).or_else(|e| {

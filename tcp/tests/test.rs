@@ -1,116 +1,160 @@
+#![feature(async_await)]
+
 extern crate mio;
 extern crate crossbeam_channel;
 extern crate tcp;
+extern crate fnv;
+extern crate futures;
 
+use std::mem;
 use std::thread;
-use std::io::Error;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use std::net::{IpAddr, SocketAddr};
+use std::net::Shutdown;
+use std::future::Future;
+use std::time::Duration;
 
-use mio::{Events, Poll, PollOpt, Token, Ready, net::TcpListener};
-use crossbeam_channel::{Sender, Receiver, unbounded};
+use futures::future::{FutureExt, BoxFuture};
 
-use tcp::driver::{SocketAdapter, SocketConfig, Socket};
 use tcp::connect::TcpSocket;
-use tcp::server::{PortsAdapter, SocketListener};
+use tcp::server::{AsyncAdapter, PortsAdapter, PortsAdapterFactory, SocketListener};
+use tcp::driver::{SocketConfig, Socket, AsyncIOWait, AsyncService, SocketStatus, SocketHandle, AsyncReadTask, AsyncWriteTask};
 
-//测试用adapter
-struct TestSocketAdapter;
+struct TestService;
 
-impl SocketAdapter for TestSocketAdapter {
-    type Connect = TcpSocket;
+impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
+    type Out = ();
+    type Future = BoxFuture<'static, Self::Out>;
 
-    fn connected(&self, result: Result<&mut Self::Connect, (&mut Self::Connect, Error)>) {
-        match result {
-            Err((socket, reason)) => {
-                println!("!!!> Socket Connect Error, remote: {:?}, local: {:?}, reason: {:?}",
-                         socket.get_remote(), socket.get_local(), reason);
-            },
-            Ok(socket) => {
-                println!("===> Socket Connect Ok, remote: {:?}, local: {:?}",
-                         socket.get_remote(), socket.get_local());
+    fn handle_connected(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future {
+        let future = async move {
+            if let SocketStatus::Connected(result) = status {
+                let token = handle.as_handle().unwrap().as_ref().borrow().get_token().unwrap().clone();
+                if let Err(e) = result {
+                    println!("!!!> Connect Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.as_handle().unwrap().as_ref().borrow().get_remote(), handle.as_handle().unwrap().as_ref().borrow().get_local(), e);
+                } else {
+                    println!("===> Connect Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.as_handle().unwrap().as_ref().borrow().get_remote(), handle.as_handle().unwrap().as_ref().borrow().get_local());
 
-                match socket.read(0) {
-                    Err(e) => {
-                        println!("!!!> Socket First Read Error, remote: {:?}, local: {:?}, reason: {:?}", socket.get_remote(), socket.get_local(), e);
-                    },
-                    Ok(Some(bin)) => {
-                        println!("===> Socket First Sync Read, data: {:?}", String::from_utf8_lossy(&bin[..]));
-                    },
-                    Ok(None) => {
-                        println!("===> Socket First Async Read Wait, remote: {:?}, local: {:?}", socket.get_remote(), socket.get_local());
-                    },
-                }
-            },
-        }
-    }
-
-    fn readed(&self, result: Result<&mut Self::Connect, (&mut Self::Connect, Error)>) {
-        match result {
-            Err((socket, reason)) => {
-                println!("!!!> Socket Async Read Error, remote: {:?}, local: {:?}, reason: {:?}",
-                         socket.get_remote(), socket.get_local(), reason);
-            },
-            Ok(socket) => {
-                match socket.read(0) {
-                    Err(e) => {
-                        println!("!!!> Socket Async Read Error, remote: {:?}, local: {:?}, reason: {:?}", socket.get_remote(), socket.get_local(), e);
-                    },
-                    Ok(Some(bin)) => {
-                        println!("===> Socket Async Read Ok, data: {:?}", String::from_utf8_lossy(&bin[..]));
-
-                        let bin = b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n";
-                        match socket.write(bin) {
+                    //连接成功，开始读
+                    if token.0 % 2 == 1 {
+                        //准备异步读
+                        if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(0) {
+                            println!("!!!> Read Ready Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.as_handle().unwrap().as_ref().borrow().get_remote(), handle.as_handle().unwrap().as_ref().borrow().get_local(), e);
+                        }
+                    } else {
+                        //直接异步读
+                        match AsyncReadTask::async_read(handle.clone(), waits.clone(), 0).await {
                             Err(e) => {
-                                println!("!!!> Socket Async Write Error, remote: {:?}, local: {:?}, reason: {:?}", socket.get_remote(), socket.get_local(), e);
+                                println!("!!!> Socket Read Error, token: {:?}, reason: {:?}", token, e);
                             },
-                            Ok(_) => {
-                                println!("===> Socket Async Write Start, remote: {:?}, local: {:?}", socket.get_remote(), socket.get_local());
+                            Ok(bin) => {
+                                println!("===> Socket Read Ok, token: {:?}, data: {:?}", token, String::from_utf8_lossy(bin));
+
+                                //读成功，开始写
+                                let bin = b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n";
+                                match AsyncWriteTask::async_write(handle, waits, bin).await {
+                                    Err(e) => {
+                                        println!("!!!> Socket Write Error, token: {:?}, reason: {:?}", token, e);
+                                    },
+                                    Ok(_) => {
+                                        println!("===> Socket Write Ok, token: {:?}", token);
+                                    },
+                                }
                             },
                         }
-                    },
-                    Ok(None) => {
-                        println!("===> Socket Async Read Wait, remote: {:?}, local: {:?}", socket.get_remote(), socket.get_local());
-                    },
+                    }
                 }
-            },
-        }
+            }
+        };
+        future.boxed()
     }
 
-    fn writed(&self, result: Result<&mut Self::Connect, (&mut Self::Connect, Error)>) {
-        match result {
-            Err((socket, reason)) => {
-                println!("!!!> Socket Async Write Error, remote: {:?}, local: {:?}, reason: {:?}",
-                         socket.get_remote(), socket.get_local(), reason);
-            },
-            Ok(socket) => {
-                println!("===> Socket Async Write Ok, remote: {:?}, local: {:?}",
-                         socket.get_remote(), socket.get_local());
-            },
-        }
+    fn handle_readed(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future {
+        let future = async move {
+            if let SocketStatus::Readed(result) = status {
+                let token = handle.as_handle().unwrap().as_ref().borrow().get_token().unwrap().clone();
+                if let Err(e) = result {
+                    println!("!!!> Socket Receive Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.as_handle().unwrap().as_ref().borrow().get_remote(), handle.as_handle().unwrap().as_ref().borrow().get_local(), e);
+                } else {
+                    println!("===> Socket Receive Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.as_handle().unwrap().as_ref().borrow().get_remote(), handle.as_handle().unwrap().as_ref().borrow().get_local());
+
+                    match AsyncReadTask::async_read(handle.clone(), waits.clone(), 0).await {
+                        Err(e) => {
+                            println!("!!!> Socket Read Error, token: {:?}, reason: {:?}", token, e);
+                        },
+                        Ok(bin) => {
+                            println!("===> Socket Read Ok, token: {:?}, data: {:?}", token, String::from_utf8_lossy(bin));
+
+                            //读成功，开始写
+                            let bin = b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n";
+                            match AsyncWriteTask::async_write(handle, waits, bin).await {
+                                Err(e) => {
+                                    println!("!!!> Socket Write Error, token: {:?}, reason: {:?}", token, e);
+                                },
+                                Ok(_) => {
+                                    println!("===> Socket Write Ok, token: {:?}", token);
+                                },
+                            }
+                        },
+                    }
+                }
+            }
+        };
+        future.boxed()
     }
 
-    fn closed(&self, result: Result<&mut Self::Connect, (&mut Self::Connect, Error)>) {
-        match result {
-            Err((socket, reason)) => {
-                println!("!!!> Socket Close Error, remote: {:?}, local: {:?}, reason: {:?}",
-                         socket.get_remote(), socket.get_local(), reason);
-            },
-            Ok(socket) => {
-                println!("===> Socket Close Ok, remote: {:?}, local: {:?}",
-                         socket.get_remote(), socket.get_local());
-            },
-        }
+    fn handle_writed(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future {
+        let future = async move {
+            if let SocketStatus::Writed(result) = status {
+                if let Some(socket) = handle.as_handle() {
+                    let token = socket.as_ref().borrow_mut().get_token().unwrap().clone();
+                    if let Err(e) = result {
+                        println!("!!!> Socket Send Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local(), e);
+                    } else {
+                        println!("===> Socket Send Ok, token: {:?}, remote: {:?}, local: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local());
+
+                        //发送成功，则关闭
+                        if let Err(e) = socket.as_ref().borrow().close(Shutdown::Both) {
+                            println!("!!!> Socket Close Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local(), e);
+                        }
+                    }
+                }
+            }
+        };
+        future.boxed()
+    }
+
+    fn handle_closed(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future {
+        let future = async move {
+            if let SocketStatus::Closed(result) = status {
+                if let Some(socket) = handle.as_handle() {
+                    let token = socket.as_ref().borrow_mut().get_token().unwrap().clone();
+                    if let Err(e) = result {
+                        println!("!!!> Socket Close Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local(), e);
+                    } else {
+                        println!("===> Socket Close Ok, token: {:?}, remote: {:?}, local: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local());
+                    }
+                }
+            }
+        };
+        future.boxed()
+    }
+}
+
+struct TestFactory;
+
+impl PortsAdapterFactory for TestFactory {
+    type Connect = TcpSocket;
+
+    fn instance(&self) -> PortsAdapter<Self::Connect> {
+        let mut adapter = PortsAdapter::<TcpSocket>::new();
+        adapter.set_adapter(38080, Box::new(AsyncAdapter::<TcpSocket, TestService>::with_service(TestService)));
+        adapter
     }
 }
 
 #[test]
 fn test_socket_server() {
     let config = SocketConfig::new("0.0.0.0", &[38080]);
-    let mut adapter = PortsAdapter::new();
-    adapter.set_adapter(38080, Arc::new(TestSocketAdapter));
-    match SocketListener::bind(adapter, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(TestFactory, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Error, reason: {:?}", e);
         },
@@ -125,9 +169,7 @@ fn test_socket_server() {
 #[test]
 fn test_socket_server_ipv6() {
     let config = SocketConfig::new("fe80::c0bc:ecf0:e91:2b3a", &[38080]);
-    let mut adapter = PortsAdapter::new();
-    adapter.set_adapter(38080, Arc::new(TestSocketAdapter));
-    match SocketListener::bind(adapter, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(TestFactory, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv6 Address Error, reason: {:?}", e);
         },
@@ -142,9 +184,7 @@ fn test_socket_server_ipv6() {
 #[test]
 fn test_socket_server_shared() {
     let config = SocketConfig::new("::", &[38080]);
-    let mut adapter = PortsAdapter::new();
-    adapter.set_adapter(38080, Arc::new(TestSocketAdapter));
-    match SocketListener::bind(adapter, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(TestFactory, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 & Ipv6 Address Error, reason: {:?}", e);
         },

@@ -56,7 +56,7 @@ lazy_static! {
     static ref HTTPS_REMOVE_FILE_ERROR_TIME: PrefTimer = GLOBAL_PREF_COLLECT.new_static_timer(Atom::from("https_remove_file_error_time"), 0).unwrap();
 }
 
-/*
+/**
 * 默认的http文件上传处理器
 */
 #[derive(Clone)]
@@ -308,7 +308,11 @@ fn async_reply_ok(req: Request, mut res: Response, size: usize, time: Instant) {
 }
 
 impl FileUpload {
-    //构建文件上传处理器
+    /**
+    * 构建文件上传处理器
+    * @param root 上传后，保存文件的根路径
+    * @returns 返回文件上传处理器
+    */
     pub fn new<P: Into<PathBuf>>(root: P) -> Self {
         let dir = root.into();
         if !dir.exists() {

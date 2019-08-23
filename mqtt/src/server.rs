@@ -22,6 +22,9 @@ use net::api::{Socket, Stream};
 use session;
 use util;
 
+/**
+* Mqtt服务器
+*/
 #[derive(Clone)]
 pub struct ServerNode(Arc<Mutex<ServerNodeImpl>>);
 

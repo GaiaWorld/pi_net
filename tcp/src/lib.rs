@@ -1,3 +1,4 @@
+#![feature(async_await)]
 #![feature(range_is_empty)]
 
 extern crate mio;
@@ -10,9 +11,11 @@ extern crate lazy_static;
 
 extern crate iovec;
 extern crate fnv;
+extern crate futures;
 
 extern crate atom;
 extern crate apm;
+extern crate r#async;
 
 pub mod driver;
 pub mod connect;

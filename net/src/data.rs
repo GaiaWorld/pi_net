@@ -38,6 +38,9 @@ pub type RecvFn = Box<FnOnce(Result<Arc<Vec<u8>>>)>;
 
 pub type ListenerFn = Box<Fn(Result<(RawSocket, Arc<RwLock<RawStream>>)>, Result<SocketAddr>) + Send>;
 
+/**
+* Tcp连接
+*/
 #[derive(Clone)]
 pub struct RawSocket {
     pub state: Arc<AtomicUsize>,

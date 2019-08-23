@@ -10,6 +10,9 @@ use server::ClientStub;
 use util;
 use net::api::Socket;
 
+/**
+* Mqtt会话
+*/
 #[derive(Clone, Debug)]
 pub struct Session {
     pub client: ClientStub,
@@ -61,7 +64,11 @@ impl Session {
             buff.clone(),
         );
     }
-    //回应消息
+    /**
+    * 回应消息
+    * @param _topic 回应的topic
+    * @param msg 回应的数据
+    */
     pub fn respond(&self, _topic: Atom, msg: Vec<u8>) {
         if self.seq {
             //println!("respond 111111111 msg = {:?}", msg);
