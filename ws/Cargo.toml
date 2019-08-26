@@ -1,0 +1,9 @@
+[package]
+name = "ws"
+version = "0.1.0"
+authors = ["vmos <vmos@fairblock.io>"]
+
+[dependencies]
+websocket = "0.23"
+tcp = { path = "../tcp" }
+atom = { path = "../../pi_lib/atom" }
