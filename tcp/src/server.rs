@@ -18,6 +18,7 @@ use r#async::{AsyncSpawner, AsyncExecutor,
 
 use crate::acceptor::Acceptor;
 use crate::connect_pool::TcpSocketPool;
+use crate::buffer_pool::WriteBufferPool;
 use crate::driver::{Socket, Stream, SocketAdapter,
                     AsyncIOWait, AsyncService, SocketStatus,
                     SocketHandle, SocketConfig, SocketDriver};
@@ -330,12 +331,13 @@ impl<S, F> SocketListener<S, F>
     where S: Socket + Stream,
           F: PortsAdapterFactory<Connect = S>, {
     //绑定指定配置的Tcp连接监听器
-    pub fn bind(factory: F,             //Tcp端口适配器工厂
-                config: SocketConfig,   //连接配置
-                init_cap: usize,        //连接池初始容量
-                stack_size: usize,      //线程堆栈大小
-                event_size: usize,      //同时处理的事件数
-                timeout: Option<usize>  //事件轮询超时时长
+    pub fn bind(factory: F,                 //Tcp端口适配器工厂
+                buffer: WriteBufferPool,    //写缓冲池
+                config: SocketConfig,       //连接配置
+                init_cap: usize,            //连接池初始容量
+                stack_size: usize,          //线程堆栈大小
+                event_size: usize,          //同时处理的事件数
+                timeout: Option<usize>      //事件轮询超时时长
     ) -> Result<SocketDriver<S, PortsAdapter<S>>> {
         let addrs = config.addrs();
         let (sender, receiver) = unbounded();
@@ -353,12 +355,13 @@ impl<S, F> SocketListener<S, F>
                 return Err(e);
             },
             Ok(a) => {
-                //创建当前系统cpu核心数的连接池
+                //创建当前系统cpu核心数的连接池，共用一个写缓冲池
                 acceptor = a;
                 for _ in 0..processor {
                     match TcpSocketPool::with_capacity(acceptor.get_name(),
                                                        receiver.clone(),
                                                        config.clone(),
+                                                       buffer.clone(),
                                                        init_cap) {
                         Err(e) => {
                             return Err(e);

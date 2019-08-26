@@ -1,6 +1,6 @@
 use std::mem;
 use std::thread;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::cell::RefCell;
 use std::time::Duration;
 use std::collections::HashMap;
@@ -12,6 +12,7 @@ use fnv::FnvBuildHasher;
 use mio::{Events, Poll, Token};
 use crossbeam_channel::{Sender, Receiver, unbounded};
 
+use crate::buffer_pool::{WriteBufferHandle, WriteBufferPool};
 use crate::driver::{Socket, Stream, SocketAdapter, SocketHandle, SocketOption, SocketConfig, SocketDriver};
 
 /*
@@ -21,14 +22,15 @@ pub struct TcpSocketPool<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
     name:                   String,                                     //Tcp连接池名称
     config:                 SocketConfig,                               //Tcp连接配置
     poll:                   Poll,                                       //Socket事件轮询器
-    contexts:               Slab<Rc<RefCell<S>>>,                      //Socket上下文表
+    contexts:               Slab<Arc<RefCell<S>>>,                      //Socket上下文表
     map:                    HashMap<SocketAddr, Token, FnvBuildHasher>, //Socket映射表
     driver:                 Option<SocketDriver<S, A>>,                 //Socket驱动
     socket_recv:            Receiver<S>,                                //Socket接收器
     wakeup_readable_sent:   Sender<Token>,                              //唤醒可读事件连接的发送器
     wakeup_readable_recv:   Receiver<Token>,                            //唤醒可读事件连接的接收器
-    wakeup_writable_sent:   Sender<Token>,                              //唤醒可写事件连接的发送器
-    wakeup_writable_recv:   Receiver<Token>,                            //唤醒可写事件连接的接收器
+    wakeup_writable_sent:   Sender<(Token, WriteBufferHandle)>,         //唤醒可写事件连接的发送器
+    wakeup_writable_recv:   Receiver<(Token, WriteBufferHandle)>,       //唤醒可写事件连接的接收器
+    buffer:                 WriteBufferPool,                            //写缓冲池
 }
 
 unsafe impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Send for TcpSocketPool<S, A> {}
@@ -36,12 +38,12 @@ unsafe impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Sync for TcpSocke
 
 impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
     //构建一个Tcp连接池
-    pub fn new(name: String, receiver: Receiver<S>, config: SocketConfig) -> Result<Self> {
-        Self::with_capacity(name, receiver, config, 10)
+    pub fn new(name: String, receiver: Receiver<S>, config: SocketConfig, buffer: WriteBufferPool) -> Result<Self> {
+        Self::with_capacity(name, receiver, config, buffer, 10)
     }
 
     //构建一个指定初始大小的Tcp连接池
-    pub fn with_capacity(name: String, receiver: Receiver<S>, config: SocketConfig, size: usize) -> Result<Self> {
+    pub fn with_capacity(name: String, receiver: Receiver<S>, config: SocketConfig, buffer: WriteBufferPool, size: usize) -> Result<Self> {
         let contexts = Slab::with_capacity(size);
         let map = HashMap::with_capacity_and_hasher(size, FnvBuildHasher::default());
 
@@ -68,6 +70,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
             wakeup_readable_recv,
             wakeup_writable_sent,
             wakeup_writable_recv,
+            buffer,
         })
     }
 
@@ -115,6 +118,8 @@ fn event_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(mut pool: TcpSo
         }
 
         handle_poll_events(&mut pool, &events);
+
+        pool.buffer.collect();
     }
 }
 
@@ -145,11 +150,12 @@ fn handle_accepted<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut
                                 &socket_opts);
 
             socket.set_token(Some(token)); //为注册成功的连接绑定新的令牌
-            let socket_rc = Rc::new(RefCell::new(socket));
-            let weak = Rc::downgrade(&socket_rc);
-            socket_rc.borrow_mut().set_handle(weak.clone()); //设置连接句柄
+            socket.set_write_buffer(pool.buffer.clone()); //为注册成功的连接绑定写缓冲池
+            let socket_arc = Arc::new(RefCell::new(socket));
+            let weak = Arc::downgrade(&socket_arc);
+            socket_arc.borrow_mut().set_handle(weak.clone()); //设置连接句柄
             pool.driver.as_ref().unwrap().get_adapter().connected(Ok(SocketHandle::new(weak))); //执行连接回调
-            entry.insert(socket_rc); //加入连接池上下文
+            entry.insert(socket_arc); //加入连接池上下文
         }
     }
 }
@@ -157,7 +163,7 @@ fn handle_accepted<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut
 //初始化Tcp连接，为连接绑定唤醒器，并设置连接通用选项
 fn init_socket<S: Socket + Stream, A: SocketAdapter<Connect = S>>(socket: &mut S,
                                                                   wakeup_readable_sent: Sender<Token>,
-                                                                  wakeup_writable_sent: Sender<Token>,
+                                                                  wakeup_writable_sent: Sender<(Token, WriteBufferHandle)>,
                                                                   socket_opts: &SocketOption) {
     //连接绑定唤醒器
     socket.set_readable_rouser(Some(wakeup_readable_sent));
@@ -196,16 +202,17 @@ fn handle_wakeup_readable<S: Socket + Stream, A: SocketAdapter<Connect = S>>(poo
 
 //批量唤醒Tcp连接的可写事件
 fn handle_wakeup_writable<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut TcpSocketPool<S, A>) {
-    //接收所有唤醒令牌，因为多线程异步唤醒，导致在一次轮询中可能多次唤醒，所以需要对唤醒令牌去重
-    let mut tokens = pool.wakeup_writable_recv.try_iter().collect::<Vec<Token>>();
-    tokens.sort();
-    tokens.dedup();
+    //接收所有唤醒令牌和写缓冲
+    let mut tuples = pool.wakeup_writable_recv.try_iter().collect::<Vec<(Token, WriteBufferHandle)>>();
 
-    for token in tokens {
+    for (token, buf) in tuples {
         if let Some(socket) = pool.contexts.get(token.0) {
+            //唤醒指定令牌的Tcp连接
             if let Err(e) = pool.poll.reregister(socket.borrow().get_stream(), token, socket.borrow().get_ready().clone(), socket.borrow().get_poll_opt().clone()) {
                 panic!("handle wakeup writable failed, reason: {:?}", e);
             }
+            //为指定令牌的Tcp连接写入数据
+            socket.borrow_mut().write(buf);
         }
     }
 }

@@ -1,14 +1,17 @@
+use std::rc::Rc;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::cell::RefCell;
 use std::future::Future;
-use std::rc::{Weak, Rc};
+use std::sync::{Weak, Arc};
+use std::marker::PhantomData;
 use std::collections::HashMap;
 use std::result::Result as GenResult;
 use std::task::{Context, Poll, Waker};
 use std::io::{Error, Result, ErrorKind};
 use std::net::{Shutdown, SocketAddr, IpAddr, Ipv6Addr, Ipv4Addr};
 
+use iovec::IoVec;
 use fnv::FnvBuildHasher;
 use crossbeam_channel::Sender;
 use mio::{
@@ -17,7 +20,8 @@ use mio::{
 };
 
 use atom::Atom;
-use std::marker::PhantomData;
+
+use crate::buffer_pool::{WriteBufferHandle, WriteBufferPool};
 
 /*
 * 默认的ipv4地址
@@ -74,7 +78,10 @@ pub trait Stream: Sized + Send + 'static {
     fn set_readable_rouser(&mut self, rouser: Option<Sender<Token>>);
 
     //设置可写事件唤醒器，返回上个可写事件唤醒器
-    fn set_writable_rouser(&mut self, rouser: Option<Sender<Token>>);
+    fn set_writable_rouser(&mut self, rouser: Option<Sender<(Token, WriteBufferHandle)>>);
+
+    //设置写缓冲池句柄
+    fn set_write_buffer(&mut self, buffer: WriteBufferPool);
 
     //接收流中的数据，返回成功，则表示本次接收了需要的字节数，并返回本次接收的字节数，否则返回接收错误
     fn recv(&mut self) -> Result<usize>;
@@ -114,6 +121,9 @@ pub trait Socket: Sized + Send + 'static {
     //设置连接读写缓冲区容量
     fn init_buffer_capacity(&mut self, read_size: usize, write_size: usize);
 
+    //获取连接写缓冲
+    fn get_write_buffer(&self) -> &WriteBufferPool;
+
     //通知连接读就绪，可以开始接收指定字节数的数据，如果为0则表示读取任意字节数，不会从当前读缓冲区中返回任何数据
     fn read_ready(&mut self, size: usize) -> Result<()>;
 
@@ -122,11 +132,11 @@ pub trait Socket: Sized + Send + 'static {
     //返回None，则表示当前读缓冲里没有指定字节数的数据，等待指定字节数的数据准备好后，异步回调
     fn read(&mut self, size: usize) -> Result<Option<&[u8]>>;
 
-    //通知连接写就绪，可以开始发送数据
-    fn write_ready(&mut self) -> Result<()>;
+    //通知连接写就绪，可以开始发送指定的数据
+    fn write_ready(&mut self, handle: WriteBufferHandle) -> Result<()>;
 
     //写入指定的数据
-    fn write(&mut self, bin: &[u8]) -> Result<()>;
+    fn write(&mut self, handle: WriteBufferHandle);
 
     //关闭Tcp连接
     fn close(&self, how: Shutdown) -> Result<()>;
@@ -212,7 +222,7 @@ impl<S: Socket> SocketHandle<S> {
     }
 
     //获取Tcp连接句柄
-    pub fn as_handle(&self) -> Option<Rc<RefCell<S>>> {
+    pub fn as_handle(&self) -> Option<Arc<RefCell<S>>> {
         self.0.upgrade()
     }
 }
@@ -280,15 +290,15 @@ impl<'a, S: Socket, W: AsyncIOWait> AsyncReadTask<'a, S, W> {
 /*
 * 异步写任务
 */
-pub struct AsyncWriteTask<'a, S: Socket, W: AsyncIOWait> {
-    handle: SocketHandle<S>,    //Tcp连接句柄
-    waits:  W,                  //异步任务等待队列
-    buf:    &'a [u8],           //本次需要异步写的数据
+pub struct AsyncWriteTask<S: Socket, W: AsyncIOWait> {
+    handle: SocketHandle<S>,        //Tcp连接句柄
+    waits:  W,                      //异步任务等待队列
+    buf:    WriteBufferHandle,      //本次需要异步写的数据
 }
 
-unsafe impl<'a, S: Socket, W: AsyncIOWait> Send for AsyncWriteTask<'a, S, W> {}
+unsafe impl<S: Socket, W: AsyncIOWait> Send for AsyncWriteTask<S, W> {}
 
-impl<'a, S: Socket, W: AsyncIOWait> Future for AsyncWriteTask<'a, S, W> {
+impl<S: Socket, W: AsyncIOWait> Future for AsyncWriteTask<S, W> {
     type Output = Result<()>;
 
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -299,24 +309,16 @@ impl<'a, S: Socket, W: AsyncIOWait> Future for AsyncWriteTask<'a, S, W> {
             },
             Some(s) => {
                 let mut socket = s.borrow_mut();
-                match socket.write(self.buf) {
-                    Err(e) => {
-                        //写数据错误
-                        Poll::Ready(Err(e))
-                    },
-                    Ok(()) => {
-                        //写数据完成
-                        Poll::Ready(Ok(()))
-                    },
-                }
+                socket.write_ready(self.buf.clone());
+                Poll::Ready(Ok(())) //写数据完成
             },
         }
     }
 }
 
-impl<'a, S: Socket, W: AsyncIOWait> AsyncWriteTask<'a, S, W> {
+impl<S: Socket, W: AsyncIOWait> AsyncWriteTask<S, W> {
     //异步读写指定的数据
-    pub fn async_write(handle: SocketHandle<S>, waits: W, buf: &'a [u8]) -> Self {
+    pub fn async_write(handle: SocketHandle<S>, waits: W, buf: WriteBufferHandle) -> Self {
         AsyncWriteTask {
             handle,
             waits,

@@ -1,11 +1,12 @@
-use std::rc::Weak;
 use std::ops::Range;
 use std::cell::RefCell;
+use std::sync::{Weak, Arc};
+use std::collections::VecDeque;
 use std::net::{Shutdown, SocketAddr};
 use std::io::{Result, Error, ErrorKind, Read, Write};
 
 use iovec::IoVec;
-use crossbeam_channel::{Sender, Receiver, unbounded};
+use crossbeam_channel::Sender;
 use mio::{
     PollOpt, Token, Ready,
     net::TcpStream
@@ -13,6 +14,7 @@ use mio::{
 
 use crate::util::pause;
 use crate::driver::{Socket, Stream, SocketHandle};
+use crate::buffer_pool::{ReadableView, WriteBufferHandle, WriteBufferPool};
 
 /*
 * Tcp连接读缓冲
@@ -123,64 +125,51 @@ impl ReadBuffer {
 * Tcp连接写缓冲
 */
 struct WriteBuffer {
-    sender:     Sender<Vec<u8>>,        //写数据发送器
-    receiver:   Receiver<Vec<u8>>,      //写数据接收器
-    buf:        Option<Vec<Vec<u8>>>,   //缓冲区
-    write_pos:  usize,                  //缓冲区已写位置
-    send_pos:   usize,                  //缓冲区已发送位置
+    queue:      VecDeque<WriteBufferHandle>,    //缓冲区队列
+    handle:     Option<WriteBufferHandle>,      //当前待发送缓冲区
+    write_pos:  usize,                          //缓冲区已写位置
+    send_pos:   usize,                          //缓冲区已发送位置
 }
 
 impl WriteBuffer {
     //构建一个指定容量的写缓冲
     pub fn new() -> Self {
-        let (sender, receiver) = unbounded();
         WriteBuffer {
-            sender,
-            receiver,
-            buf: None,
+            queue: VecDeque::with_capacity(3),
+            handle: None,
             write_pos: 0,
             send_pos: 0,
         }
     }
 
-    //线程安全的获取指定位置开始的写缓冲列表
-    pub fn parts(&mut self, mut pos: usize) -> Vec<&IoVec> {
+    //待发送的写缓冲数量
+    pub fn size(&self) -> usize {
+        self.queue.len()
+    }
+
+    //增加一个待写入的写缓冲句柄
+    pub fn push(&mut self, handle: WriteBufferHandle) {
+        self.queue.push_back(handle);
+    }
+
+    //线程安全的获取当前写缓冲
+    pub fn pop(&mut self) -> Option<Arc<ReadableView>> {
+        let mut shared = None;
         if self.send_pos >= self.write_pos {
-            //写缓冲区内的数据已发送完，则接收最新的数据
-            let bufs = self.receiver.try_iter().collect::<Vec<Vec<u8>>>();
+            //当前写缓冲区的数据已发送完，则取出下一个写缓冲区的数据
+            if let Some(handle) = self.queue.pop_front() {
+                shared = handle.get_shared();
+                self.handle = Some(handle);
+            }
+
             //设置当前写缓冲区的位置，并填充写缓冲区
-            self.write_pos = bufs.iter().map(|vec| { vec.len() }).sum();
-            self.send_pos = 0;
-            self.buf = Some(bufs);
-        }
-
-        let mut len;
-        let mut vec = Vec::new();
-        if let Some(bufs) = &self.buf {
-            for buf in bufs {
-                len = buf.len(); //当前缓冲区的大小
-                if pos > len {
-                    //已覆盖当前缓冲区，则继续下一个缓冲区
-                    pos -= len;
-                    continue;
-                }
-
-                vec.push((buf[pos..]).into()); //加入缓冲列表
-                pos = 0; //将位置设置为0，保证将后续缓冲区全部加入缓冲列表
+            if let Some(s) = &shared {
+                self.write_pos = s.get_iovec().iter().map(|vec| { (*vec).len() }).sum();
+                self.send_pos = 0;
             }
         }
 
-        vec
-    }
-
-    //线程安全的将指定数据写入缓冲区
-    pub fn write(&mut self, bin: &[u8]) -> Result<()> {
-        //异步发送写入缓冲区的数据
-        if let Err(e) = self.sender.send(Vec::from(bin)) {
-            return Err(Error::new(ErrorKind::BrokenPipe, e));
-        }
-
-        Ok(())
+        shared
     }
 }
 
@@ -188,20 +177,21 @@ impl WriteBuffer {
 * Tcp连接
 */
 pub struct TcpSocket {
-    local:              SocketAddr,                         //TCP连接本地地址
-    remote:             SocketAddr,                         //TCP连接远端地址
-    token:              Option<Token>,                      //连接令牌
-    stream:             TcpStream,                          //TCP流
-    ready:              Ready,                              //Tcp事件准备状态
-    poll_opt:           PollOpt,                            //Tcp事件轮询选项
-    readable_rouser:    Option<Sender<Token>>,              //可读事件唤醒器
-    writable_rouser:    Option<Sender<Token>>,              //可写事件唤醒器
-    readable_size:      usize,                              //本次可读字节数
-    read_buf:           Option<ReadBuffer>,                 //读缓冲
-    write_buf:          Option<WriteBuffer>,                //写缓冲
-    flush:              bool,                               //Tcp连接写刷新状态
-    closed:             bool,                               //Tcp连接关闭状态
-    handle:             Option<SocketHandle<TcpSocket>>,    //Tcp连接句柄
+    local:              SocketAddr,                                     //TCP连接本地地址
+    remote:             SocketAddr,                                     //TCP连接远端地址
+    token:              Option<Token>,                                  //连接令牌
+    stream:             TcpStream,                                      //TCP流
+    ready:              Ready,                                          //Tcp事件准备状态
+    poll_opt:           PollOpt,                                        //Tcp事件轮询选项
+    readable_rouser:    Option<Sender<Token>>,                          //可读事件唤醒器
+    writable_rouser:    Option<Sender<(Token, WriteBufferHandle)>>,     //可写事件唤醒器
+    readable_size:      usize,                                          //本次可读字节数
+    read_buf:           Option<ReadBuffer>,                             //读缓冲
+    write_buf:          Option<WriteBuffer>,                            //写缓冲
+    flush:              bool,                                           //Tcp连接写刷新状态
+    closed:             bool,                                           //Tcp连接关闭状态
+    buffer_pool:        Option<Arc<WriteBufferPool>>,                   //Tcp连接写缓冲池
+    handle:             Option<SocketHandle<TcpSocket>>,                //Tcp连接句柄
 }
 
 unsafe impl Send for TcpSocket {}
@@ -226,6 +216,7 @@ impl Stream for TcpSocket {
             write_buf: None,
             flush: false,
             closed: false,
+            buffer_pool: None,
             handle: None,
         }
     }
@@ -266,8 +257,12 @@ impl Stream for TcpSocket {
         self.readable_rouser = rouser;
     }
 
-    fn set_writable_rouser(&mut self, rouser: Option<Sender<Token>>) {
+    fn set_writable_rouser(&mut self, rouser: Option<Sender<(Token, WriteBufferHandle)>>) {
         self.writable_rouser = rouser;
+    }
+
+    fn set_write_buffer(&mut self, buffer: WriteBufferPool) {
+        self.buffer_pool = Some(Arc::new(buffer));
     }
 
     fn recv(&mut self) -> Result<usize> {
@@ -322,14 +317,32 @@ impl Stream for TcpSocket {
         let write_pos = self.write_buf.as_ref().unwrap().write_pos;
 
         loop {
-            let bufs = &self.write_buf.as_mut().unwrap().parts(send_pos)[..];
+            //获取本次发送的IoVec
+            let mut bufs = Vec::new();
+            let mut shared = self.write_buf.as_mut().unwrap().pop();
+            if let Some(s) = &shared {
+                let mut len;
+                let mut pos = send_pos;
+                for buf in s.get_iovec() {
+                    len = buf.len(); //当前缓冲区的大小
+                    if pos > len {
+                        //已覆盖当前缓冲区，则继续下一个缓冲区
+                        pos -= len;
+                        continue;
+                    }
+
+                    bufs.push(buf); //加入缓冲列表
+                    pos = 0; //将位置设置为0，保证将后续缓冲区全部加入缓冲列表
+                }
+            }
+
             if bufs.len() == 0 {
-                //写缓冲区为空，则立即中断发送，并取消当前流的可写事件的关注
+                //写缓冲区为空，则立即停止本次发送，并取消当前流的可写事件的关注
                 self.ready.remove(Ready::writable());
                 return Ok(0);
             }
 
-            match self.stream.write_bufs(bufs) {
+            match self.stream.write_bufs(&bufs[..]) {
                 Ok(0) => {
                     //在流内没有发送任何数据，则继续尝试发送数据
                     pause();
@@ -415,6 +428,10 @@ impl Socket for TcpSocket {
         }
     }
 
+    fn get_write_buffer(&self) -> &WriteBufferPool {
+        self.buffer_pool.as_ref().unwrap().as_ref()
+    }
+
     fn read_ready(&mut self, size: usize) -> Result<()> {
         self.read_buf.as_mut().unwrap().ready(size); //为读就绪准备读缓冲区
         self.ready.remove(Ready::writable()); //取消当前连接对可写事件的关注
@@ -454,7 +471,7 @@ impl Socket for TcpSocket {
         Ok(None)
     }
 
-    fn write_ready(&mut self) -> Result<()> {
+    fn write_ready(&mut self, handle: WriteBufferHandle) -> Result<()> {
         self.ready.remove(Ready::readable()); //取消当前连接对可读事件的关注
         self.ready.insert(Ready::writable()); //设置当前连接需要关注可写事件
         if let Some(rouser) = &self.writable_rouser {
@@ -462,7 +479,7 @@ impl Socket for TcpSocket {
                 //唤醒连接，并通知连接需要发送数据，必须在异步写入缓冲区成功后，才唤醒
                 //因为异步写入缓冲区，且异步唤醒的原因，写缓冲区的数据可能会被上次唤醒所消耗，则出现多余的空唤醒
                 //但因为一定是先写入缓冲区完成后再唤醒，所以不会出现写缓冲区有数据，且没唤醒的情况
-                if let Err(e) = rouser.send(token) {
+                if let Err(e) = rouser.send((token, handle)) {
                     return Err(Error::new(ErrorKind::BrokenPipe, e));
                 }
             }
@@ -471,18 +488,10 @@ impl Socket for TcpSocket {
         Ok(())
     }
 
-    fn write(&mut self, bin: &[u8]) -> Result<()> {
-        if bin.len() == 0 {
-            return Ok(());
+    fn write(&mut self, handle: WriteBufferHandle) {
+        if let Some(writer) = &mut self.write_buf {
+            writer.push(handle);
         }
-
-        if let Err(e) = self.write_buf.as_mut().unwrap().write(bin) {
-            //线程安全的异步写入缓冲区失败
-            return Err(e);
-        }
-
-        //异步写入缓冲区成功后，则需要通知连接写就绪，可以异步发送写缓冲区中的数据
-        self.write_ready()
     }
 
     fn close(&self, how: Shutdown) -> Result<()> {

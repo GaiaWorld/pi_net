@@ -6,17 +6,18 @@ extern crate tcp;
 extern crate fnv;
 extern crate futures;
 
-use std::mem;
 use std::thread;
 use std::net::Shutdown;
-use std::future::Future;
 use std::time::Duration;
 
+use iovec::{MAX_LENGTH, IoVec};
 use futures::future::{FutureExt, BoxFuture};
 
 use tcp::connect::TcpSocket;
 use tcp::server::{AsyncAdapter, PortsAdapter, PortsAdapterFactory, SocketListener};
 use tcp::driver::{SocketConfig, Socket, AsyncIOWait, AsyncService, SocketStatus, SocketHandle, AsyncReadTask, AsyncWriteTask};
+use tcp::buffer_pool::WriteBufferPool;
+use tcp::util::{IoArr, IoList};
 
 struct TestService;
 
@@ -34,13 +35,14 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
                     println!("===> Connect Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.as_handle().unwrap().as_ref().borrow().get_remote(), handle.as_handle().unwrap().as_ref().borrow().get_local());
 
                     //连接成功，开始读
-                    if token.0 % 2 == 1 {
+                    if token.0 % 2 == 0 {
                         //准备异步读
                         if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(0) {
                             println!("!!!> Read Ready Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.as_handle().unwrap().as_ref().borrow().get_remote(), handle.as_handle().unwrap().as_ref().borrow().get_local(), e);
                         }
                     } else {
                         //直接异步读
+                        let mut buf = handle.as_handle().as_ref().unwrap().borrow().get_write_buffer().alloc().ok().unwrap().unwrap();
                         match AsyncReadTask::async_read(handle.clone(), waits.clone(), 0).await {
                             Err(e) => {
                                 println!("!!!> Socket Read Error, token: {:?}, reason: {:?}", token, e);
@@ -49,14 +51,18 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
                                 println!("===> Socket Read Ok, token: {:?}, data: {:?}", token, String::from_utf8_lossy(bin));
 
                                 //读成功，开始写
-                                let bin = b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n";
-                                match AsyncWriteTask::async_write(handle, waits, bin).await {
-                                    Err(e) => {
-                                        println!("!!!> Socket Write Error, token: {:?}, reason: {:?}", token, e);
-                                    },
-                                    Ok(_) => {
-                                        println!("===> Socket Write Ok, token: {:?}", token);
-                                    },
+                                let mut arr = IoArr::from(b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n");
+                                buf.get_iolist_mut().push_back(arr);
+
+                                if let Some(buf) = buf.finish() {
+                                    match AsyncWriteTask::async_write(handle, waits, buf).await {
+                                        Err(e) => {
+                                            println!("!!!> Socket Write Error, token: {:?}, reason: {:?}", token, e);
+                                        },
+                                        Ok(_) => {
+                                            println!("===> Socket Write Ok, token: {:?}", token);
+                                        },
+                                    }
                                 }
                             },
                         }
@@ -76,6 +82,7 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
                 } else {
                     println!("===> Socket Receive Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.as_handle().unwrap().as_ref().borrow().get_remote(), handle.as_handle().unwrap().as_ref().borrow().get_local());
 
+                    let mut buf = handle.as_handle().as_ref().unwrap().borrow().get_write_buffer().alloc().ok().unwrap().unwrap();
                     match AsyncReadTask::async_read(handle.clone(), waits.clone(), 0).await {
                         Err(e) => {
                             println!("!!!> Socket Read Error, token: {:?}, reason: {:?}", token, e);
@@ -84,14 +91,18 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
                             println!("===> Socket Read Ok, token: {:?}, data: {:?}", token, String::from_utf8_lossy(bin));
 
                             //读成功，开始写
-                            let bin = b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n";
-                            match AsyncWriteTask::async_write(handle, waits, bin).await {
-                                Err(e) => {
-                                    println!("!!!> Socket Write Error, token: {:?}, reason: {:?}", token, e);
-                                },
-                                Ok(_) => {
-                                    println!("===> Socket Write Ok, token: {:?}", token);
-                                },
+                            let mut arr = IoArr::from(b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n");
+                            buf.get_iolist_mut().push_back(arr);
+
+                            if let Some(buf) = buf.finish() {
+                                match AsyncWriteTask::async_write(handle, waits, buf).await {
+                                    Err(e) => {
+                                        println!("!!!> Socket Write Error, token: {:?}, reason: {:?}", token, e);
+                                    },
+                                    Ok(_) => {
+                                        println!("===> Socket Write Ok, token: {:?}", token);
+                                    },
+                                }
                             }
                         },
                     }
@@ -154,7 +165,8 @@ impl PortsAdapterFactory for TestFactory {
 #[test]
 fn test_socket_server() {
     let config = SocketConfig::new("0.0.0.0", &[38080]);
-    match SocketListener::bind(TestFactory, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
+    match SocketListener::bind(TestFactory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Error, reason: {:?}", e);
         },
@@ -169,7 +181,8 @@ fn test_socket_server() {
 #[test]
 fn test_socket_server_ipv6() {
     let config = SocketConfig::new("fe80::c0bc:ecf0:e91:2b3a", &[38080]);
-    match SocketListener::bind(TestFactory, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
+    match SocketListener::bind(TestFactory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv6 Address Error, reason: {:?}", e);
         },
@@ -184,7 +197,8 @@ fn test_socket_server_ipv6() {
 #[test]
 fn test_socket_server_shared() {
     let config = SocketConfig::new("::", &[38080]);
-    match SocketListener::bind(TestFactory, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
+    match SocketListener::bind(TestFactory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 & Ipv6 Address Error, reason: {:?}", e);
         },
@@ -194,4 +208,17 @@ fn test_socket_server_shared() {
     }
 
     thread::sleep(Duration::from_millis(10000000));
+}
+
+#[test]
+fn test_io_list() {
+    let arr = IoArr::from(vec![10, 10, 10]);
+    let mut iolist = IoList::with_capacity(10);
+    iolist.push_back(arr);
+    let vec = Vec::from(iolist);
+    let values = vec.iter().map(|arr| {
+        arr.as_ref().into()
+    }).collect::<Vec<&IoVec>>();
+    let iovec = values.as_slice();
+    println!("iovec max length: {}", MAX_LENGTH);
 }

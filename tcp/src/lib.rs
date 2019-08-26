@@ -1,5 +1,6 @@
 #![feature(async_await)]
 #![feature(range_is_empty)]
+#![feature(const_generics)]
 
 extern crate mio;
 extern crate slab;
@@ -17,9 +18,10 @@ extern crate atom;
 extern crate apm;
 extern crate r#async;
 
+pub mod server;
 pub mod driver;
 pub mod connect;
-pub mod server;
+pub mod buffer_pool;
+pub mod util;
 mod acceptor;
 mod connect_pool;
-mod util;
