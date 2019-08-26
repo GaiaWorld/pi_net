@@ -187,7 +187,7 @@ impl WriteBufferPool {
         for _ in 0..init_count {
             recover.send(IoList::with_capacity(iolist_cap));
         }
-        let size = Arc::new(AtomicUsize::new(iolist_cap));
+        let size = Arc::new(AtomicUsize::new(init_count));
         let (sender, ready) = bounded(pool_capacity);
 
         Ok(WriteBufferPool {
@@ -212,7 +212,7 @@ impl WriteBufferPool {
 
     //获取写缓冲池中空闲写缓冲数量
     pub fn free_size(&self) -> usize {
-        self.size() - self.frees.len()
+        self.frees.len()
     }
 
     //获取写就绪的数量
@@ -268,6 +268,11 @@ impl WriteBufferPool {
 
     //事理写缓冲池，释放已完成发送的写缓冲
     pub fn collect(&self) {
+        if self.ready.len() < self.free_size() {
+            //如果写就绪队列长度为空，或小于写缓冲池空闲队列长度，则忽略
+            return;
+        }
+
         let views = self.ready.try_iter().collect::<Vec<Arc<ReadableView>>>();
         for view in views {
             if Arc::weak_count(&view) == 0 {

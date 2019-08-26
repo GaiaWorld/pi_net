@@ -25,9 +25,17 @@ pub fn pause() {
 }
 
 /*
+* IO数组源
+*/
+enum IoArrSrc {
+    Slice(*mut u8),
+    Vec(*mut u8),
+}
+
+/*
 * IO数组
 */
-pub struct IoArr(bool, usize, *mut u8);
+pub struct IoArr(bool, usize, IoArrSrc);
 
 unsafe impl Send for IoArr {}
 
@@ -39,7 +47,14 @@ impl Drop for IoArr {
         }
         self.0 = true;
 
-        unsafe { Vec::from_raw_parts(self.2, self.1, self.1); }
+        match self.2 {
+            IoArrSrc::Slice(raw) => {
+                unsafe { from_raw_parts(raw as *const u8, self.1); }
+            },
+            IoArrSrc::Vec(raw) => {
+                unsafe { Vec::from_raw_parts(raw, self.1, self.1); }
+            },
+        }
     }
 }
 
@@ -50,10 +65,10 @@ impl<const N: usize> From<&'static [u8; N]> for IoArr {
             panic!("slice to io array failed, invalid slice length");
         }
 
-        let ptr = slice.as_ptr() as *mut u8;
+        let raw = slice.as_ptr() as *mut u8;
         mem::forget(slice);
 
-        IoArr(false, len, ptr)
+        IoArr(false, len, IoArrSrc::Slice(raw))
     }
 }
 
@@ -64,17 +79,22 @@ impl From<Vec<u8>> for IoArr {
             panic!("vectory to io array failed, invalid vectory length");
         }
 
-        let ptr = vec.as_mut_ptr();
+        let raw = vec.as_mut_ptr();
         mem::forget(vec);
 
-        IoArr(false, len, ptr)
+        IoArr(false, len, IoArrSrc::Vec(raw))
     }
 }
 
 impl From<IoArr> for Vec<u8> {
     fn from(mut arr: IoArr) -> Self {
         arr.0 = true; //声明已释放
-        unsafe { Vec::from_raw_parts(arr.2, arr.1, arr.1) }
+
+        if let IoArrSrc::Vec(raw) = arr.2 {
+            unsafe { Vec::from_raw_parts(raw, arr.1, arr.1) }
+        } else {
+            panic!("from IoArr to Vec<u8> failed, invalid IoArr");
+        }
     }
 }
 
@@ -87,10 +107,10 @@ impl IoArr {
 
         let mut vec = Vec::with_capacity(capacity);
         vec.resize(capacity, 0);
-        let ptr = vec.as_mut_ptr();
+        let raw = vec.as_mut_ptr();
         mem::forget(vec);
 
-        IoArr(false, capacity, ptr)
+        IoArr(false, capacity, IoArrSrc::Vec(raw))
     }
 
     //获取IO数组长度
@@ -100,12 +120,26 @@ impl IoArr {
 
     //获取只读引用
     pub fn as_ref(&self) -> &[u8] {
-        unsafe { from_raw_parts(self.2 as *const u8, self.1) }
+        match self.2 {
+            IoArrSrc::Slice(raw) => {
+                unsafe { from_raw_parts(raw as *const u8, self.1) }
+            },
+            IoArrSrc::Vec(raw) => {
+                unsafe { from_raw_parts(raw as *const u8, self.1) }
+            },
+        }
     }
 
     //获取可写引用
     pub fn as_mut(&mut self) -> &mut [u8] {
-        unsafe { from_raw_parts_mut(self.2, self.1) }
+        match self.2 {
+            IoArrSrc::Slice(raw) => {
+                unsafe { from_raw_parts_mut(raw, self.1) }
+            },
+            IoArrSrc::Vec(raw) => {
+                unsafe { from_raw_parts_mut(raw, self.1) }
+            },
+        }
     }
 }
 

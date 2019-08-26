@@ -7,4 +7,5 @@ members = [
   "rpc",
   "nodec",
   "tcp",
+  "ws",
 ]

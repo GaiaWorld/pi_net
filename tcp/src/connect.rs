@@ -171,6 +171,13 @@ impl WriteBuffer {
 
         shared
     }
+
+    //移除当前写缓冲
+    pub fn remove(&mut self) {
+        if let Some(_) = self.handle.take() {
+            ();
+        }
+    }
 }
 
 /*
@@ -365,7 +372,8 @@ impl Stream for TcpSocket {
                         }
                     }
 
-                    //已发送完写缓冲区内的数据，则完成本次发送，并取消当前流的可写事件的关注
+                    //已发送完当前写缓冲区内的数据，则完成本次发送，清理当前缓冲区并取消当前流的可写事件的关注
+                    self.write_buf.as_mut().unwrap().remove();
                     self.ready.remove(Ready::writable());
                     return Ok(len);
                 },
