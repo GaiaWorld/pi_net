@@ -26,22 +26,22 @@ use crate::buffer_pool::{WriteBufferHandle, WriteBufferPool};
 /*
 * 默认的ipv4地址
 */
-const DEFAULT_TCP_IP_V4: &str = "0.0.0.0";
+pub const DEFAULT_TCP_IP_V4: &str = "0.0.0.0";
 
 /*
 * 默认的ipv6地址
 */
-const DEFAULT_TCP_IP_V6: &str = "::";
+pub const DEFAULT_TCP_IP_V6: &str = "::";
 
 /*
 * 默认的Tcp端口
 */
-const DEFAULT_TCP_PORT: u16 = 38080;
+pub const DEFAULT_TCP_PORT: u16 = 38080;
 
 /*
 * 默认缓冲区大小，16KB
 */
-const DEFAULT_BUFFER_SIZE: usize = 16384;
+pub const DEFAULT_BUFFER_SIZE: usize = 16384;
 
 /*
 * Tcp流

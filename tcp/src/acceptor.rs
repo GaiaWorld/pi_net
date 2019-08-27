@@ -1,8 +1,9 @@
 use std::thread;
-use std::net::SocketAddr;
+use std::str::FromStr;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use std::io::{ErrorKind, Result, Error};
+use std::net::{SocketAddr, IpAddr, Ipv6Addr};
 
 use mio::{
     Events, Poll, PollOpt, Token, Ready,
@@ -12,7 +13,7 @@ use slab::Slab;
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use fnv::FnvBuildHasher;
 
-use crate::driver::{Socket, Stream, SocketAdapter, AcceptorCmd, SocketDriver};
+use crate::driver::{DEFAULT_TCP_IP_V6, Socket, Stream, SocketAdapter, AcceptorCmd, SocketDriver};
 use crate::util::pause;
 
 /*
@@ -65,6 +66,11 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
                     len -= 1;
                 },
                 Ok(listener) => {
+                    if (addr.ip().ne(&IpAddr::V6(Ipv6Addr::from_str(DEFAULT_TCP_IP_V6).ok().unwrap()))) && addr.is_ipv6() {
+                        //如果本地地址是ipv6，则设置当前监听器为ipv6独占
+                        listener.set_only_v6(true);
+                    }
+
                     //绑定指定地址成功，则为地址绑定连接上下文
                     let entry = contexts.vacant_entry();
                     let id = entry.key();

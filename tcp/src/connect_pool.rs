@@ -1,11 +1,12 @@
 use std::mem;
 use std::thread;
 use std::sync::Arc;
+use std::str::FromStr;
 use std::cell::RefCell;
 use std::time::Duration;
 use std::collections::HashMap;
 use std::io::{ErrorKind, Result};
-use std::net::{Shutdown, SocketAddr};
+use std::net::{Shutdown, SocketAddr, IpAddr, Ipv6Addr};
 
 use slab::Slab;
 use fnv::FnvBuildHasher;
@@ -13,7 +14,7 @@ use mio::{Events, Poll, Token};
 use crossbeam_channel::{Sender, Receiver, unbounded};
 
 use crate::buffer_pool::{WriteBufferHandle, WriteBufferPool};
-use crate::driver::{Socket, Stream, SocketAdapter, SocketHandle, SocketOption, SocketConfig, SocketDriver};
+use crate::driver::{DEFAULT_TCP_IP_V6, Socket, Stream, SocketAdapter, SocketHandle, SocketOption, SocketConfig, SocketDriver};
 
 /*
 * Tcp连接池
@@ -171,7 +172,7 @@ fn init_socket<S: Socket + Stream, A: SocketAdapter<Connect = S>>(socket: &mut S
 
     //设置连接是否ipv6独占，独占后可以与ipv4共享相同的端口
     let stream = socket.get_stream();
-    if socket.get_local().is_ipv6() {
+    if (socket.get_local().ip().ne(&IpAddr::V6(Ipv6Addr::from_str(DEFAULT_TCP_IP_V6).ok().unwrap()))) && socket.get_local().is_ipv6() {
         //如果本地地址是ipv6，则设置当前流为ipv6独占
         if let Err(e) = stream.set_only_v6(true) {
             panic!("init socket failed, reason: {:?}", e);

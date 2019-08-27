@@ -17,7 +17,7 @@ use tcp::connect::TcpSocket;
 use tcp::server::{AsyncAdapter, PortsAdapter, PortsAdapterFactory, SocketListener};
 use tcp::driver::{SocketConfig, Socket, AsyncIOWait, AsyncService, SocketStatus, SocketHandle, AsyncReadTask, AsyncWriteTask};
 use tcp::buffer_pool::WriteBufferPool;
-use tcp::util::{IoArr, IoList};
+use tcp::util::{IoBytes, IoList};
 
 struct TestService;
 
@@ -51,7 +51,7 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
                                 println!("===> Socket Read Ok, token: {:?}, data: {:?}", token, String::from_utf8_lossy(bin));
 
                                 //读成功，开始写
-                                let mut arr = IoArr::from(b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n");
+                                let mut arr = b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n".into();
                                 buf.get_iolist_mut().push_back(arr);
 
                                 if let Some(buf) = buf.finish() {
@@ -91,7 +91,7 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
                             println!("===> Socket Read Ok, token: {:?}, data: {:?}", token, String::from_utf8_lossy(bin));
 
                             //读成功，开始写
-                            let mut arr = IoArr::from(b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n");
+                            let mut arr = IoBytes::from(b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n");
                             buf.get_iolist_mut().push_back(arr);
 
                             if let Some(buf) = buf.finish() {
@@ -212,7 +212,7 @@ fn test_socket_server_shared() {
 
 #[test]
 fn test_io_list() {
-    let arr = IoArr::from(vec![10, 10, 10]);
+    let arr = IoBytes::from(vec![10, 10, 10]);
     let mut iolist = IoList::with_capacity(10);
     iolist.push_back(arr);
     let vec = Vec::from(iolist);

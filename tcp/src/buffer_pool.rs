@@ -7,14 +7,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use iovec::IoVec;
 use crossbeam_channel::{Sender, Receiver, bounded};
 
-use crate::util::{pause, IoArr, IoList};
+use crate::util::{pause, IoBytes, IoList};
 
 /*
 * Tcp连接写缓冲的只读视图
 */
 pub struct ReadableView {
     recover: Sender<IoList>,            //写缓冲回收器
-    inner:  Option<Arc<Vec<IoArr>>>,    //只读共享指针
+    inner:  Option<Arc<Vec<IoBytes>>>,    //只读共享指针
 }
 
 unsafe impl Send for ReadableView {}
@@ -27,9 +27,7 @@ impl Drop for ReadableView {
             return;
         }
 
-        //释放iovec的只读共享指针
-
-        //有读共享指针，则将IO数组向量转换为IO列表，清空IO列表并回收
+        //有读共享指针，则将IO数据向量转换为IO列表，清空IO列表并回收
         let shared = self.inner.take().unwrap();
         if let Ok(vec) = Arc::try_unwrap(shared) {
             let mut list = IoList::from(vec);

@@ -25,21 +25,21 @@ pub fn pause() {
 }
 
 /*
-* IO数组源
+* IO数据源
 */
-enum IoArrSrc {
+enum IoBytesOrigin {
     Slice(*mut u8),
     Vec(*mut u8),
 }
 
 /*
-* IO数组
+* IO数据
 */
-pub struct IoArr(bool, usize, IoArrSrc);
+pub struct IoBytes(bool, usize, IoBytesOrigin);
 
-unsafe impl Send for IoArr {}
+unsafe impl Send for IoBytes {}
 
-impl Drop for IoArr {
+impl Drop for IoBytes {
     fn drop(&mut self) {
         if self.0 {
             //已释放，则忽略
@@ -48,18 +48,18 @@ impl Drop for IoArr {
         self.0 = true;
 
         match self.2 {
-            IoArrSrc::Slice(raw) => {
+            IoBytesOrigin::Slice(raw) => {
                 unsafe { from_raw_parts(raw as *const u8, self.1); }
             },
-            IoArrSrc::Vec(raw) => {
+            IoBytesOrigin::Vec(raw) => {
                 unsafe { Vec::from_raw_parts(raw, self.1, self.1); }
             },
         }
     }
 }
 
-impl<const N: usize> From<&'static [u8; N]> for IoArr {
-    fn from(slice: &'static [u8; N]) -> Self {
+impl<'a, const N: usize> From<&'a [u8; N]> for IoBytes {
+    fn from(slice: &'a [u8; N]) -> Self {
         let len = slice.len();
         if len > MAX_LENGTH {
             panic!("slice to io array failed, invalid slice length");
@@ -68,11 +68,23 @@ impl<const N: usize> From<&'static [u8; N]> for IoArr {
         let raw = slice.as_ptr() as *mut u8;
         mem::forget(slice);
 
-        IoArr(false, len, IoArrSrc::Slice(raw))
+        IoBytes(false, len, IoBytesOrigin::Slice(raw))
     }
 }
 
-impl From<Vec<u8>> for IoArr {
+impl<'a> From<IoBytes> for &'a [u8] {
+    fn from(mut arr: IoBytes) -> Self {
+        arr.0 = true; //声明已释放
+
+        if let IoBytesOrigin::Slice(raw) = arr.2 {
+            unsafe { from_raw_parts_mut(raw, arr.1) }
+        } else {
+            panic!("from IoArr to Slice failed, invalid IoArr");
+        }
+    }
+}
+
+impl From<Vec<u8>> for IoBytes {
     fn from(mut vec: Vec<u8>) -> Self {
         let len = vec.len();
         if len > MAX_LENGTH {
@@ -82,15 +94,15 @@ impl From<Vec<u8>> for IoArr {
         let raw = vec.as_mut_ptr();
         mem::forget(vec);
 
-        IoArr(false, len, IoArrSrc::Vec(raw))
+        IoBytes(false, len, IoBytesOrigin::Vec(raw))
     }
 }
 
-impl From<IoArr> for Vec<u8> {
-    fn from(mut arr: IoArr) -> Self {
+impl From<IoBytes> for Vec<u8> {
+    fn from(mut arr: IoBytes) -> Self {
         arr.0 = true; //声明已释放
 
-        if let IoArrSrc::Vec(raw) = arr.2 {
+        if let IoBytesOrigin::Vec(raw) = arr.2 {
             unsafe { Vec::from_raw_parts(raw, arr.1, arr.1) }
         } else {
             panic!("from IoArr to Vec<u8> failed, invalid IoArr");
@@ -98,8 +110,8 @@ impl From<IoArr> for Vec<u8> {
     }
 }
 
-impl IoArr {
-    //构建一个指定容量的IO数组
+impl IoBytes {
+    //构建一个指定容量的IO数据
     pub fn with_capacity(capacity: usize) -> Self {
         if capacity > MAX_LENGTH {
             panic!("new io array failed, invalid array length");
@@ -110,10 +122,10 @@ impl IoArr {
         let raw = vec.as_mut_ptr();
         mem::forget(vec);
 
-        IoArr(false, capacity, IoArrSrc::Vec(raw))
+        IoBytes(false, capacity, IoBytesOrigin::Vec(raw))
     }
 
-    //获取IO数组长度
+    //获取IO数据长度
     pub fn len(&self) -> usize {
         self.1
     }
@@ -121,10 +133,10 @@ impl IoArr {
     //获取只读引用
     pub fn as_ref(&self) -> &[u8] {
         match self.2 {
-            IoArrSrc::Slice(raw) => {
+            IoBytesOrigin::Slice(raw) => {
                 unsafe { from_raw_parts(raw as *const u8, self.1) }
             },
-            IoArrSrc::Vec(raw) => {
+            IoBytesOrigin::Vec(raw) => {
                 unsafe { from_raw_parts(raw as *const u8, self.1) }
             },
         }
@@ -133,10 +145,10 @@ impl IoArr {
     //获取可写引用
     pub fn as_mut(&mut self) -> &mut [u8] {
         match self.2 {
-            IoArrSrc::Slice(raw) => {
+            IoBytesOrigin::Slice(raw) => {
                 unsafe { from_raw_parts_mut(raw, self.1) }
             },
-            IoArrSrc::Vec(raw) => {
+            IoBytesOrigin::Vec(raw) => {
                 unsafe { from_raw_parts_mut(raw, self.1) }
             },
         }
@@ -146,23 +158,23 @@ impl IoArr {
 /*
 * IO列表
 */
-pub struct IoList(usize, VecDeque<IoArr>);
+pub struct IoList(usize, VecDeque<IoBytes>);
 
 unsafe impl Send for IoList {}
 
-impl From<Vec<IoArr>> for IoList {
-    fn from(vec: Vec<IoArr>) -> Self {
+impl From<Vec<IoBytes>> for IoList {
+    fn from(vec: Vec<IoBytes>) -> Self {
         let mut len = 0;
         for arr in &vec {
             len += arr.len();
         }
-        let queue: VecDeque<IoArr> = vec.into();
+        let queue: VecDeque<IoBytes> = vec.into();
 
         IoList(len, queue)
     }
 }
 
-impl From<IoList> for Vec<IoArr> {
+impl From<IoList> for Vec<IoBytes> {
     fn from(list: IoList) -> Self {
         list.1.into()
     }
@@ -184,8 +196,8 @@ impl IoList {
         self.1.len()
     }
 
-    //在列表前部增加IO数组
-    pub fn push_front(&mut self, arr: IoArr) {
+    //在列表前部增加IO数据
+    pub fn push_front(&mut self, arr: IoBytes) {
         let len = arr.len();
         if len == 0 {
             return;
@@ -195,8 +207,8 @@ impl IoList {
         self.0 += len;
     }
 
-    //在列表后部增加IO数组
-    pub fn push_back(&mut self, arr: IoArr) {
+    //在列表后部增加IO数据
+    pub fn push_back(&mut self, arr: IoBytes) {
         let len = arr.len();
         if len == 0 {
             return;
