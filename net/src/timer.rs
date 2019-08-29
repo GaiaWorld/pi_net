@@ -55,7 +55,7 @@ impl NetTimers<TimerCallback> {
     }
     //设置定时器，并设置回调,返回定时器ID
     pub fn set_timeout(&mut self, src: Atom, delay_from_now: Duration, state: TimerCallback) {
-        let mut timer = Builder::default().tick_duration(Duration::from_millis(10)).num_slots(1).capacity(10).build();
+        let mut timer = Builder::default().tick_duration(Duration::from_millis(1)).num_slots(1).capacity(10).build();
         let timeout = timer.set_timeout(delay_from_now, state);
         self.timers.insert(src, (timer, timeout));
     }
