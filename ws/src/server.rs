@@ -1,26 +1,71 @@
 use std::net::Shutdown;
+use std::rc::{Weak, Rc};
 use std::str::from_utf8;
+use std::collections::HashMap;
 
+use bytes::BufMut;
+use fnv::FnvBuildHasher;
 use http::{HttpTryFrom, Response};
 use httparse::{EMPTY_HEADER, Request};
 use futures::future::{FutureExt, BoxFuture};
-use bytes::BufMut;
 
 use tcp::util::IoBytes;
 use tcp::driver::{Socket, AsyncIOWait, AsyncServiceName, AsyncService, SocketStatus, SocketHandle, AsyncReadTask, AsyncWriteTask};
 
-use crate::acceptor::{MAX_HANDSHAKE_HTTP_HEADER_LIMIT, WsAcceptor};
+use crate::{ChildPorotocl, acceptor::{MAX_HANDSHAKE_HTTP_HEADER_LIMIT, WsAcceptor}};
+
+/*
+* Websocket握手请求的响应序列化缓冲长度
+*/
+const HANDSHAKE_RESP_BUFFER_SIZE: usize = 256;
+
+/*
+* Websocket子协议组，表示Websocket支持的所有子协议，但一个连接只允许最多支持一个子协议
+*/
+pub struct ChildProtocolGroup {
+    protocols: HashMap<String, Rc<Box<dyn ChildPorotocl>>, FnvBuildHasher>, //子协议表
+}
+
+impl ChildProtocolGroup {
+    //构建一个Websocket子协议组
+    pub fn new() -> Self {
+        ChildProtocolGroup {
+            protocols: HashMap::with_hasher(FnvBuildHasher::default()),
+        }
+    }
+
+    //判断是否支持指定名称的子协议
+    pub fn is_support_by_name(&self, name: &str) -> bool {
+        self.protocols.contains_key(name)
+    }
+
+    //获取指定名称的子协议
+    pub fn get_by_name(&self, name: &str) -> Option<Weak<Box<dyn ChildPorotocl>>> {
+        if let Some(protocol) = self.protocols.get(name) {
+            return Some(Rc::downgrade(protocol));
+        }
+
+        None
+    }
+
+    //设置支持的子协议
+    pub fn set<P: ChildPorotocl>(&mut self, protocol: P) {
+        self.protocols.insert(protocol.protocol_name().to_string(), Rc::new(Box::new(protocol)));
+    }
+}
 
 /*
 * Websocket连接监听器
 */
 pub struct WebsocketListener {
-    acceptor: WsAcceptor,    //连接接受器
+    group:      ChildProtocolGroup, //子协议组
+    acceptor:   WsAcceptor,         //连接接受器
 }
 
 impl Default for WebsocketListener {
     fn default() -> Self {
         WebsocketListener {
+            group: ChildProtocolGroup::new(), //TODO 在Mqtt模块里为子协议组实现一个支持Mqtt子协议的Default
             acceptor: WsAcceptor::default(),
         }
     }
@@ -133,7 +178,7 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for WebsocketListener {
 
 //将握手请求的响应序列化为Vec<u8>
 fn resp_to_vec(resp: Response<()>) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(256);
+    let mut buf = Vec::with_capacity(HANDSHAKE_RESP_BUFFER_SIZE);
     buf.put(format!("{:?}", resp.version()));
     buf.put(" ");
     let status = resp.status();
