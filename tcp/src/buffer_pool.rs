@@ -14,7 +14,7 @@ use crate::util::{pause, IoBytes, IoList};
 */
 pub struct ReadableView {
     recover: Sender<IoList>,            //写缓冲回收器
-    inner:  Option<Arc<Vec<IoBytes>>>,    //只读共享指针
+    inner:  Option<Arc<Vec<IoBytes>>>,  //只读共享指针
 }
 
 unsafe impl Send for ReadableView {}

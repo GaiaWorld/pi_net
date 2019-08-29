@@ -162,6 +162,17 @@ pub trait SocketAdapter: 'static {
 }
 
 /*
+* Tcp连接适配器工厂
+*/
+pub trait SocketAdapterFactory {
+    type Connect: Socket;
+    type Adapter: SocketAdapter<Connect = Self::Connect>;
+
+    //获取Tcp连接适配器实例
+    fn instance(&self) -> Self::Adapter;
+}
+
+/*
 * 异步任务IO等待
 */
 pub trait AsyncIOWait: Clone + Send + 'static {
@@ -170,9 +181,17 @@ pub trait AsyncIOWait: Clone + Send + 'static {
 }
 
 /*
+* Tcp连接异步服务名
+*/
+pub trait AsyncServiceName {
+    //获取Tcp连接异步服务名
+    fn service_name() -> String;
+}
+
+/*
 * Tcp连接异步服务
 */
-pub trait AsyncService<S: Socket, H: AsyncIOWait>: 'static {
+pub trait AsyncService<S: Socket, H: AsyncIOWait>: AsyncServiceName + 'static {
     type Out;
 
     //使用关联类型，以保证可以延迟到实现时实例化类型，同时使用关联约束，以保证同时支持静态分派和动态分派

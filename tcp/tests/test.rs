@@ -9,13 +9,15 @@ extern crate futures;
 use std::thread;
 use std::net::Shutdown;
 use std::time::Duration;
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
 
 use iovec::{MAX_LENGTH, IoVec};
 use futures::future::{FutureExt, BoxFuture};
 
 use tcp::connect::TcpSocket;
-use tcp::server::{AsyncAdapter, PortsAdapter, PortsAdapterFactory, SocketListener};
-use tcp::driver::{SocketConfig, Socket, AsyncIOWait, AsyncService, SocketStatus, SocketHandle, AsyncReadTask, AsyncWriteTask};
+use tcp::server::{AsyncAdapter, PortsAdapter, SocketListener};
+use tcp::driver::{SocketConfig, Socket, AsyncIOWait, SocketAdapterFactory, AsyncService, AsyncServiceName, SocketStatus, SocketHandle, AsyncReadTask, AsyncWriteTask};
 use tcp::buffer_pool::WriteBufferPool;
 use tcp::util::{IoBytes, IoList};
 
@@ -150,15 +152,44 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
     }
 }
 
-struct TestFactory;
+impl AsyncServiceName for TestService {
+    fn service_name() -> String {
+        "TestService".to_string()
+    }
+}
 
-impl PortsAdapterFactory for TestFactory {
+pub struct TestFactory {
+    ports: HashMap<u16, String>,
+}
+
+impl SocketAdapterFactory for TestFactory {
     type Connect = TcpSocket;
+    type Adapter = PortsAdapter<TcpSocket>;
 
-    fn instance(&self) -> PortsAdapter<Self::Connect> {
+    fn instance(&self) -> Self::Adapter {
         let mut adapter = PortsAdapter::<TcpSocket>::new();
-        adapter.set_adapter(38080, Box::new(AsyncAdapter::<TcpSocket, TestService>::with_service(TestService)));
+        for (port, type_name) in &self.ports {
+            match type_name {
+                name if name == &TestService::service_name() => {
+                    adapter.set_adapter(port.clone(), Box::new(AsyncAdapter::<TcpSocket, _>::with_service(TestService)));
+                },
+                _ => (),
+            }
+        }
+
         adapter
+    }
+}
+
+impl TestFactory {
+    fn new() -> Self {
+        TestFactory {
+            ports: HashMap::new(),
+        }
+    }
+
+    fn set<T: AsyncServiceName>(&mut self, port: u16) {
+        self.ports.insert(port, T::service_name());
     }
 }
 
@@ -166,7 +197,9 @@ impl PortsAdapterFactory for TestFactory {
 fn test_socket_server() {
     let config = SocketConfig::new("0.0.0.0", &[38080]);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
-    match SocketListener::bind(TestFactory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    let mut factory = TestFactory::new();
+    factory.set::<TestService>(38080);
+    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Error, reason: {:?}", e);
         },
@@ -182,7 +215,9 @@ fn test_socket_server() {
 fn test_socket_server_ipv6() {
     let config = SocketConfig::new("fe80::c0bc:ecf0:e91:2b3a", &[38080]);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
-    match SocketListener::bind(TestFactory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    let mut factory = TestFactory::new();
+    factory.set::<TestService>(38080);
+    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv6 Address Error, reason: {:?}", e);
         },
@@ -198,7 +233,9 @@ fn test_socket_server_ipv6() {
 fn test_socket_server_shared() {
     let config = SocketConfig::new("::", &[38080]);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
-    match SocketListener::bind(TestFactory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    let mut factory = TestFactory::new();
+    factory.set::<TestService>(38080);
+    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 & Ipv6 Address Error, reason: {:?}", e);
         },

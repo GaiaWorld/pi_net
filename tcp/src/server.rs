@@ -3,6 +3,7 @@ use std::task::Waker;
 use std::cell::RefCell;
 use std::rc::{Weak, Rc};
 use std::net::SocketAddr;
+use std::any::{Any, TypeId};
 use std::io::{Result, Error};
 use std::marker::PhantomData;
 use std::result::Result as GenResult;
@@ -11,6 +12,7 @@ use std::collections::{hash_map::Entry,  HashMap};
 use mio::Token;
 use fnv::FnvBuildHasher;
 use crossbeam_channel::{Sender, unbounded};
+use futures::future::BoxFuture;
 
 use apm::common::SysStat;
 use r#async::{AsyncSpawner, AsyncExecutor,
@@ -20,8 +22,8 @@ use crate::acceptor::Acceptor;
 use crate::connect_pool::TcpSocketPool;
 use crate::buffer_pool::WriteBufferPool;
 use crate::driver::{Socket, Stream, SocketAdapter,
-                    AsyncIOWait, AsyncService, SocketStatus,
-                    SocketHandle, SocketConfig, SocketDriver};
+                    SocketAdapterFactory, AsyncIOWait, AsyncService,
+                    SocketStatus, SocketHandle, SocketConfig, SocketDriver};
 
 /*
 * Tcp异步任务等待表
@@ -58,7 +60,7 @@ pub struct AsyncAdapter<S, A>
           A: AsyncService<S, AsyncWaitsHandle>, {
     waits:      AsyncWaits,                                 //Tcp连接待处理表
     tasks:      RefCell<LocalQueue<LocalTask<()>, ()>>,     //Tcp连接任务队列
-    spawner:    Rc<LocalQueueSpawner<LocalTask<()>, ()>>,  //Tcp连接任务派发器
+    spawner:    Rc<LocalQueueSpawner<LocalTask<()>, ()>>,   //Tcp连接任务派发器
     service:    A,                                          //Tcp连接异步服务
     marker:     PhantomData<S>,
 }
@@ -311,25 +313,15 @@ impl<S: Socket> PortsAdapter<S> {
 }
 
 /*
-* Tcp端口适配器工厂
-*/
-pub trait PortsAdapterFactory {
-    type Connect: Socket;
-
-    //获取Tcp端口适配器实例
-    fn instance(&self) -> PortsAdapter<Self::Connect>;
-}
-
-/*
 * Tcp连接监听器
 */
-pub struct SocketListener<S: Socket + Stream, F: PortsAdapterFactory<Connect = S>> {
+pub struct SocketListener<S: Socket + Stream, F: SocketAdapterFactory<Connect = S, Adapter = PortsAdapter<S>>> {
     marker: PhantomData<(S, F)>,
 }
 
 impl<S, F> SocketListener<S, F>
     where S: Socket + Stream,
-          F: PortsAdapterFactory<Connect = S>, {
+          F: SocketAdapterFactory<Connect = S, Adapter = PortsAdapter<S>>, {
     //绑定指定配置的Tcp连接监听器
     pub fn bind(factory: F,                 //Tcp端口适配器工厂
                 buffer: WriteBufferPool,    //写缓冲池

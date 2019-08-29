@@ -2,8 +2,14 @@
 name = "ws"
 version = "0.1.0"
 authors = ["vmos <vmos@fairblock.io>"]
+edition = "2018"
 
 [dependencies]
-websocket = "0.23"
-tcp = { path = "../tcp" }
+http = "0.1"
+httparse = "1.3"
+futures-preview = "=0.3.0-alpha.18"
+base64 = "0.10"
+bytes = "0.4"
 atom = { path = "../../pi_lib/atom" }
+tcp = { path = "../tcp" }
+pi_crypto = { path = "../../pi_crypto" }
