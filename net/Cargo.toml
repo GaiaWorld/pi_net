@@ -27,6 +27,7 @@ apm = { path = "../../pi_lib/apm" }
 atom = {path="../../pi_lib/atom"}
 gray = {path="../../pi_lib/gray"}
 timer = {path="../../pi_lib/timer"}
+worker = {path="../../pi_lib/worker"}
 
 
 
