@@ -28,6 +28,7 @@ extern crate atom;
 extern crate apm;
 extern crate gray;
 extern crate timer as lib_timer;
+extern crate worker;
 
 
 pub mod tls;

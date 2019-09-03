@@ -20,10 +20,11 @@ use crate::driver::{DEFAULT_TCP_IP_V6, Socket, Stream, SocketAdapter, SocketHand
 * Tcp连接池
 */
 pub struct TcpSocketPool<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
+    uid:                    u8,                                         //Tcp连接池唯一id
     name:                   String,                                     //Tcp连接池名称
     config:                 SocketConfig,                               //Tcp连接配置
     poll:                   Poll,                                       //Socket事件轮询器
-    contexts:               Slab<Arc<RefCell<S>>>,                      //Socket上下文表
+    sockets:                Slab<Arc<RefCell<S>>>,                      //Socket连接表
     map:                    HashMap<SocketAddr, Token, FnvBuildHasher>, //Socket映射表
     driver:                 Option<SocketDriver<S, A>>,                 //Socket驱动
     socket_recv:            Receiver<S>,                                //Socket接收器
@@ -39,12 +40,12 @@ unsafe impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Sync for TcpSocke
 
 impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
     //构建一个Tcp连接池
-    pub fn new(name: String, receiver: Receiver<S>, config: SocketConfig, buffer: WriteBufferPool) -> Result<Self> {
-        Self::with_capacity(name, receiver, config, buffer, 10)
+    pub fn new(uid: u8, name: String, receiver: Receiver<S>, config: SocketConfig, buffer: WriteBufferPool) -> Result<Self> {
+        Self::with_capacity(uid, name, receiver, config, buffer, 10)
     }
 
     //构建一个指定初始大小的Tcp连接池
-    pub fn with_capacity(name: String, receiver: Receiver<S>, config: SocketConfig, buffer: WriteBufferPool, size: usize) -> Result<Self> {
+    pub fn with_capacity(uid: u8, name: String, receiver: Receiver<S>, config: SocketConfig, buffer: WriteBufferPool, size: usize) -> Result<Self> {
         let contexts = Slab::with_capacity(size);
         let map = HashMap::with_capacity_and_hasher(size, FnvBuildHasher::default());
 
@@ -60,10 +61,11 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
         let (wakeup_readable_sent, wakeup_readable_recv) = unbounded();
         let (wakeup_writable_sent, wakeup_writable_recv) = unbounded();
         Ok(TcpSocketPool {
+            uid,
             name,
             config,
             poll,
-            contexts,
+            sockets: contexts,
             map,
             driver: None,
             socket_recv: receiver,
@@ -129,7 +131,7 @@ fn handle_accepted<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut
     let socket_opts = pool.config.option();
     for mut socket in pool.socket_recv.try_iter().collect::<Vec<S>>() {
         //接受的新的Tcp连接
-        let entry = pool.contexts.vacant_entry();
+        let entry = pool.sockets.vacant_entry();
         let id = entry.key();
         let token = Token(id);
 
@@ -151,6 +153,7 @@ fn handle_accepted<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut
                                 &socket_opts);
 
             socket.set_token(Some(token)); //为注册成功的连接绑定新的令牌
+            socket.set_uid(create_socket_uid(pool.uid, token)); //为注册成功的连接设置唯一id
             socket.set_write_buffer(pool.buffer.clone()); //为注册成功的连接绑定写缓冲池
             let socket_arc = Arc::new(RefCell::new(socket));
             let weak = Arc::downgrade(&socket_arc);
@@ -159,6 +162,11 @@ fn handle_accepted<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut
             entry.insert(socket_arc); //加入连接池上下文
         }
     }
+}
+
+//创建连接唯一id，由8位连接池唯一id和24位的Token组成
+fn create_socket_uid(pool_uid: u8, Token(id): Token) -> usize {
+    (((pool_uid as usize) << 24) & 0xffffffff) | (id & 0xffffff)
 }
 
 //初始化Tcp连接，为连接绑定唤醒器，并设置连接通用选项
@@ -193,7 +201,7 @@ fn init_socket<S: Socket + Stream, A: SocketAdapter<Connect = S>>(socket: &mut S
 fn handle_wakeup_readable<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut TcpSocketPool<S, A>) {
     //接收所有唤醒令牌，因为单线程异步唤醒，所以不会出现一次轮询多次唤醒，所以不需要对唤醒令牌去重
     for token in pool.wakeup_readable_recv.try_iter().collect::<Vec<Token>>() {
-        if let Some(socket) = pool.contexts.get(token.0) {
+        if let Some(socket) = pool.sockets.get(token.0) {
             if let Err(e) = pool.poll.reregister(socket.borrow().get_stream(), token, socket.borrow().get_ready().clone(), socket.borrow().get_poll_opt().clone()) {
                 panic!("handle wakeup readable failed, reason: {:?}", e);
             }
@@ -207,7 +215,7 @@ fn handle_wakeup_writable<S: Socket + Stream, A: SocketAdapter<Connect = S>>(poo
     let mut tuples = pool.wakeup_writable_recv.try_iter().collect::<Vec<(Token, WriteBufferHandle)>>();
 
     for (token, buf) in tuples {
-        if let Some(socket) = pool.contexts.get(token.0) {
+        if let Some(socket) = pool.sockets.get(token.0) {
             //唤醒指定令牌的Tcp连接
             if let Err(e) = pool.poll.reregister(socket.borrow().get_stream(), token, socket.borrow().get_ready().clone(), socket.borrow().get_poll_opt().clone()) {
                 panic!("handle wakeup writable failed, reason: {:?}", e);
@@ -228,7 +236,7 @@ fn handle_poll_events<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &
         token = event.token(); //当前事件的令牌
         ready = event.readiness(); //当前事件的类型
 
-        if let Some(socket) = pool.contexts.get_mut(token.0) {
+        if let Some(socket) = pool.sockets.get_mut(token.0) {
             let mut s = socket.borrow_mut();
             if ready.is_readable() {
                 //可读事件，表示读就绪
@@ -298,7 +306,7 @@ fn handle_poll_events<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &
 
 //关闭已注册的Tcp连接，并清理Tcp连接池中的上下文
 fn close_socket<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut TcpSocketPool<S, A>, token: Token, reason: Result<()>) {
-    let socket = pool.contexts.remove(token.0); //从Tcp连接池上下文中，移除指定令牌的Tcp连接
+    let socket = pool.sockets.remove(token.0); //从Tcp连接池上下文中，移除指定令牌的Tcp连接
 
     pool.map.remove(socket.borrow().get_remote()); //从Tcp连接池的对端地址映射表中，移除Tcp连接的令牌
 

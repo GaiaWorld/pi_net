@@ -1,4 +1,5 @@
 use std::error;
+use std::sync::Arc;
 use std::str::from_utf8;
 use std::fmt::{Display, Formatter, Result as FmtResult, Debug};
 use std::result::Result as GenResult;
@@ -17,6 +18,8 @@ use base64;
 
 use atom::Atom;
 use pi_crypto::digest::{DigestAlgorithm, digest};
+
+use crate::util::ChildProtocol;
 
 /*
 * 支持的Websocket握手请求时必须的Http头数量
@@ -54,8 +57,8 @@ pub const CONNECT_UPGRADE: &str = "websocket";
 */
 #[derive(Debug, Clone)]
 pub enum Status {
-    Failed(u8),                 //握手失败
-    Succeeded(String, String),  //握手成功，子协议和服务器端密钥
+    Failed(u8),                     //握手失败
+    Succeeded(u8, String, String),  //握手成功，服务器端指定的客户端压缩窗口大小、客户端需要的子协议和服务器端指定的密钥
 }
 
 /*
@@ -84,27 +87,56 @@ impl WsAcceptor {
         handler.window_bits = window_bits;
         handler
     }
+
+    //获取连接接受器指定的压缩窗口大小
+    pub fn window_bits(&self) -> u8 {
+        self.window_bits
+    }
 }
 
 impl WsAcceptor {
-    //握手，返回握手响应
-    pub fn handshake(&self, mut req: Request) -> HttpResult<Response<()>> {
+    //握手，返回握手是否成功、握手请求的响应和子协议
+    pub fn handshake(&self, protocol: Option<Arc<dyn ChildProtocol>>, mut req: Request) -> (bool, HttpResult<Response<()>>, Option<Arc<dyn ChildProtocol>>) {
         match check_handshake_request(&mut req, self.window_bits) {
             Err(e) => {
                 //握手请求失败
-                println!("!!!> Check Handshake Failed, reason: {:?}", e);
-                reply_handshake(req, Err(StatusCode::BAD_REQUEST))
+                println!("!!!> Ws Check Handshake Failed, reason: {:?}", e);
+                let resp = reply_handshake(Err(StatusCode::BAD_REQUEST));
+                (resp.is_ok(), resp, None)
             },
             Ok(success) => {
                 match success {
-                    Status::Succeeded(_ws_protocol, ws_accept) => {
+                    Status::Succeeded(ws_ext, mut ws_protocol, ws_accept) => {
                         //握手请求成功，则更新握手状态，并返回握手请求的响应
-                        reply_handshake(req, Ok(ws_accept.as_str()))
+                        let mut protocol_name: Option<&str> = None;
+                        ws_protocol = ws_protocol.trim().to_string();
+                        let protocols: Vec<&str> = ws_protocol.split(";").collect();
+                        let protocols_len = protocols.len();
+
+                        //匹配支持的任何一个子协议
+                        for p in &protocols {
+                            //将客户端需要的子协议名转换为全小写，并与服务器端支持的子协议进行对比
+                            if protocol.is_none() && protocols_len == 1 && (*p) == "" {
+                                //客户端没有指定子协议，且服务器也没有指定支持的子协议
+                                let resp = reply_handshake(Ok((ws_ext, None, ws_accept.as_str())));
+                                return (resp.is_ok(), resp, protocol);
+                            } else if protocol.is_some() && protocol.as_ref().unwrap().protocol_name() == (*p).to_lowercase().as_str() {
+                                //客户端需要的子协议中有服务器端支持的子协议，则握手成功，将客户端需要，且服务器端支持的子协议名原样返回
+                                let resp = reply_handshake(Ok((ws_ext, Some((*p)), ws_accept.as_str())));
+                                return (resp.is_ok(), resp, protocol);
+                            }
+                        }
+
+                        //客户端指定了需要的子协议，且服务器端不支持客户端需要的任何子协议，则握手失败
+                        println!("!!!> Ws Handshake Failed, reason: may not support client protocol, protocols: {:?}", protocols);
+                        let resp = reply_handshake(Err(StatusCode::BAD_REQUEST));
+                        (resp.is_ok(), resp, None)
                     },
                     _ => {
                         //握手请求冲突
-                        println!("!!!> Check Handshake Failed, reason: invalid status");
-                        reply_handshake(req, Err(StatusCode::BAD_REQUEST))
+                        println!("!!!> Ws Handshake Failed, reason: invalid status");
+                        let resp = reply_handshake(Err(StatusCode::BAD_REQUEST));
+                        (resp.is_ok(), resp, None)
                     },
                 }
             },
@@ -191,7 +223,7 @@ fn check_handshake_request(req: &mut Request, window_bits: u8) -> Result<Status>
         Err(Error::new(ErrorKind::Other, format!("invalid request header")))
     } else {
         //握手请求检查成功
-        Ok(Status::Succeeded(ws_protocol, accept(ws_key)))
+        Ok(Status::Succeeded(ws_ext, ws_protocol, accept(ws_key)))
     }
 }
 
@@ -229,23 +261,37 @@ fn unmatch_header_value(key: &str, value: &[u8]) -> Result<String> {
 }
 
 //创建握手请求响应
-fn reply_handshake<'a>(req: Request, result: GenResult<&'a str, StatusCode>) -> HttpResult<Response<()>> {
+fn reply_handshake<'a>(result: GenResult<(u8, Option<&'a str>, &'a str), StatusCode>) -> HttpResult<Response<()>> {
     match result {
         Err(code) => {
-            //握手失败，返回相应的响应
+            //握手失败，返回指定状态码的响应
             Response::builder()
                 .status(code)
                 .version(Version::HTTP_11)
                 .body(())
         },
-        Ok(accept) => {
+        Ok((window_bits, p, accept)) => {
             //握手成功
-            Response::builder()
-                .status(StatusCode::SWITCHING_PROTOCOLS)
+            let mut resp = Response::builder();
+
+            //初始化响应
+            resp.status(StatusCode::SWITCHING_PROTOCOLS)
                 .version(Version::HTTP_11)
                 .header(CONNECTION, UPGRADE)
-                .header(UPGRADE, CONNECT_UPGRADE)
-                .header(SEC_WEBSOCKET_ACCEPT, accept)
+                .header(UPGRADE, CONNECT_UPGRADE);
+
+            if window_bits > 0 {
+                //服务器端支持客户端的压缩扩展协议，则设置服务端指定的客户端压缩窗口大小
+                resp.header(SEC_WEBSOCKET_EXTENSIONS, WEBSOCKET_EXTENSIONS.to_string() + "=" + &window_bits.to_string());
+            }
+
+            if let Some(protocol) = p {
+                //服务器端支持客户端需要的子协议，则设置服务端指定的子协议
+                resp.header(SEC_WEBSOCKET_PROTOCOL, protocol);
+            }
+
+            //设置服务端指定的密钥，并返回握手成功响应
+            resp.header(SEC_WEBSOCKET_ACCEPT, accept)
                 .body(())
         },
     }

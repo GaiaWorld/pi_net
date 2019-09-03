@@ -1,5 +1,7 @@
 use std::mem;
+use std::ptr;
 use std::thread;
+use std::sync::Arc;
 use std::time::Duration;
 use std::collections::VecDeque;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
@@ -22,6 +24,72 @@ pub fn pause() {
 #[inline(always)]
 pub fn pause() {
     thread::sleep(Duration::from_millis(1));
+}
+
+/*
+* 通用上下文
+* 注意，设置上下文后，需要移除当前上下文，上下文才会自动释放
+*/
+pub struct SocketContext {
+    inner: *const (), //内部上下文
+}
+
+impl SocketContext {
+    //创建空的上下文
+    pub fn empty() -> Self {
+        SocketContext {
+            inner: ptr::null(),
+        }
+    }
+
+    //判断上下文是否为空
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_null()
+    }
+
+    //获取上下文的句柄
+    pub fn get<T: 'static>(&self) -> Option<Arc<T>> {
+        if self.is_empty() {
+            return None;
+        }
+
+        Some(unsafe { Arc::from_raw(self.inner as *const T) })
+    }
+
+    //设置上下文，如果当前上下文不为空，则设置失败
+    pub fn set<T: 'static>(&mut self, context: T) -> bool {
+        if !self.is_empty() {
+            return false;
+        }
+
+        self.inner = Arc::into_raw(Arc::new(context)) as *const T as *const ();
+        true
+    }
+
+    //移除上下文，如果当前还有未释放的上下文句柄，则返回移除错误，如果当前有上下文，则返回被移除的上下文，否则返回空
+    pub fn remove<T: 'static>(&mut self) -> Result<Option<T>, &str> {
+        if self.is_empty() {
+            return Ok(None);
+        }
+
+        let inner = unsafe { Arc::from_raw(self.inner as *const T) };
+        if Arc::strong_count(&inner) > 0 {
+            Arc::into_raw(inner); //释放临时共享指针
+            Err("remove context failed, reason: context shared exist")
+        } else {
+            match Arc::try_unwrap(inner) {
+                Err(inner) => {
+                    Arc::into_raw(inner); //释放临时共享指针
+                    Err("remove context failed, reason: invalid shared")
+                },
+                Ok(context) => {
+                    //将当前内部上下文设置为空，并返回上下文
+                    self.inner = ptr::null();
+                    Ok(Some(context))
+                },
+            }
+        }
+    }
 }
 
 /*

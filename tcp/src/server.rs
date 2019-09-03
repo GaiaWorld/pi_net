@@ -36,6 +36,7 @@ type AsyncWaits = Rc<RefCell<HashMap<usize, Waker, FnvBuildHasher>>>;
 pub struct AsyncWaitsHandle(Weak<RefCell<HashMap<usize, Waker, FnvBuildHasher>>>);
 
 unsafe impl Send for AsyncWaitsHandle {}
+unsafe impl Sync for AsyncWaitsHandle {}
 
 impl Clone for AsyncWaitsHandle {
     fn clone(&self) -> Self {
@@ -349,8 +350,9 @@ impl<S, F> SocketListener<S, F>
             Ok(a) => {
                 //创建当前系统cpu核心数的连接池，共用一个写缓冲池
                 acceptor = a;
-                for _ in 0..processor {
-                    match TcpSocketPool::with_capacity(acceptor.get_name(),
+                for index in 0..processor {
+                    match TcpSocketPool::with_capacity(index as u8,
+                                                       acceptor.get_name(),
                                                        receiver.clone(),
                                                        config.clone(),
                                                        buffer.clone(),

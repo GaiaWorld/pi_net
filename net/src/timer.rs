@@ -8,6 +8,8 @@ use std::thread;
 
 use std::time::Duration;
 
+use worker::{impls::cast_net_task, task::TaskType};
+
 pub struct NetTimer<T> {
     timer: Arc<RefCell<Timer<T>>>,
 }
@@ -75,9 +77,12 @@ impl NetTimers<TimerCallback> {
             match timer.poll() {
                 Some(cb) => {
                     let src1 = src.clone();
-                    thread::spawn(move || {
+
+                    let func = Box::new(move |_lock| {
                         cb(src1)
                     });
+                    cast_net_task(TaskType::Async(false), 100, None, func, Atom::from("net timer task"));
+
                     let src2 = src.clone();
                     vec.push(src2)
                 }

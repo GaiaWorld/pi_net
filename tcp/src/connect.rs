@@ -12,7 +12,7 @@ use mio::{
     net::TcpStream
 };
 
-use crate::util::pause;
+use crate::util::{pause, SocketContext};
 use crate::driver::{Socket, Stream, SocketHandle};
 use crate::buffer_pool::{ReadableView, WriteBufferHandle, WriteBufferPool};
 
@@ -187,6 +187,7 @@ pub struct TcpSocket {
     local:              SocketAddr,                                     //TCP连接本地地址
     remote:             SocketAddr,                                     //TCP连接远端地址
     token:              Option<Token>,                                  //连接令牌
+    uid:                Option<usize>,                                  //连接唯一id
     stream:             TcpStream,                                      //TCP流
     ready:              Ready,                                          //Tcp事件准备状态
     poll_opt:           PollOpt,                                        //Tcp事件轮询选项
@@ -199,6 +200,7 @@ pub struct TcpSocket {
     closed:             bool,                                           //Tcp连接关闭状态
     buffer_pool:        Option<Arc<WriteBufferPool>>,                   //Tcp连接写缓冲池
     handle:             Option<SocketHandle<TcpSocket>>,                //Tcp连接句柄
+    context: SocketContext,                                        //Tcp连接上下文
 }
 
 unsafe impl Send for TcpSocket {}
@@ -213,6 +215,7 @@ impl Stream for TcpSocket {
             local: local.clone(),
             remote: remote.clone(),
             token,
+            uid: None,
             stream: stream,
             ready: Ready::empty(),
             poll_opt: PollOpt::level(), //默认的连接事件轮询选项
@@ -225,6 +228,7 @@ impl Stream for TcpSocket {
             closed: false,
             buffer_pool: None,
             handle: None,
+            context: SocketContext::empty(),
         }
     }
 
@@ -234,6 +238,18 @@ impl Stream for TcpSocket {
 
     fn get_stream(&self) -> &TcpStream {
         &self.stream
+    }
+
+    fn set_token(&mut self, token: Option<Token>) -> Option<Token> {
+        let last = self.token.take();
+        self.token = token;
+        last
+    }
+
+    fn set_uid(&mut self, uid: usize) -> Option<usize> {
+        let last = self.uid.take();
+        self.uid = Some(uid);
+        last
     }
 
     fn get_ready(&self) -> &Ready {
@@ -420,10 +436,16 @@ impl Socket for TcpSocket {
         self.token.as_ref()
     }
 
-    fn set_token(&mut self, token: Option<Token>) -> Option<Token> {
-        let last = self.token.take();
-        self.token = token;
-        last
+    fn get_uid(&self) -> Option<&usize> {
+        self.uid.as_ref()
+    }
+
+    fn get_context(&self) -> &SocketContext {
+        &self.context
+    }
+
+    fn get_context_mut(&mut self) -> &mut SocketContext {
+        &mut self.context
     }
 
     fn init_buffer_capacity(&mut self, read_size: usize, _write_size: usize) {

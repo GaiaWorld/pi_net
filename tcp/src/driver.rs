@@ -21,7 +21,7 @@ use mio::{
 
 use atom::Atom;
 
-use crate::buffer_pool::{WriteBufferHandle, WriteBufferPool};
+use crate::{buffer_pool::{WriteBufferHandle, WriteBufferPool}, util::SocketContext};
 
 /*
 * 默认的ipv4地址
@@ -55,6 +55,12 @@ pub trait Stream: Sized + Send + 'static {
 
     //获取连接流
     fn get_stream(&self) -> &TcpStream;
+
+    //设置连接令牌，返回上个连接令牌
+    fn set_token(&mut self, token: Option<Token>) -> Option<Token>;
+
+    //设置连接唯一id，返回上个连接唯一id
+    fn set_uid(&mut self, uid: usize) -> Option<usize>;
 
     //获取当前流事件准备状态
     fn get_ready(&self) -> &Ready;
@@ -115,8 +121,14 @@ pub trait Socket: Sized + Send + 'static {
     //获取连接令牌
     fn get_token(&self) -> Option<&Token>;
 
-    //设置连接令牌，返回上个连接令牌
-    fn set_token(&mut self, token: Option<Token>) -> Option<Token>;
+    //获取连接唯一id
+    fn get_uid(&self) -> Option<&usize>;
+
+    //获取连接上下文只读引用
+    fn get_context(&self) -> &SocketContext;
+
+    //获取连接上下文的可写引用
+    fn get_context_mut(&mut self) -> &mut SocketContext;
 
     //设置连接读写缓冲区容量
     fn init_buffer_capacity(&mut self, read_size: usize, write_size: usize);
@@ -175,7 +187,7 @@ pub trait SocketAdapterFactory {
 /*
 * 异步任务IO等待
 */
-pub trait AsyncIOWait: Clone + Send + 'static {
+pub trait AsyncIOWait: Clone + Send + Sync + 'static {
     //异步等待指定令牌的IO准备完成
     fn io_wait(&self, token: &Token, waker: Waker);
 }
