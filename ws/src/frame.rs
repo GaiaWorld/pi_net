@@ -1,5 +1,14 @@
+use std::mem;
+use std::sync::Arc;
+use std::net::Shutdown;
+use std::marker::PhantomData;
+use std::result::Result as GenResult;
+use std::io::{ErrorKind, Result, Error, Write};
 
+use tcp::driver::{Socket, AsyncIOWait, SocketHandle, AsyncReadTask};
 
+use crate::util::{ChildProtocol, WsFrameType};
+use tcp::buffer_pool::WriteBuffer;
 
 /*
 * 结束帧标记
@@ -14,12 +23,12 @@ const DEFAULT_RSV_FLAG: u8 = 0;
 /*
 * 操作码
 */
-const FOLLOW_UP_OPCODE: u8 = 0x0;   //后续帧
-const TEXT_OPCODE: u8 = 0x1;        //文本帧
-const BINARY_OPCODE: u8 = 0x2;      //二进制帧
-const CLOSE_OPCODE: u8 = 0x8;       //关闭帧
-const PING_OPCODE: u8 = 0x9;        //ping帧
-const PONG_OPCODE: u8 = 0xa;        //pong帧
+pub const FOLLOW_UP_OPCODE: u8 = 0x0;   //后续帧
+pub const TEXT_OPCODE: u8 = 0x1;        //文本帧
+pub const BINARY_OPCODE: u8 = 0x2;      //二进制帧
+pub const CLOSE_OPCODE: u8 = 0x8;       //关闭帧
+pub const PING_OPCODE: u8 = 0x9;        //ping帧
+pub const PONG_OPCODE: u8 = 0xa;        //pong帧
 
 /*
 * 掩码默认标记
@@ -59,11 +68,13 @@ pub struct WsHead {
     key:        WsMaskKey,          //掩码密钥
 }
 
+unsafe impl Send for WsHead {}
+
 impl Default for WsHead {
     //默认创建负载为0的关闭帧的头
     fn default() -> Self {
         WsHead {
-            fin: 1,
+            fin: FIN_FLAG,
             rsv1: 0,
             rsv2: 0,
             rsv3: 0,
@@ -258,15 +269,19 @@ impl WsHead {
     }
 
     //将剩余二进制数据序列化Websocket帧头剩余部分
-    pub fn from_last(&mut self, last: &[u8]) -> Result<(), String> {
+    pub fn from_last(&mut self, last: &[u8]) -> GenResult<(), String> {
         match last.len() {
             2 => {
-                if let WsMaskKey::Part(part) = &mut self.key {
+                let mut part = Vec::with_capacity(4);
+                if let WsMaskKey::Part(p) = &self.key {
+                    part.push(p[0]);
+                    part.push(p[1]);
                     part.push(last[0]);
                     part.push(last[1]);
                 } else {
                     return Err(format!("invalid mask key part, key: {:?}", self.key));
                 }
+                self.key = WsMaskKey::Complete(part);
             },
             8 => {
                 let real_len;
@@ -284,14 +299,12 @@ impl WsHead {
                 }
                 self.len = WsPayloadLen::Complete(real_len);
 
-                if let WsMaskKey::Part(part) = &mut self.key {
-                    part.push(last[4]);
-                    part.push(last[5]);
-                    part.push(last[6]);
-                    part.push(last[7]);
-                } else {
-                    return Err(format!("invalid mask key part, key: {:?}", self.key));
-                }
+                let mut part = Vec::with_capacity(4);
+                part.push(last[4]);
+                part.push(last[5]);
+                part.push(last[6]);
+                part.push(last[7]);
+                self.key = WsMaskKey::Complete(part);
             },
             len => {
                 return Err(format!("invalid last len, len: {:?}", len));
@@ -301,13 +314,7 @@ impl WsHead {
         Ok(())
     }
 
-    //是否是结束帧
-    #[inline(always)]
-    pub fn is_finish(&self) -> bool {
-        self.fin == FIN_FLAG
-    }
-
-    //设置是否为结束帧
+    //设置结束帧标记
     #[inline(always)]
     pub fn set_finish(&mut self, fin: bool) {
         if fin {
@@ -443,13 +450,42 @@ impl WsHead {
     //是否是二进制帧
     #[inline(always)]
     pub fn is_binary(&self) -> bool {
-        self.r#type == BINARY_OPCODE
+        self.r#type == BINARY_OPCODE | CLOSE_OPCODE | PING_OPCODE | PONG_OPCODE
     }
 
     //设置为二进制帧
     #[inline(always)]
     pub fn set_binary(&mut self) {
         self.r#type = BINARY_OPCODE;
+    }
+
+    //是否是单帧数据
+    #[inline(always)]
+    pub fn is_single(&self) -> bool {
+        (self.fin == FIN_FLAG) && (self.r#type == TEXT_OPCODE || self.r#type == BINARY_OPCODE)
+    }
+
+    //是否是多帧数据的首帧
+    #[inline(always)]
+    pub fn is_first(&self) -> bool {
+        (self.fin != FIN_FLAG) && (self.r#type == TEXT_OPCODE || self.r#type == BINARY_OPCODE)
+    }
+
+    //是否是后续数据帧，且不是结束帧
+    #[inline(always)]
+    pub fn is_next(&self) -> bool {
+        (self.fin != FIN_FLAG) && (self.r#type == FOLLOW_UP_OPCODE)
+    }
+
+    //是否是多帧数据的结束帧
+    #[inline(always)]
+    pub fn is_finish(&self) -> bool {
+        (self.fin == FIN_FLAG) && (self.r#type == FOLLOW_UP_OPCODE)
+    }
+
+    //获取帧类型
+    pub fn get_type(&self) -> u8 {
+        self.r#type
     }
 
     //获取负载长度
@@ -488,17 +524,312 @@ impl WsHead {
 }
 
 /*
-* Websocket帧
+* Websocket负载
 */
-pub struct WsFrame<'a> {
-    head:       WsHead,             //头
-    payload:    Option<&'a [u8]>,   //负载
+pub enum WsPayload {
+    Empty,                  //空负载
+    Raw(Vec<u8>),           //祼负载，一般用于接收数据帧，或接收发送控制帧
+    Buffer(WriteBuffer),    //负载缓冲，一般用于发送数据帧
 }
 
-impl<'a> WsFrame<'a> {
+unsafe impl Send for WsPayload {}
+
+impl Default for WsPayload {
+    fn default() -> Self {
+        WsPayload::Empty
+    }
+}
+
+impl WsPayload {
+    //是否是空负载
+    pub fn is_empty(&self) -> bool {
+        if let WsPayload::Empty = self {
+            return true;
+        }
+
+        false
+    }
+
+    //是否是祼负载
+    pub fn is_raw(&self) -> bool {
+        if let WsPayload::Raw(_) = self {
+            return true;
+        }
+
+        false
+    }
+
+    //是否是负载缓冲
+    pub fn is_buf(&self) -> bool {
+        if let WsPayload::Buffer(_) = self {
+            return true;
+        }
+
+        false
+    }
+
+    //取出负载
+    pub fn take(&mut self) -> Self {
+        mem::take(self)
+    }
+}
+
+/*
+* Websocket帧
+*/
+pub struct WsFrame<S: Socket, H: AsyncIOWait> {
+    head:       WsHead,             //头
+    payload:    WsPayload,          //负载
+    marker:     PhantomData<(S, H)>,
+}
+
+unsafe impl<S: Socket, H: AsyncIOWait> Send for WsFrame<S, H> {}
+
+impl<S: Socket, H: AsyncIOWait> Default for WsFrame<S, H> {
+    fn default() -> Self {
+        WsFrame {
+            head: WsHead::default(),
+            payload: WsPayload::Empty,
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<S: Socket, H: AsyncIOWait> From<WsFrame<S, H>> for Vec<u8> {
+    fn from(frame: WsFrame<S, H>) -> Self {
+        match frame.payload {
+            WsPayload::Raw(payload) => {
+                let bin = Vec::from(frame.head);
+                (vec![bin, payload]).concat()
+            },
+            WsPayload::Buffer(payload) => {
+                if let Some(handle) = payload.finish() {
+                    if let Some(shared) = handle.get_shared() {
+                        return shared.get_iovec().iter().map(|iovec| {
+                            (*iovec).as_ref()
+                        }).collect::<Vec<&[u8]>>().concat();
+                    }
+                }
+
+                //当前帧无负载
+                Vec::from(frame.head)
+            },
+            _ => {
+                //当前帧无负载
+                Vec::from(frame.head)
+            },
+        }
+    }
+}
+
+/*
+* Websocket帧同步方法
+*/
+impl<S: Socket, H: AsyncIOWait> WsFrame<S, H> {
+    //构建控制帧
+    pub fn control_with_payload(frame_type: WsFrameType, payload: Option<Vec<u8>>) -> Self {
+        let head;
+        let real_payload;
+        if let Some(p) = payload {
+            //有负载
+            head = WsHead {
+                fin: FIN_FLAG,
+                rsv1: 0,
+                rsv2: 0,
+                rsv3: 0,
+                r#type: frame_type.into(),
+                len: WsPayloadLen::Complete(p.len() as u64),
+                key: WsMaskKey::Empty,
+            };
+            real_payload = WsPayload::Raw(p);
+        } else {
+            //无负载
+            head = WsHead {
+                fin: FIN_FLAG,
+                rsv1: 0,
+                rsv2: 0,
+                rsv3: 0,
+                r#type: frame_type.into(),
+                len: WsPayloadLen::Complete(0),
+                key: WsMaskKey::Empty,
+            };
+            real_payload = WsPayload::Empty;
+        }
+
+        WsFrame {
+            head,
+            payload: real_payload,
+            marker: PhantomData,
+        }
+    }
+
+    //构建单帧数据帧
+    pub fn single_with_window_bits_and_payload(frame_type: WsFrameType, window_bits: u8, mut payload: WriteBuffer) -> Self {
+        if window_bits == 0 {
+            let head = WsHead {
+                fin: FIN_FLAG,
+                rsv1: 0,
+                rsv2: 0,
+                rsv3: 0,
+                r#type: frame_type.into(),
+                len: WsPayloadLen::Complete(payload.size() as u64),
+                key: WsMaskKey::Empty,
+            };
+
+            WsFrame {
+                head,
+                payload: WsPayload::Buffer(payload),
+                marker: PhantomData,
+            }
+        } else {
+            let head = WsHead {
+                fin: FIN_FLAG,
+                rsv1: 1,
+                rsv2: 0,
+                rsv3: 0,
+                r#type: frame_type.into(),
+                len: WsPayloadLen::Complete(payload.size() as u64),
+                key: WsMaskKey::Empty,
+            };
+            //TODO 需要实现压缩
+            unimplemented!()
+        }
+    }
+
+    //获取头只读引用
+    pub fn get_head(&self) -> &WsHead {
+        &self.head
+    }
+
+    //获取头可写引用
+    pub fn get_head_mut(&mut self) -> &mut WsHead {
+        &mut self.head
+    }
+
+    //设置头
+    pub fn set_head(&mut self, head: WsHead) {
+        self.head = head;
+    }
+
     //获取负载
-    pub fn payload(&'a self) -> &'a Option<&'a [u8]> {
-        &self.payload
+    pub fn payload(&mut self) -> WsPayload {
+        self.payload.take()
+    }
+
+    //将负载反序列化为当前帧负载
+    pub fn from_payload(&mut self, bin: &[u8]) {
+        let mut payload = vec![];
+        match self.payload.take() {
+            WsPayload::Empty => {
+                //当前帧没有负载，则创建指定负载容量的空缓冲，并设置负载
+                let mut buf = Vec::with_capacity(self.head.len() as usize);
+                buf.extend_from_slice(bin);
+                payload = buf;
+            }
+            WsPayload::Raw(mut p) => {
+                //当前帧已经有祼负载，则清空当前负载
+                p.clear();
+                payload = p;
+            },
+            WsPayload::Buffer(mut p) => {
+                //当前帧已经有负载缓冲，则清空当前缓冲
+                if let Some(handle) = p.finish() {
+                    if let Some(shared) = handle.get_shared() {
+                        payload = shared.get_iovec().iter().map(|iovec| {
+                            (*iovec).as_ref()
+                        }).collect::<Vec<&[u8]>>().concat();
+                    }
+                }
+            },
+        }
+
+        mask(&mut payload[..], self.head.get_key());
+        self.payload = WsPayload::Raw(payload);
+    }
+
+    //将帧序列化为写缓冲
+    pub fn into_write_buf(self) -> Option<WriteBuffer> {
+        if let WsPayload::Buffer(mut buf) = self.payload {
+            buf.get_iolist_mut().push_front(Vec::from(self.head).into());
+            return Some(buf);
+        }
+
+        None
+    }
+}
+
+/*
+* Websocket帧异步方法
+*/
+impl<S: Socket, H: AsyncIOWait> WsFrame<S, H> {
+    //异步读Websocket帧头
+    pub async fn read_head(handle: &SocketHandle<S>,
+                           waits: &H,
+                           window_bits: u8,
+                           frame: &mut WsFrame<S, H>) {
+        let mut is_first = true; //是否首次接收
+        let mut size = WsHead::READ_HEAD_LEN;
+
+        loop {
+            match AsyncReadTask::async_read(handle.clone(), waits.clone(), size).await {
+                Err(e) => {
+                    handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket read frame head failed, reason: {:?}", e))));
+                    return;
+                },
+                Ok(bin) if is_first => {
+                    let head = WsHead::from(bin);
+                    match head.need_size() {
+                        0 => {
+                            //头已读完成
+                            frame.set_head(head);
+                            break;
+                        },
+                        r => {
+                            //还需要接收指定字节数的头数据
+                            is_first = false;
+                            size = r;
+                            frame.set_head(head);
+                            continue;
+                        }
+                    }
+                },
+                Ok(bin) => {
+                    if let Err(e) = frame.get_head_mut().from_last(bin) {
+                        handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket read frame head failed, reason: {:?}", e))));
+                        return;
+                    }
+
+                    if let None = frame.get_head().get_key() {
+                        //客户端上行数据没有掩码，则立即断开连接
+                        handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket read frame head failed, reason: invalid client mask"))));
+                        return;
+                    }
+
+                    //头已读完成
+                    break;
+                }
+            }
+        }
+
+        WsFrame::<S, H>::read_payload(handle, waits, frame).await;
+    }
+
+    //异步读Websocket帧负载
+    async fn read_payload(handle: &SocketHandle<S>, waits: &H, frame: &mut WsFrame<S, H>) {
+        let len = frame.get_head().len() as usize;
+        if len > 0 {
+            //有负载，则继续异步读负载，并填充Websocket帧
+            match AsyncReadTask::async_read(handle.clone(), waits.clone(), len).await {
+                Err(e) => {
+                    handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket read frame payload failed, reason: {:?}", e))));
+                    return;
+                },
+                Ok(bin) => {
+                    //负载读完成
+                    frame.from_payload(bin);
+                },
+            }
+        }
     }
 }
 
@@ -519,5 +850,109 @@ fn set_bit(byte: u8, nth: u8, val: u8) -> u8 {
         byte & !(1 << nth)
     } else {
         byte | (1 << nth)
+    }
+}
+
+//通过掩码密钥进行编解码
+#[inline(always)]
+fn mask(bin: &mut [u8], mask_key: Option<&[u8]>) {
+    if let Some(key) = mask_key {
+        let a = key[0];
+        let b = key[1];
+        let c = key[2];
+        let d = key[3];
+
+        let mut i = 0;
+        let mut len = bin.len();
+        while(len > 0) {
+            if len >= 32 {
+                bin[i] = bin[i] ^ a;
+                bin[i + 1] = bin[i + 1] ^ b;
+                bin[i + 2] = bin[i + 2] ^ c;
+                bin[i + 3] = bin[i + 3] ^ d;
+                bin[i + 4] = bin[i + 4] ^ a;
+                bin[i + 5] = bin[i + 5] ^ b;
+                bin[i + 6] = bin[i + 6] ^ c;
+                bin[i + 7] = bin[i + 7] ^ d;
+                bin[i + 8] = bin[i + 8] ^ a;
+                bin[i + 9] = bin[i + 9] ^ b;
+                bin[i + 10] = bin[i + 10] ^ c;
+                bin[i + 11] = bin[i + 11] ^ d;
+                bin[i + 12] = bin[i + 12] ^ a;
+                bin[i + 13] = bin[i + 13] ^ b;
+                bin[i + 14] = bin[i + 14] ^ c;
+                bin[i + 15] = bin[i + 15] ^ d;
+                bin[i + 16] = bin[i + 16] ^ a;
+                bin[i + 17] = bin[i + 17] ^ b;
+                bin[i + 18] = bin[i + 18] ^ c;
+                bin[i + 19] = bin[i + 19] ^ d;
+                bin[i + 20] = bin[i + 20] ^ a;
+                bin[i + 21] = bin[i + 21] ^ b;
+                bin[i + 22] = bin[i + 22] ^ c;
+                bin[i + 23] = bin[i + 23] ^ d;
+                bin[i + 24] = bin[i + 24] ^ a;
+                bin[i + 25] = bin[i + 25] ^ b;
+                bin[i + 26] = bin[i + 26] ^ c;
+                bin[i + 27] = bin[i + 27] ^ d;
+                bin[i + 28] = bin[i + 28] ^ a;
+                bin[i + 29] = bin[i + 29] ^ b;
+                bin[i + 30] = bin[i + 30] ^ c;
+                bin[i + 31] = bin[i + 31] ^ d;
+                i += 32;
+                len -= 32;
+            } else if len >= 16 {
+                bin[i] = bin[i] ^ a;
+                bin[i + 1] = bin[i + 1] ^ b;
+                bin[i + 2] = bin[i + 2] ^ c;
+                bin[i + 3] = bin[i + 3] ^ d;
+                bin[i + 4] = bin[i + 4] ^ a;
+                bin[i + 5] = bin[i + 5] ^ b;
+                bin[i + 6] = bin[i + 6] ^ c;
+                bin[i + 7] = bin[i + 7] ^ d;
+                bin[i + 8] = bin[i + 8] ^ a;
+                bin[i + 9] = bin[i + 9] ^ b;
+                bin[i + 10] = bin[i + 10] ^ c;
+                bin[i + 11] = bin[i + 11] ^ d;
+                bin[i + 12] = bin[i + 12] ^ a;
+                bin[i + 13] = bin[i + 13] ^ b;
+                bin[i + 14] = bin[i + 14] ^ c;
+                bin[i + 15] = bin[i + 15] ^ d;
+                i += 16;
+                len -= 16;
+            } else if len >= 8 {
+                bin[i] = bin[i] ^ a;
+                bin[i + 1] = bin[i + 1] ^ b;
+                bin[i + 2] = bin[i + 2] ^ c;
+                bin[i + 3] = bin[i + 3] ^ d;
+                bin[i + 4] = bin[i + 4] ^ a;
+                bin[i + 5] = bin[i + 5] ^ b;
+                bin[i + 6] = bin[i + 6] ^ c;
+                bin[i + 7] = bin[i + 7] ^ d;
+                i += 8;
+                len -= 8;
+            } else if len >= 4 {
+                bin[i] = bin[i] ^ a;
+                bin[i + 1] = bin[i + 1] ^ b;
+                bin[i + 2] = bin[i + 2] ^ c;
+                bin[i + 3] = bin[i + 3] ^ d;
+                i += 4;
+                len -= 4;
+            } else if len == 3 {
+                bin[i] = bin[i] ^ a;
+                bin[i + 1] = bin[i + 1] ^ b;
+                bin[i + 2] = bin[i + 2] ^ c;
+                i += 3;
+                len -= 3;
+            } else if len == 2 {
+                bin[i] = bin[i] ^ a;
+                bin[i + 1] = bin[i + 1] ^ b;
+                i += 2;
+                len -= 2;
+            } else {
+                bin[i] = bin[i] ^ key[i % 4];
+                i += 1;
+                len -= 1;
+            }
+        }
     }
 }

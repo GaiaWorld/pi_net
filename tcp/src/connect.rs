@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::sync::{Weak, Arc};
 use std::collections::VecDeque;
 use std::net::{Shutdown, SocketAddr};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::io::{Result, Error, ErrorKind, Read, Write};
 
 use iovec::IoVec;
@@ -181,6 +182,62 @@ impl WriteBuffer {
 }
 
 /*
+* Tcp连接就绪状态
+*/
+struct SocketReady(Arc<AtomicU8>);
+
+impl SocketReady {
+    //构建一个空的Tcp连接就绪状态
+    pub fn empty() -> Self {
+        SocketReady(Arc::new(AtomicU8::new(0)))
+    }
+
+    //获取当前就绪状态
+    pub fn get(&self) -> Ready {
+        match self.0.load(Ordering::SeqCst) {
+            1 => {
+                //可读
+                Ready::readable()
+            },
+            2 => {
+                //可写
+                Ready::writable()
+            },
+            3 => {
+                //可读写
+                Ready::readable() | Ready::writable()
+            },
+            _ => {
+                //空
+                Ready::empty()
+            },
+        }
+    }
+
+    //插入当前就绪状态
+    pub fn insert(&self, ready: Ready) {
+        if ready.is_readable() && ready.is_writable() {
+            self.0.fetch_or(3, Ordering::SeqCst);
+        } else if ready.is_readable() {
+            self.0.fetch_or(1, Ordering::SeqCst);
+        } else if ready.is_writable() {
+            self.0.fetch_or(2, Ordering::SeqCst);
+        }
+    }
+
+    //移除当前就绪状态
+    pub fn remove(&self, ready: Ready) {
+        if ready.is_readable() && ready.is_writable() {
+            self.0.fetch_xor(3, Ordering::SeqCst);
+        } else if ready.is_readable() {
+            self.0.fetch_xor(1, Ordering::SeqCst);
+        } else if ready.is_writable() {
+            self.0.fetch_xor(2, Ordering::SeqCst);
+        }
+    }
+}
+
+/*
 * Tcp连接
 */
 pub struct TcpSocket {
@@ -189,18 +246,19 @@ pub struct TcpSocket {
     token:              Option<Token>,                                  //连接令牌
     uid:                Option<usize>,                                  //连接唯一id
     stream:             TcpStream,                                      //TCP流
-    ready:              Ready,                                          //Tcp事件准备状态
+    ready:              SocketReady,                                    //Tcp事件准备状态
     poll_opt:           PollOpt,                                        //Tcp事件轮询选项
     readable_rouser:    Option<Sender<Token>>,                          //可读事件唤醒器
     writable_rouser:    Option<Sender<(Token, WriteBufferHandle)>>,     //可写事件唤醒器
+    close_listener:     Option<Sender<(Token, Result<()>)>>,            //关闭事件监听器
     readable_size:      usize,                                          //本次可读字节数
     read_buf:           Option<ReadBuffer>,                             //读缓冲
     write_buf:          Option<WriteBuffer>,                            //写缓冲
     flush:              bool,                                           //Tcp连接写刷新状态
-    closed:             bool,                                           //Tcp连接关闭状态
+    closed:             AtomicBool,                                     //Tcp连接关闭状态
     buffer_pool:        Option<Arc<WriteBufferPool>>,                   //Tcp连接写缓冲池
     handle:             Option<SocketHandle<TcpSocket>>,                //Tcp连接句柄
-    context: SocketContext,                                        //Tcp连接上下文
+    context:            SocketContext,                                  //Tcp连接上下文
 }
 
 unsafe impl Send for TcpSocket {}
@@ -217,15 +275,16 @@ impl Stream for TcpSocket {
             token,
             uid: None,
             stream: stream,
-            ready: Ready::empty(),
+            ready: SocketReady::empty(),
             poll_opt: PollOpt::level(), //默认的连接事件轮询选项
             readable_rouser: None,
             writable_rouser: None,
+            close_listener: None,
             readable_size: 0,
             read_buf: None,
             write_buf: None,
             flush: false,
-            closed: false,
+            closed: AtomicBool::new(false),
             buffer_pool: None,
             handle: None,
             context: SocketContext::empty(),
@@ -252,8 +311,8 @@ impl Stream for TcpSocket {
         last
     }
 
-    fn get_ready(&self) -> &Ready {
-        &self.ready
+    fn get_ready(&self) -> Ready {
+        self.ready.get()
     }
 
     fn set_ready(&mut self, ready: Ready) {
@@ -282,6 +341,10 @@ impl Stream for TcpSocket {
 
     fn set_writable_rouser(&mut self, rouser: Option<Sender<(Token, WriteBufferHandle)>>) {
         self.writable_rouser = rouser;
+    }
+
+    fn set_close_listener(&mut self, listener: Option<Sender<(Token, Result<()>)>>) {
+        self.close_listener = listener;
     }
 
     fn set_write_buffer(&mut self, buffer: WriteBufferPool) {
@@ -336,13 +399,15 @@ impl Stream for TcpSocket {
     }
 
     fn send(&mut self) -> Result<usize> {
-        let mut send_pos = self.write_buf.as_ref().unwrap().send_pos;
-        let write_pos = self.write_buf.as_ref().unwrap().write_pos;
-
         loop {
             //获取本次发送的IoVec
             let mut bufs = Vec::new();
             let mut shared = self.write_buf.as_mut().unwrap().pop();
+
+            //获取当前写缓冲的发送和写入位置
+            let mut send_pos = self.write_buf.as_ref().unwrap().send_pos;
+            let write_pos = self.write_buf.as_ref().unwrap().write_pos;
+
             if let Some(s) = &shared {
                 let mut len;
                 let mut pos = send_pos;
@@ -409,7 +474,7 @@ impl Stream for TcpSocket {
 
 impl Socket for TcpSocket {
     fn is_closed(&self) -> bool {
-        self.closed
+        self.closed.load(Ordering::SeqCst)
     }
 
     fn is_flush(&self) -> bool {
@@ -458,6 +523,10 @@ impl Socket for TcpSocket {
         }
     }
 
+    fn clone_write_buffer(&self) -> Arc<WriteBufferPool> {
+        self.buffer_pool.as_ref().unwrap().clone()
+    }
+
     fn get_write_buffer(&self) -> &WriteBufferPool {
         self.buffer_pool.as_ref().unwrap().as_ref()
     }
@@ -501,7 +570,7 @@ impl Socket for TcpSocket {
         Ok(None)
     }
 
-    fn write_ready(&mut self, handle: WriteBufferHandle) -> Result<()> {
+    fn write_ready(&self, handle: WriteBufferHandle) -> Result<()> {
         self.ready.remove(Ready::readable()); //取消当前连接对可读事件的关注
         self.ready.insert(Ready::writable()); //设置当前连接需要关注可写事件
         if let Some(rouser) = &self.writable_rouser {
@@ -524,12 +593,22 @@ impl Socket for TcpSocket {
         }
     }
 
-    fn close(&self, how: Shutdown) -> Result<()> {
-        if self.closed {
+    fn close(&self, reason: Result<()>) -> Result<()> {
+        if self.closed.load(Ordering::SeqCst) {
             //已关闭，则忽略
             return Ok(());
         }
 
-        self.stream.shutdown(how)
+        //设置连接状态，并通知连接关闭
+        self.closed.store(true, Ordering::SeqCst);
+        if let Some(listener) = &self.close_listener {
+            if let Some(token) = self.token {
+                if let Err(e) = listener.send((token, reason)) {
+                    return Err(Error::new(ErrorKind::BrokenPipe, e));
+                }
+            }
+        }
+
+        Ok(())
     }
 }

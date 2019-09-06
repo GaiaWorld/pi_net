@@ -3,7 +3,7 @@ use std::time::Duration;
 use std::collections::HashMap;
 
 use tcp::connect::TcpSocket;
-use tcp::server::{AsyncAdapter, PortsAdapter, SocketListener};
+use tcp::server::{AsyncWaitsHandle, AsyncAdapter, PortsAdapter, SocketListener};
 use tcp::driver::{SocketConfig, SocketAdapterFactory, AsyncServiceName};
 use tcp::buffer_pool::WriteBufferPool;
 
@@ -21,7 +21,7 @@ impl SocketAdapterFactory for TestFactory {
         let mut adapter = PortsAdapter::<TcpSocket>::new();
         for (port, type_name) in &self.ports {
             match type_name {
-                name if name == &WebsocketListener::service_name() => {
+                name if name == &WebsocketListener::<TcpSocket, AsyncWaitsHandle>::service_name() => {
                     adapter.set_adapter(port.clone(), Box::new(AsyncAdapter::<TcpSocket, _>::with_service(WebsocketListener::default())));
                 },
                 _ => (),
@@ -49,7 +49,7 @@ fn test_handshake() {
     let config = SocketConfig::new("0.0.0.0", &[38080]);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
     let mut factory = TestFactory::new();
-    factory.set::<WebsocketListener>(38080);
+    factory.set::<WebsocketListener<TcpSocket, AsyncWaitsHandle>>(38080);
     match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Error, reason: {:?}", e);

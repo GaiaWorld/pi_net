@@ -1,11 +1,14 @@
 use std::error;
 use std::sync::Arc;
+use std::net::Shutdown;
 use std::str::from_utf8;
-use std::fmt::{Display, Formatter, Result as FmtResult, Debug};
+use std::marker::PhantomData;
 use std::result::Result as GenResult;
 use std::io::{Error, Result, ErrorKind};
+use std::fmt::{Display, Formatter, Result as FmtResult, Debug};
 
-use httparse::Request;
+use bytes::BufMut;
+use httparse::{EMPTY_HEADER, Request};
 use http::{Result as HttpResult,
            Response,
            Version,
@@ -19,7 +22,14 @@ use base64;
 use atom::Atom;
 use pi_crypto::digest::{DigestAlgorithm, digest};
 
-use crate::util::ChildProtocol;
+use tcp::driver::{Socket, AsyncIOWait, SocketHandle, AsyncReadTask, AsyncWriteTask};
+
+use crate::util::{ChildProtocol, WsContext};
+
+/*
+* Websocket握手请求的响应序列化缓冲长度
+*/
+const HANDSHAKE_RESP_BUFFER_SIZE: usize = 256;
 
 /*
 * 支持的Websocket握手请求时必须的Http头数量
@@ -64,23 +74,37 @@ pub enum Status {
 /*
 * Websocket连接接受器
 */
-#[derive(Clone)]
-pub struct WsAcceptor {
+pub struct WsAcceptor<S: Socket, H: AsyncIOWait> {
     window_bits:    u8,     //客户端的压缩窗口大小，等于0表示，不支持每消息Deflate压缩的扩展协议
+    marker:         PhantomData<(S, H)>,
 }
 
-unsafe impl Send for WsAcceptor {}
+unsafe impl<S: Socket, H: AsyncIOWait> Send for WsAcceptor<S, H> {}
+unsafe impl<S: Socket, H: AsyncIOWait> Sync for WsAcceptor<S, H> {}
 
-impl Default for WsAcceptor {
-    //默认构建准备握手的连接接受器
-    fn default() -> Self {
+impl<S: Socket, H: AsyncIOWait> Clone for WsAcceptor<S, H> {
+    fn clone(&self) -> Self {
         WsAcceptor {
-            window_bits: 0, //默认不支持每消息Deflate压缩的扩展协议
+            window_bits: self.window_bits,
+            marker: PhantomData,
         }
     }
 }
 
-impl WsAcceptor {
+impl<S: Socket, H: AsyncIOWait> Default for WsAcceptor<S, H> {
+    //默认构建准备握手的连接接受器
+    fn default() -> Self {
+        WsAcceptor {
+            window_bits: 0, //默认不支持每消息Deflate压缩的扩展协议
+            marker: PhantomData,
+        }
+    }
+}
+
+/*
+* Websocket接受器同步方法
+*/
+impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
     //构建指定客户端的压缩窗口大小的连接接受器
     pub fn with_window_bits(window_bits: u8) -> Self {
         let mut handler = WsAcceptor::default();
@@ -92,11 +116,9 @@ impl WsAcceptor {
     pub fn window_bits(&self) -> u8 {
         self.window_bits
     }
-}
 
-impl WsAcceptor {
     //握手，返回握手是否成功、握手请求的响应和子协议
-    pub fn handshake(&self, protocol: Option<Arc<dyn ChildProtocol>>, mut req: Request) -> (bool, HttpResult<Response<()>>, Option<Arc<dyn ChildProtocol>>) {
+    pub fn handshake(&self, protocol: Option<Arc<dyn ChildProtocol<S, H>>>, mut req: Request) -> (bool, HttpResult<Response<()>>, Option<Arc<dyn ChildProtocol<S, H>>>) {
         match check_handshake_request(&mut req, self.window_bits) {
             Err(e) => {
                 //握手请求失败
@@ -108,7 +130,7 @@ impl WsAcceptor {
                 match success {
                     Status::Succeeded(ws_ext, mut ws_protocol, ws_accept) => {
                         //握手请求成功，则更新握手状态，并返回握手请求的响应
-                        let mut protocol_name: Option<&str> = None;
+                        let protocol_name: Option<&str> = None;
                         ws_protocol = ws_protocol.trim().to_string();
                         let protocols: Vec<&str> = ws_protocol.split(";").collect();
                         let protocols_len = protocols.len();
@@ -138,6 +160,88 @@ impl WsAcceptor {
                         let resp = reply_handshake(Err(StatusCode::BAD_REQUEST));
                         (resp.is_ok(), resp, None)
                     },
+                }
+            },
+        }
+    }
+}
+
+/*
+* Websocket接受器异步方法
+*/
+impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
+    //异步接受握手请求
+    pub async fn accept<'h, 'b>(handle: SocketHandle<S>,
+                                waits: H,
+                                acceptor: WsAcceptor<S, H>,
+                                support_protocol: Option<Arc<dyn ChildProtocol<S, H>>>) {
+        let mut headers = [EMPTY_HEADER; MAX_HANDSHAKE_HTTP_HEADER_LIMIT];
+        let mut req = Request::new(&mut headers);
+
+        loop {
+            match AsyncReadTask::async_read(handle.clone(), waits.clone(), 0).await {
+                Err(e) => {
+                    handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket handshake by read Failed, reason: {:?}", e))));
+                    return;
+                },
+                Ok(bin) => {
+                    match req.parse(bin) {
+                        Err(e) => {
+                            //解析握手时的Http头错误
+                            handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket handshake by http parse failed, reason: {:?}", e))));
+                            return;
+                        },
+                        Ok(ref status) if status.is_partial() => {
+                            //部分握手数据已到达
+                            match req.version {
+                                Some(ver) if ver != 1 => {
+                                    //不合法的Http版本号
+                                    handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket handshake by http parse failed, version: {}, reason: invalid http version", ver))));
+                                    return;
+                                },
+                                _ => {
+                                    //握手数据不完整，继续读
+                                    continue;
+                                }
+                            }
+                        },
+                        Ok(status) => {
+                            //全部握手数据已到达
+                            break;
+                        }
+                    }
+                },
+            }
+        }
+
+        WsAcceptor::<S, H>::handle_handshake(handle, waits, acceptor, req, support_protocol).await;
+    }
+
+    //异步处理握手请求
+    async fn handle_handshake<'h, 'b>(handle: SocketHandle<S>,
+                                      waits: H,
+                                      acceptor: WsAcceptor<S, H>,
+                                      req: Request<'h, 'b>,
+                                                                 support_protocol: Option<Arc<dyn ChildProtocol<S, H>>>) {
+        match acceptor.handshake(support_protocol, req) {
+            (_, Err(e), _) => {
+                //握手异常
+                handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket handshake failed, reason: {:?}", e))));
+            },
+            (is_ok, Ok(resp), protocol) => {
+                //握手请求已完成，则返回
+                if is_ok {
+                    //握手成功，则绑定连接上下文
+                    handle.as_handle().unwrap().as_ref().borrow_mut().get_context_mut().set(WsContext::default());
+                }
+
+                let mut buf = handle.as_handle().as_ref().unwrap().borrow().get_write_buffer().alloc().ok().unwrap().unwrap();
+                buf.get_iolist_mut().push_back(resp_to_vec(resp).into());
+
+                if let Some(buf_handle) = buf.finish() {
+                    if let Err(e) = AsyncWriteTask::async_write(handle.clone(), waits, buf_handle).await {
+                        handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("webSocket handshake write error, reason: {:?}", e))));
+                    }
                 }
             },
         }
@@ -208,6 +312,7 @@ fn check_handshake_request(req: &mut Request, window_bits: u8) -> Result<Status>
                 }
             },
             key if key == SEC_WEBSOCKET_PROTOCOL.as_str() => {
+                println!("!!!!!!");
                 //握手请求中有指定Websocket子协议
                 if let Ok(r) = unmatch_header_value(key, header.value) {
                     //已匹配子协议，则保存
@@ -301,4 +406,25 @@ fn reply_handshake<'a>(result: GenResult<(u8, Option<&'a str>, &'a str), StatusC
 fn accept(key: String) -> String {
     let bin = digest(DigestAlgorithm::SHA1, (key + WEBSOCKET_GUID).as_bytes());
     base64::encode(&bin)
+}
+
+//将握手请求的响应序列化为Vec<u8>
+fn resp_to_vec(resp: Response<()>) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(HANDSHAKE_RESP_BUFFER_SIZE);
+    buf.put(format!("{:?}", resp.version()));
+    buf.put(" ");
+    let status = resp.status();
+    buf.put(status.as_str());
+    buf.put(" ");
+    buf.put(status.canonical_reason().unwrap());
+    buf.put("\r\n");
+    for (key, value) in resp.headers() {
+        buf.put(key.as_str());
+        buf.put(":");
+        buf.put(value.as_bytes());
+        buf.put("\r\n");
+    }
+    buf.put("\r\n");
+
+    buf
 }

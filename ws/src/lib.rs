@@ -1,3 +1,4 @@
+#![feature(mem_take)]
 #![feature(never_type)]
 #![feature(async_await)]
 
@@ -17,6 +18,5 @@ extern crate tcp;
 pub mod server;
 pub mod acceptor;
 pub mod frame;
-pub mod msg;
 pub mod connect;
 pub mod util;

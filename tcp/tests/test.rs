@@ -125,7 +125,7 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
                         println!("===> Socket Send Ok, token: {:?}, remote: {:?}, local: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local());
 
                         //发送成功，则关闭
-                        if let Err(e) = socket.as_ref().borrow().close(Shutdown::Both) {
+                        if let Err(e) = socket.as_ref().borrow().close(Ok(())) {
                             println!("!!!> Socket Close Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local(), e);
                         }
                     }

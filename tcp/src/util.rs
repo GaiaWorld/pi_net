@@ -27,12 +27,46 @@ pub fn pause() {
 }
 
 /*
+* 上下文句柄
+*/
+pub struct ContextHandle<T: 'static>(Option<Arc<T>>);
+
+unsafe impl<T: 'static> Send for ContextHandle<T> {}
+
+impl<T: 'static> Drop for ContextHandle<T> {
+    fn drop(&mut self) {
+        if let Some(shared) = self.0.take() {
+            //当前上下文指针存在，则释放
+            Arc::into_raw(shared);
+        }
+    }
+}
+
+impl<T: 'static> ContextHandle<T> {
+    //获取上下文只读引用
+    pub fn as_ref(&self) -> &T {
+        self.0.as_ref().unwrap().as_ref()
+    }
+
+    //获取上下文可写引用
+    pub fn as_mut(&mut self) -> Option<&mut T> {
+        if let Some(shared) = self.0.as_mut() {
+            return Arc::get_mut(shared);
+        }
+
+        None
+    }
+}
+
+/*
 * 通用上下文
 * 注意，设置上下文后，需要移除当前上下文，上下文才会自动释放
 */
 pub struct SocketContext {
     inner: *const (), //内部上下文
 }
+
+unsafe impl Send for SocketContext {}
 
 impl SocketContext {
     //创建空的上下文
@@ -48,12 +82,12 @@ impl SocketContext {
     }
 
     //获取上下文的句柄
-    pub fn get<T: 'static>(&self) -> Option<Arc<T>> {
+    pub fn get<T: 'static>(&self) -> Option<ContextHandle<T>> {
         if self.is_empty() {
             return None;
         }
 
-        Some(unsafe { Arc::from_raw(self.inner as *const T) })
+        Some(unsafe { ContextHandle(Some(Arc::from_raw(self.inner as *const T))) })
     }
 
     //设置上下文，如果当前上下文不为空，则设置失败
@@ -73,7 +107,7 @@ impl SocketContext {
         }
 
         let inner = unsafe { Arc::from_raw(self.inner as *const T) };
-        if Arc::strong_count(&inner) > 0 {
+        if Arc::strong_count(&inner) > 1 {
             Arc::into_raw(inner); //释放临时共享指针
             Err("remove context failed, reason: context shared exist")
         } else {
@@ -252,6 +286,16 @@ impl IoList {
     //构建一个指定初始容量的IO列表
     pub fn with_capacity(capacity: usize) -> Self {
         IoList(0, VecDeque::with_capacity(capacity))
+    }
+
+    //连接IO列表中的所有IO数据
+    pub fn concat(self) -> Vec<u8> {
+        let mut vecs  = Vec::from(self);
+        let vecs: Vec<Vec<u8>> = vecs.into_iter().map(|bytes| {
+            bytes.into()
+        }).collect();
+
+        vecs.concat()
     }
 
     //获取当前IO列表字节长度

@@ -63,7 +63,7 @@ pub trait Stream: Sized + Send + 'static {
     fn set_uid(&mut self, uid: usize) -> Option<usize>;
 
     //获取当前流事件准备状态
-    fn get_ready(&self) -> &Ready;
+    fn get_ready(&self) -> Ready;
 
     //设置当前流事件准备状态
     fn set_ready(&mut self, ready: Ready);
@@ -80,11 +80,14 @@ pub trait Stream: Sized + Send + 'static {
     //取消当前流事件轮询选项
     fn unset_poll_opt(&mut self, opt: PollOpt);
 
-    //设置可读事件唤醒器，返回上个可读事件唤醒器
+    //设置可读事件唤醒器
     fn set_readable_rouser(&mut self, rouser: Option<Sender<Token>>);
 
-    //设置可写事件唤醒器，返回上个可写事件唤醒器
+    //设置可写事件唤醒器
     fn set_writable_rouser(&mut self, rouser: Option<Sender<(Token, WriteBufferHandle)>>);
+
+    //设置关闭事件监听器
+    fn set_close_listener(&mut self, listener: Option<Sender<(Token, Result<()>)>>);
 
     //设置写缓冲池句柄
     fn set_write_buffer(&mut self, buffer: WriteBufferPool);
@@ -133,6 +136,9 @@ pub trait Socket: Sized + Send + 'static {
     //设置连接读写缓冲区容量
     fn init_buffer_capacity(&mut self, read_size: usize, write_size: usize);
 
+    //获取连接写缓冲的复制
+    fn clone_write_buffer(&self) -> Arc<WriteBufferPool>;
+
     //获取连接写缓冲
     fn get_write_buffer(&self) -> &WriteBufferPool;
 
@@ -144,14 +150,14 @@ pub trait Socket: Sized + Send + 'static {
     //返回None，则表示当前读缓冲里没有指定字节数的数据，等待指定字节数的数据准备好后，异步回调
     fn read(&mut self, size: usize) -> Result<Option<&[u8]>>;
 
-    //通知连接写就绪，可以开始发送指定的数据
-    fn write_ready(&mut self, handle: WriteBufferHandle) -> Result<()>;
+    //线程安全的通知连接写就绪，可以开始发送指定的数据
+    fn write_ready(&self, handle: WriteBufferHandle) -> Result<()>;
 
     //写入指定的数据
     fn write(&mut self, handle: WriteBufferHandle);
 
     //关闭Tcp连接
-    fn close(&self, how: Shutdown) -> Result<()>;
+    fn close(&self, reason: Result<()>) -> Result<()>;
 }
 
 /*

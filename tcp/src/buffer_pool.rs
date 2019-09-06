@@ -147,6 +147,11 @@ impl WriteBuffer {
         Some(WriteBufferHandle::new(weak))
     }
 
+    //获取当前写缓冲的数据长度
+    pub fn size(&self) -> usize {
+        self.inner.as_ref().unwrap().byte_len()
+    }
+
     //获取可写的IO列表
     pub fn get_iolist_mut(&mut self) -> &mut IoList {
         Arc::get_mut(self.inner.as_mut().unwrap()).unwrap()
