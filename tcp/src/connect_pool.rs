@@ -34,6 +34,7 @@ pub struct TcpSocketPool<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
     wakeup_writable_recv:   Receiver<(Token, WriteBufferHandle)>,       //唤醒可写事件的接收器
     close_sent:             Sender<(Token, Result<()>)>,                //关闭事件的发送器
     close_recv:             Receiver<(Token, Result<()>)>,              //关闭事件的接收器
+    wait_close:             Vec<(Token, Result<()>)>,                   //等待关闭队列
     buffer:                 WriteBufferPool,                            //写缓冲池
 }
 
@@ -78,6 +79,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
             wakeup_writable_recv,
             close_sent,
             close_recv,
+            wait_close: Vec::new(),
             buffer,
         })
     }
@@ -116,8 +118,6 @@ fn event_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(mut pool: TcpSo
     loop {
         handle_accepted(&mut pool);
 
-        handle_close_event(&mut pool);
-
         handle_wakeup_readable(&mut pool);
 
         handle_wakeup_writable(&mut pool);
@@ -128,6 +128,8 @@ fn event_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(mut pool: TcpSo
         }
 
         handle_poll_events(&mut pool, &events);
+
+        handle_close_event(&mut pool);
 
         pool.buffer.collect();
     }
@@ -205,13 +207,6 @@ fn init_socket<S: Socket + Stream, A: SocketAdapter<Connect = S>>(socket: &mut S
         panic!("init socket failed, reason: {:?}", e);
     }
     socket.init_buffer_capacity(socket_opts.read_buffer_capacity, socket_opts.write_buffer_capacity);
-}
-
-//批量处理Tcp连接的关闭事件
-fn handle_close_event<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut TcpSocketPool<S, A>) {
-    for (token, reason) in pool.close_recv.try_iter().collect::<Vec<(Token, Result<()>)>>() {
-        close_socket(pool, token, Shutdown::Both, reason)
-    }
 }
 
 //批量唤醒Tcp连接的可读事件
@@ -326,6 +321,20 @@ fn handle_poll_events<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &
         if let Some(reason) = close_reason.take() {
             close_socket(pool, token, Shutdown::Both, reason);
         }
+    }
+}
+
+//批量处理Tcp连接的关闭事件
+fn handle_close_event<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut TcpSocketPool<S, A>) {
+    for i in 0..pool.wait_close.len() {
+        //关闭正在等待的连接
+        let (token, reason) = pool.wait_close.remove(i);
+        close_socket(pool, token, Shutdown::Both, reason);
+    }
+
+    for wait in pool.close_recv.try_iter().collect::<Vec<(Token, Result<()>)>>() {
+        //将需要关闭的连接，放入等待关闭队列
+        pool.wait_close.push(wait);
     }
 }
 

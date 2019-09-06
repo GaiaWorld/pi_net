@@ -295,6 +295,7 @@ impl Stream for TcpSocket {
         self.buffer_pool = Some(Arc::new(buffer));
     }
 
+    //连接关闭状态不阻止接收
     fn recv(&mut self) -> Result<usize> {
         let mut recv_pos = self.read_buf.as_ref().unwrap().recv_pos;
         let readable_size = self.readable_size; //按需接收的字节数
@@ -342,6 +343,7 @@ impl Stream for TcpSocket {
         }
     }
 
+    //连接关闭状态不阻止发送
     fn send(&mut self) -> Result<usize> {
         loop {
             //获取本次发送的IoVec
@@ -478,6 +480,11 @@ impl Socket for TcpSocket {
     }
 
     fn read_ready(&mut self, size: usize) -> Result<()> {
+        if self.is_closed() {
+            //连接已关闭，则返回错误
+            return Err(Error::new(ErrorKind::BrokenPipe, "socket closed"));
+        }
+
         self.read_buf.as_mut().unwrap().ready(size); //为读就绪准备读缓冲区
         self.ready.remove(Ready::writable()); //取消当前连接对可写事件的关注
         self.ready.insert(Ready::readable()); //设置当前连接需要关注可读事件
@@ -495,6 +502,11 @@ impl Socket for TcpSocket {
     }
 
     fn read(&mut self, size: usize) -> Result<Option<&[u8]>> {
+        if self.is_closed() {
+            //连接已关闭，则返回错误
+            return Err(Error::new(ErrorKind::BrokenPipe, "socket closed"));
+        }
+
         if let Some(r) = self.read_buf.as_mut().unwrap().read(size) {
             //当前缓冲区有未读的指定长度的可读数据，则同步返回
             return Ok(Some(r));
@@ -517,6 +529,11 @@ impl Socket for TcpSocket {
     }
 
     fn write_ready(&self, handle: WriteBufferHandle) -> Result<()> {
+        if self.is_closed() {
+            //连接已关闭，则返回错误
+            return Err(Error::new(ErrorKind::BrokenPipe, "socket closed"));
+        }
+
         self.ready.remove(Ready::readable()); //取消当前连接对可读事件的关注
         self.ready.insert(Ready::writable()); //设置当前连接需要关注可写事件
         if let Some(rouser) = &self.writable_rouser {
@@ -533,6 +550,7 @@ impl Socket for TcpSocket {
         Ok(())
     }
 
+    //连接关闭不阻止写入
     fn write(&mut self, handle: WriteBufferHandle) {
         if let Some(writer) = &mut self.write_buf {
             writer.push(handle);

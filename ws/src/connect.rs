@@ -48,7 +48,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         self.socket.alloc().ok().unwrap().unwrap()
     }
 
-    //线程安全的广播指定负载
+    //线程安全的异步广播指定负载
     pub fn broadcast(connects: &[WsSocket<S, H>], msg_type: WsFrameType, payload: WriteBuffer) -> Result<()> {
         if connects.len() == 0 {
             //连接为空，则忽略
@@ -68,7 +68,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         Err(Error::new(ErrorKind::InvalidData, "invalid payload"))
     }
 
-    //线程安全的发送指定负载
+    //线程安全的异步发送指定负载
     pub fn send(&self, msg_type: WsFrameType, payload: WriteBuffer) -> Result<()> {
         if let Some(mut buf) = WsFrame::<S, H>::single_with_window_bits_and_payload(msg_type, self.window_bits, payload).into_write_buf() {
             if let Some(handle) = buf.finish() {
@@ -81,7 +81,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         Err(Error::new(ErrorKind::InvalidData, "invalid payload"))
     }
 
-    //线程安全的关闭当前连接
+    //线程安全的异步关闭当前连接
     pub fn close(&self, reason: Result<()>) -> Result<()> {
         let payload= match &reason {
             Err(_) => {
@@ -100,9 +100,9 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         buf.get_iolist_mut().push_back(Vec::from(frame).into());
 
         if let Some(handle) = buf.finish() {
-            //关闭当前连接，并向对端发送关闭帧
-            self.socket.close(reason);
-            return self.socket.write(handle);
+            //向对端发送关闭帧，并关闭当前连接
+            self.socket.write(handle);
+            return self.socket.close(reason);
         }
 
         Ok(())
@@ -167,7 +167,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                 if let Some(p) = protocol {
                     p.decode_protocol(Self::new(handle.clone(), window_bits), context);
                 }
-                
+
                 return;
             } else {
                 //控制帧，则设置帧类型
