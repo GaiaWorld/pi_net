@@ -21,7 +21,8 @@ use mio::{
 
 use atom::Atom;
 
-use crate::{buffer_pool::{WriteBufferHandle, WriteBufferPool}, util::SocketContext};
+use crate::{buffer_pool::{WriteBufferHandle, WriteBuffer, WriteBufferPool},
+            util::{SocketReady, SocketContext}};
 
 /*
 * 默认的ipv4地址
@@ -51,7 +52,7 @@ pub trait Stream: Sized + Send + 'static {
     fn new(local: &SocketAddr, remote: &SocketAddr, token: Option<Token>, stream: TcpStream) -> Self;
 
     //设置Tcp流上下文集合
-    fn set_handle(&mut self, handle: Weak<RefCell<Self>>);
+    fn set_handle(&mut self, shared: &Arc<RefCell<Self>>);
 
     //获取连接流
     fn get_stream(&self) -> &TcpStream;
@@ -136,9 +137,6 @@ pub trait Socket: Sized + Send + 'static {
     //设置连接读写缓冲区容量
     fn init_buffer_capacity(&mut self, read_size: usize, write_size: usize);
 
-    //获取连接写缓冲的复制
-    fn clone_write_buffer(&self) -> Arc<WriteBufferPool>;
-
     //获取连接写缓冲
     fn get_write_buffer(&self) -> &WriteBufferPool;
 
@@ -156,7 +154,7 @@ pub trait Socket: Sized + Send + 'static {
     //写入指定的数据
     fn write(&mut self, handle: WriteBufferHandle);
 
-    //关闭Tcp连接
+    //线程安全的关闭Tcp连接
     fn close(&self, reason: Result<()>) -> Result<()>;
 }
 
@@ -241,27 +239,51 @@ pub enum SocketStatus {
 /*
 * Tcp连接句柄
 */
-pub struct SocketHandle<S: Socket>(Weak<RefCell<S>>);
+pub struct SocketHandle<S: Socket>(*const S, Weak<RefCell<S>>);
 
 unsafe impl<S: Socket> Send for SocketHandle<S> {}
 unsafe impl<S: Socket> Sync for SocketHandle<S> {}
 
 impl<S: Socket> Clone for SocketHandle<S> {
     fn clone(&self) -> Self {
-        SocketHandle(self.0.clone())
+        SocketHandle(self.0, self.1.clone())
     }
 }
 
 impl<S: Socket> SocketHandle<S> {
     //构建Tcp连接引用
-    pub fn new(weak: Weak<RefCell<S>>) -> Self {
-        SocketHandle(weak)
+    pub fn new(shared: &Arc<RefCell<S>>) -> Self {
+        let raw = shared.as_ptr() as *const S;
+        let weak = Arc::downgrade(shared);
+        SocketHandle(raw, weak)
     }
 
-    //获取Tcp连接句柄
+    //获取Tcp连接可写句柄
     pub fn as_handle(&self) -> Option<Arc<RefCell<S>>> {
-        self.0.upgrade()
+        self.1.upgrade()
     }
+
+    //线程安全的分配写缓冲
+    pub fn alloc(&self) -> Result<Option<WriteBuffer>> {
+        unsafe {
+            (&*self.0).get_write_buffer().alloc()
+        }
+    }
+
+    //线程安全的写
+    pub fn write(&self, handle: WriteBufferHandle) -> Result<()> {
+        unsafe {
+            (&*self.0).write_ready(handle)
+        }
+    }
+
+    //线程安全的关闭连接
+    pub fn close(&self, reason: Result<()>) -> Result<()> {
+        unsafe {
+            (&*self.0).close(reason)
+        }
+    }
+
 }
 
 /*

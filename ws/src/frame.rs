@@ -773,7 +773,7 @@ impl<S: Socket, H: AsyncIOWait> WsFrame<S, H> {
         loop {
             match AsyncReadTask::async_read(handle.clone(), waits.clone(), size).await {
                 Err(e) => {
-                    handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket read frame head failed, reason: {:?}", e))));
+                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read frame head failed, reason: {:?}", e))));
                     return;
                 },
                 Ok(bin) if is_first => {
@@ -795,13 +795,13 @@ impl<S: Socket, H: AsyncIOWait> WsFrame<S, H> {
                 },
                 Ok(bin) => {
                     if let Err(e) = frame.get_head_mut().from_last(bin) {
-                        handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket read frame head failed, reason: {:?}", e))));
+                        handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read frame head failed, reason: {:?}", e))));
                         return;
                     }
 
                     if let None = frame.get_head().get_key() {
                         //客户端上行数据没有掩码，则立即断开连接
-                        handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket read frame head failed, reason: invalid client mask"))));
+                        handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read frame head failed, reason: invalid client mask"))));
                         return;
                     }
 
@@ -821,7 +821,7 @@ impl<S: Socket, H: AsyncIOWait> WsFrame<S, H> {
             //有负载，则继续异步读负载，并填充Websocket帧
             match AsyncReadTask::async_read(handle.clone(), waits.clone(), len).await {
                 Err(e) => {
-                    handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket read frame payload failed, reason: {:?}", e))));
+                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read frame payload failed, reason: {:?}", e))));
                     return;
                 },
                 Ok(bin) => {

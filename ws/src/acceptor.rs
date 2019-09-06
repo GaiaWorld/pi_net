@@ -181,14 +181,14 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
         loop {
             match AsyncReadTask::async_read(handle.clone(), waits.clone(), 0).await {
                 Err(e) => {
-                    handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket handshake by read Failed, reason: {:?}", e))));
+                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handshake by read Failed, reason: {:?}", e))));
                     return;
                 },
                 Ok(bin) => {
                     match req.parse(bin) {
                         Err(e) => {
                             //解析握手时的Http头错误
-                            handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket handshake by http parse failed, reason: {:?}", e))));
+                            handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handshake by http parse failed, reason: {:?}", e))));
                             return;
                         },
                         Ok(ref status) if status.is_partial() => {
@@ -196,7 +196,7 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
                             match req.version {
                                 Some(ver) if ver != 1 => {
                                     //不合法的Http版本号
-                                    handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket handshake by http parse failed, version: {}, reason: invalid http version", ver))));
+                                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handshake by http parse failed, version: {}, reason: invalid http version", ver))));
                                     return;
                                 },
                                 _ => {
@@ -226,7 +226,7 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
         match acceptor.handshake(support_protocol, req) {
             (_, Err(e), _) => {
                 //握手异常
-                handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket handshake failed, reason: {:?}", e))));
+                handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handshake failed, reason: {:?}", e))));
             },
             (is_ok, Ok(resp), protocol) => {
                 //握手请求已完成，则返回
@@ -240,7 +240,7 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
 
                 if let Some(buf_handle) = buf.finish() {
                     if let Err(e) = AsyncWriteTask::async_write(handle.clone(), waits, buf_handle).await {
-                        handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("webSocket handshake write error, reason: {:?}", e))));
+                        handle.close(Err(Error::new(ErrorKind::Other, format!("webSocket handshake write error, reason: {:?}", e))));
                     }
                 }
             },

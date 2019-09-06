@@ -4,9 +4,11 @@ use std::thread;
 use std::sync::Arc;
 use std::time::Duration;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 
 use iovec::MAX_LENGTH;
+use mio::Ready;
 
 #[cfg(all(feature="unstable", any(target_arch = "x86", target_arch = "x86_64")))]
 #[inline(always)]
@@ -24,6 +26,63 @@ pub fn pause() {
 #[inline(always)]
 pub fn pause() {
     thread::sleep(Duration::from_millis(1));
+}
+
+/*
+* Tcp连接就绪状态
+*/
+#[derive(Clone)]
+pub struct SocketReady(Arc<AtomicU8>);
+
+impl SocketReady {
+    //构建一个空的Tcp连接就绪状态
+    pub fn empty() -> Self {
+        SocketReady(Arc::new(AtomicU8::new(0)))
+    }
+
+    //获取当前就绪状态
+    pub fn get(&self) -> Ready {
+        match self.0.load(Ordering::SeqCst) {
+            1 => {
+                //可读
+                Ready::readable()
+            },
+            2 => {
+                //可写
+                Ready::writable()
+            },
+            3 => {
+                //可读写
+                Ready::readable() | Ready::writable()
+            },
+            _ => {
+                //空
+                Ready::empty()
+            },
+        }
+    }
+
+    //插入当前就绪状态
+    pub fn insert(&self, ready: Ready) {
+        if ready.is_readable() && ready.is_writable() {
+            self.0.fetch_or(3, Ordering::SeqCst);
+        } else if ready.is_readable() {
+            self.0.fetch_or(1, Ordering::SeqCst);
+        } else if ready.is_writable() {
+            self.0.fetch_or(2, Ordering::SeqCst);
+        }
+    }
+
+    //移除当前就绪状态
+    pub fn remove(&self, ready: Ready) {
+        if ready.is_readable() && ready.is_writable() {
+            self.0.fetch_xor(3, Ordering::SeqCst);
+        } else if ready.is_readable() {
+            self.0.fetch_xor(1, Ordering::SeqCst);
+        } else if ready.is_writable() {
+            self.0.fetch_xor(2, Ordering::SeqCst);
+        }
+    }
 }
 
 /*

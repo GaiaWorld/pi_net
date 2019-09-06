@@ -7,7 +7,7 @@ use std::io::{ErrorKind, Result, Error};
 use mio::Token;
 
 use tcp::{driver::{Socket, AsyncIOWait, SocketHandle, AsyncWriteTask},
-          buffer_pool::{WriteBuffer, WriteBufferPool},
+          buffer_pool::WriteBuffer,
           util::{ContextHandle, SocketContext}};
 
 use crate::{frame::{WsHead, WsPayload, WsFrame},
@@ -24,7 +24,6 @@ const CLOSE_GOING_AWAY_CODE: u16 = 1001;    //错误关闭
 */
 pub struct WsSocket<S: Socket, H: AsyncIOWait> {
     socket:         SocketHandle<S>,                //当前连接的Tcp连接句柄
-    buffer_pool:    Arc<WriteBufferPool>,           //当前连接的写缓冲池
     window_bits:    u8,                             //当前连接的压缩窗口大小
     marker:         PhantomData<H>,
 }
@@ -37,10 +36,8 @@ unsafe impl<S: Socket, H: AsyncIOWait> Send for WsSocket<S, H> {}
 impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
     //构建一个Websocket连接
     pub fn new(socket: SocketHandle<S>, window_bits: u8) -> Self {
-        let buffer_pool = socket.as_handle().as_ref().unwrap().borrow().clone_write_buffer();
         WsSocket {
             socket,
-            buffer_pool,
             window_bits,
             marker: PhantomData,
         }
@@ -48,7 +45,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
     //线程安全的分配一个用于发送的写缓冲区
     pub fn alloc(&self) -> WriteBuffer {
-        self.buffer_pool.alloc().ok().unwrap().unwrap()
+        self.socket.alloc().ok().unwrap().unwrap()
     }
 
     //线程安全的广播指定负载
@@ -61,7 +58,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         if let Some(mut buf) = WsFrame::<S, H>::single_with_window_bits_and_payload(msg_type, connects[0].window_bits, payload).into_write_buf() {
             if let Some(handle) = buf.finish() {
                 for connect in connects {
-                    connect.socket.as_handle().as_ref().unwrap().borrow().write_ready(handle.clone());
+                    connect.socket.write(handle.clone());
                 }
             }
 
@@ -75,7 +72,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
     pub fn send(&self, msg_type: WsFrameType, payload: WriteBuffer) -> Result<()> {
         if let Some(mut buf) = WsFrame::<S, H>::single_with_window_bits_and_payload(msg_type, self.window_bits, payload).into_write_buf() {
             if let Some(handle) = buf.finish() {
-                return self.socket.as_handle().as_ref().unwrap().borrow().write_ready(handle);
+                return self.socket.write(handle);
             }
 
             return Ok(());
@@ -97,12 +94,15 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
             },
         };
 
-        if let Some(mut buf) = WsFrame::<S, H>::control_with_payload(WsFrameType::Close, payload).into_write_buf() {
-            if let Some(handle) = buf.finish() {
-                //关闭当前连接，并向对端发送关闭帧
-                self.socket.as_handle().as_ref().unwrap().borrow().close(reason);
-                return self.socket.as_handle().as_ref().unwrap().borrow().write_ready(handle);
-            }
+        //创建关闭帧
+        let frame = WsFrame::<S, H>::control_with_payload(WsFrameType::Close, payload);
+        let mut buf = self.alloc();
+        buf.get_iolist_mut().push_back(Vec::from(frame).into());
+
+        if let Some(handle) = buf.finish() {
+            //关闭当前连接，并向对端发送关闭帧
+            self.socket.close(reason);
+            return self.socket.write(handle);
         }
 
         Ok(())
@@ -140,8 +140,9 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                 //数据帧，且只有单帧，则设置帧类型，并开始消息处理
                 context.set_type(head.get_type());
                 if let Some(p) = protocol {
-                    p.decode_protocol(WsSocket::new(handle.clone(), window_bits), context);
+                    p.decode_protocol(Self::new(handle.clone(), window_bits), context);
                 }
+
                 return;
             } else if head.is_first() {
                 //数据帧，当前是首帧，则设置帧类型，并继续读后续帧
@@ -149,21 +150,24 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
                 if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
                     //继续读失败，则立即关闭连接
-                    handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket read next frame failed, reason: {:?}", e))));
+                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read next frame failed, reason: {:?}", e))));
                 }
+
                 return;
             } else if head.is_next() {
                 //数据帧，当前是后续帧，则继续读后续帧
                 if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
                     //继续读失败，则立即关闭连接
-                    handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket read next frame failed, reason: {:?}", e))));
+                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read next frame failed, reason: {:?}", e))));
                 }
+
                 return;
             } else if head.is_finish() {
                 //数据帧，当前是结束帧，则开始消息处理
                 if let Some(p) = protocol {
-                    p.decode_protocol(WsSocket::new(handle.clone(), window_bits), context);
+                    p.decode_protocol(Self::new(handle.clone(), window_bits), context);
                 }
+                
                 return;
             } else {
                 //控制帧，则设置帧类型
@@ -171,7 +175,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
             }
         } else {
             //无法获取上下文的可写引用，则表示有异常，立即关闭连接
-            handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("Websocket Read Failed, reason: invalid writable context"))));
+            handle.close(Err(Error::new(ErrorKind::Other, format!("Websocket Read Failed, reason: invalid writable context"))));
             return;
         }
 
@@ -194,7 +198,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                     context.set_status(WsStatus::Closing);
                 } else {
                     //无法获取上下文的可写引用，则表示有异常，立即关闭连接
-                    handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket handle control failed, reason: invalid writable context"))));
+                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handle control failed, reason: invalid writable context"))));
                     return;
                 }
 
@@ -224,7 +228,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                 //继续读连接的数据
                 if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
                     //继续读失败，则立即关闭连接
-                    handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket read next frame failed after handle ping, reason: {:?}", e))));
+                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read next frame failed after handle ping, reason: {:?}", e))));
                 }
             },
             WsFrameType::Pong => {
@@ -232,7 +236,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
             },
             wft => {
                 //无效的控制帧，则立即关闭连接
-                handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket handle control frame failed, type: {:?}, reason: invalid control frame", wft))));
+                handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handle control frame failed, type: {:?}, reason: invalid control frame", wft))));
             }
         }
     }
@@ -252,7 +256,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
                 if let Some(buf_handle) = buf.finish() {
                     if let Err(e) = AsyncWriteTask::async_write(handle.clone(), waits.clone(), buf_handle).await {
-                        handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("webSocket write error by response control frame, reason: {:?}", e))));
+                        handle.close(Err(Error::new(ErrorKind::Other, format!("webSocket write error by response control frame, reason: {:?}", e))));
                     }
                 }
             },
@@ -270,26 +274,26 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                 } else if context.is_closing() {
                     //当前连接正在关闭，且已发送回应的关闭帧，则修改当前连接状态为已关闭，立即释放可写上下文，并立即关闭连接
                     context.set_status(WsStatus::Closed);
-                    handle.as_handle().as_ref().unwrap().borrow().close(Ok(()));
+                    handle.close(Ok(()));
                 } else {
                     //当前连接正在握手，则修改当前连接状态为已握手，并立即释放可写上下文
                     context.set_status(WsStatus::HandShaked);
                 }
             } else {
                 //无法获取上下文的可写引用，则表示有异常，立即关闭连接
-                handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket write failed, reason: invalid writable context"))));
+                handle.close(Err(Error::new(ErrorKind::Other, format!("websocket write failed, reason: invalid writable context"))));
                 return;
             }
         } else {
             //连接上下文为空，则立即关闭连接
-            handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket write failed, reason: websocket context empty"))));
+            handle.close(Err(Error::new(ErrorKind::Other, format!("websocket write failed, reason: websocket context empty"))));
             return;
         }
 
         //握手完成，准备异步接收客户端发送的Websocket数据帧
         if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
             //准备读失败，则立即关闭连接
-            handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket handshanke Ok, but read ready error, reason: {:?}", e))));
+            handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handshanke Ok, but read ready error, reason: {:?}", e))));
         }
     }
 

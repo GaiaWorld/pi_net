@@ -223,7 +223,7 @@ impl WriteBufferPool {
         self.ready.len()
     }
 
-    //分配一个空闲的写缓冲
+    //线程安全的分配一个空闲的写缓冲
     pub fn alloc(&self) -> Result<Option<WriteBuffer>> {
         match self.frees.try_recv() {
             Ok(free) => {

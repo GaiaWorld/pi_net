@@ -55,7 +55,7 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for WebsocketListener<S, H> {
         let future = async move {
             if let SocketStatus::Connected(Err(e)) = status {
                 //Tcp连接失败
-                handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket connect failed, reason: {:?}", e))));
+                handle.close(Err(Error::new(ErrorKind::Other, format!("websocket connect failed, reason: {:?}", e))));
                 return;
             }
 
@@ -71,7 +71,7 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for WebsocketListener<S, H> {
         let future = async move {
             if let SocketStatus::Readed(Err(e)) = status {
                 //Tcp读数据失败
-                handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket read failed, reason: {:?}", e))));
+                handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read failed, reason: {:?}", e))));
                 return;
             }
 
@@ -84,7 +84,7 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for WebsocketListener<S, H> {
         let future = async move {
             if let SocketStatus::Writed(Err(e)) = status {
                 //Tcp写数据失败
-                handle.as_handle().as_ref().unwrap().borrow().close(Err(Error::new(ErrorKind::Other, format!("websocket write failed, reason: {:?}", e))));
+                handle.close(Err(Error::new(ErrorKind::Other, format!("websocket write failed, reason: {:?}", e))));
                 return;
             }
 

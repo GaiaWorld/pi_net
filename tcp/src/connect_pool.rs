@@ -164,9 +164,9 @@ fn handle_accepted<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut
             socket.set_uid(create_socket_uid(pool.uid, token)); //为注册成功的连接设置唯一id
             socket.set_write_buffer(pool.buffer.clone()); //为注册成功的连接绑定写缓冲池
             let socket_arc = Arc::new(RefCell::new(socket));
-            let weak = Arc::downgrade(&socket_arc);
-            socket_arc.borrow_mut().set_handle(weak.clone()); //设置连接句柄
-            pool.driver.as_ref().unwrap().get_adapter().connected(Ok(SocketHandle::new(weak))); //执行连接回调
+            socket_arc.borrow_mut().set_handle(&socket_arc); //设置连接句柄
+            let handle = socket_arc.borrow().get_handle();
+            pool.driver.as_ref().unwrap().get_adapter().connected(Ok(handle)); //执行连接回调
             entry.insert(socket_arc); //加入连接池上下文
         }
     }

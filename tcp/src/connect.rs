@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::sync::{Weak, Arc};
 use std::collections::VecDeque;
 use std::net::{Shutdown, SocketAddr};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::{Result, Error, ErrorKind, Read, Write};
 
 use iovec::IoVec;
@@ -13,7 +13,7 @@ use mio::{
     net::TcpStream
 };
 
-use crate::util::{pause, SocketContext};
+use crate::util::{pause, SocketReady, SocketContext};
 use crate::driver::{Socket, Stream, SocketHandle};
 use crate::buffer_pool::{ReadableView, WriteBufferHandle, WriteBufferPool};
 
@@ -182,62 +182,6 @@ impl WriteBuffer {
 }
 
 /*
-* Tcp连接就绪状态
-*/
-struct SocketReady(Arc<AtomicU8>);
-
-impl SocketReady {
-    //构建一个空的Tcp连接就绪状态
-    pub fn empty() -> Self {
-        SocketReady(Arc::new(AtomicU8::new(0)))
-    }
-
-    //获取当前就绪状态
-    pub fn get(&self) -> Ready {
-        match self.0.load(Ordering::SeqCst) {
-            1 => {
-                //可读
-                Ready::readable()
-            },
-            2 => {
-                //可写
-                Ready::writable()
-            },
-            3 => {
-                //可读写
-                Ready::readable() | Ready::writable()
-            },
-            _ => {
-                //空
-                Ready::empty()
-            },
-        }
-    }
-
-    //插入当前就绪状态
-    pub fn insert(&self, ready: Ready) {
-        if ready.is_readable() && ready.is_writable() {
-            self.0.fetch_or(3, Ordering::SeqCst);
-        } else if ready.is_readable() {
-            self.0.fetch_or(1, Ordering::SeqCst);
-        } else if ready.is_writable() {
-            self.0.fetch_or(2, Ordering::SeqCst);
-        }
-    }
-
-    //移除当前就绪状态
-    pub fn remove(&self, ready: Ready) {
-        if ready.is_readable() && ready.is_writable() {
-            self.0.fetch_xor(3, Ordering::SeqCst);
-        } else if ready.is_readable() {
-            self.0.fetch_xor(1, Ordering::SeqCst);
-        } else if ready.is_writable() {
-            self.0.fetch_xor(2, Ordering::SeqCst);
-        }
-    }
-}
-
-/*
 * Tcp连接
 */
 pub struct TcpSocket {
@@ -255,7 +199,7 @@ pub struct TcpSocket {
     read_buf:           Option<ReadBuffer>,                             //读缓冲
     write_buf:          Option<WriteBuffer>,                            //写缓冲
     flush:              bool,                                           //Tcp连接写刷新状态
-    closed:             AtomicBool,                                     //Tcp连接关闭状态
+    closed:             Arc<AtomicBool>,                                //Tcp连接关闭状态
     buffer_pool:        Option<Arc<WriteBufferPool>>,                   //Tcp连接写缓冲池
     handle:             Option<SocketHandle<TcpSocket>>,                //Tcp连接句柄
     context:            SocketContext,                                  //Tcp连接上下文
@@ -284,15 +228,15 @@ impl Stream for TcpSocket {
             read_buf: None,
             write_buf: None,
             flush: false,
-            closed: AtomicBool::new(false),
+            closed: Arc::new(AtomicBool::new(false)),
             buffer_pool: None,
             handle: None,
             context: SocketContext::empty(),
         }
     }
 
-    fn set_handle(&mut self, handle: Weak<RefCell<Self>>) {
-        self.handle = Some(SocketHandle::new(handle));
+    fn set_handle(&mut self, shared: &Arc<RefCell<Self>>) {
+        self.handle = Some(SocketHandle::new(shared));
     }
 
     fn get_stream(&self) -> &TcpStream {
@@ -409,6 +353,7 @@ impl Stream for TcpSocket {
             let write_pos = self.write_buf.as_ref().unwrap().write_pos;
 
             if let Some(s) = &shared {
+                //当前连接写缓冲区内有待发送数据，则准备发送
                 let mut len;
                 let mut pos = send_pos;
                 for buf in s.get_iovec() {
@@ -422,6 +367,10 @@ impl Stream for TcpSocket {
                     bufs.push(buf); //加入缓冲列表
                     pos = 0; //将位置设置为0，保证将后续缓冲区全部加入缓冲列表
                 }
+            } else {
+                //当前连接写缓冲区内没有待发送数据，则立即停止本次发送，取消当前流的可写事件的关注，并返回最近一次发送数据大小
+                self.ready.remove(Ready::writable());
+                return Ok(send_pos);
             }
 
             if bufs.len() == 0 {
@@ -453,10 +402,11 @@ impl Stream for TcpSocket {
                         }
                     }
 
-                    //已发送完当前写缓冲区内的数据，则完成本次发送，清理当前缓冲区并取消当前流的可写事件的关注
+                    //已发送完当前写缓冲区内的数据，则完成本次发送，清理当前写缓冲句柄，并取消当前流的可写事件的关注
+                    //继续发送当前连接写缓冲区内下一个写缓冲句柄
                     self.write_buf.as_mut().unwrap().remove();
                     self.ready.remove(Ready::writable());
-                    return Ok(len);
+                    continue;
                 },
                 Err(ref e) if e.kind() == ErrorKind::Interrupted => {
                     //在流内发送时中断，则继续尝试发送数据
@@ -523,10 +473,6 @@ impl Socket for TcpSocket {
         }
     }
 
-    fn clone_write_buffer(&self) -> Arc<WriteBufferPool> {
-        self.buffer_pool.as_ref().unwrap().clone()
-    }
-
     fn get_write_buffer(&self) -> &WriteBufferPool {
         self.buffer_pool.as_ref().unwrap().as_ref()
     }
@@ -575,7 +521,7 @@ impl Socket for TcpSocket {
         self.ready.insert(Ready::writable()); //设置当前连接需要关注可写事件
         if let Some(rouser) = &self.writable_rouser {
             if let Some(token) = self.token {
-                //唤醒连接，并通知连接需要发送数据，必须在异步写入缓冲区成功后，才唤醒
+                //唤醒连接，并通知连接需要发送数据
                 //因为异步写入缓冲区，且异步唤醒的原因，写缓冲区的数据可能会被上次唤醒所消耗，则出现多余的空唤醒
                 //但因为一定是先写入缓冲区完成后再唤醒，所以不会出现写缓冲区有数据，且没唤醒的情况
                 if let Err(e) = rouser.send((token, handle)) {
@@ -594,13 +540,13 @@ impl Socket for TcpSocket {
     }
 
     fn close(&self, reason: Result<()>) -> Result<()> {
-        if self.closed.load(Ordering::SeqCst) {
-            //已关闭，则忽略
+        //更新连接状态为已关闭
+        if self.closed.compare_and_swap(false, true, Ordering::SeqCst) {
+            //当前已关闭，则忽略
             return Ok(());
         }
 
-        //设置连接状态，并通知连接关闭
-        self.closed.store(true, Ordering::SeqCst);
+        //通知连接关闭
         if let Some(listener) = &self.close_listener {
             if let Some(token) = self.token {
                 if let Err(e) = listener.send((token, reason)) {
