@@ -158,6 +158,19 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                     p.decode_protocol(Self::new(handle.clone(), window_bits), context);
                 }
 
+                let connect = Self::new(handle.clone(), window_bits);
+                for _ in 0..3 {
+                    let mut buf = connect.alloc();
+                    buf.get_iolist_mut().push_back(Vec::from(context.get_frames()).into());
+                    if let Err(e) = connect.send(context.get_type(), buf) {
+                        println!("!!!> Send Failed, reason: {:?}", e);
+                    }
+                }
+                if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
+                    //继续读失败，则立即关闭连接
+                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read next frame failed, reason: {:?}", e))));
+                }
+
                 context.reset(); //重置当前连接的当前帧
                 return;
             } else if head.is_first() {

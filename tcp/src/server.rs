@@ -2,6 +2,7 @@ use std::mem;
 use std::task::Waker;
 use std::cell::RefCell;
 use std::rc::{Weak, Rc};
+use std::future::Future;
 use std::net::SocketAddr;
 use std::any::{Any, TypeId};
 use std::io::{Result, Error};
@@ -56,19 +57,19 @@ impl AsyncIOWait for AsyncWaitsHandle {
 /*
 * Tcp异步处理适配器
 */
-pub struct AsyncAdapter<S, A>
+pub struct AsyncAdapter<S, O>
     where S: Socket,
-          A: AsyncService<S, AsyncWaitsHandle>, {
-    waits:      AsyncWaits,                                 //Tcp连接待处理表
-    tasks:      RefCell<LocalQueue<LocalTask<()>, ()>>,     //Tcp连接任务队列
-    spawner:    Rc<LocalQueueSpawner<LocalTask<()>, ()>>,   //Tcp连接任务派发器
-    service:    A,                                          //Tcp连接异步服务
+          O: 'static, {
+    waits:      AsyncWaits,                                                                         //Tcp连接待处理表
+    tasks:      RefCell<LocalQueue<LocalTask<()>, ()>>,                                             //Tcp连接任务队列
+    spawner:    Rc<LocalQueueSpawner<LocalTask<()>, ()>>,                                           //Tcp连接任务派发器
+    service:    Box<AsyncService<S, AsyncWaitsHandle, Out = O, Future = BoxFuture<'static, O>>>,    //Tcp连接异步服务
     marker:     PhantomData<S>,
 }
 
-impl<S, A> SocketAdapter for AsyncAdapter<S, A>
+impl<S, O> SocketAdapter for AsyncAdapter<S, O>
     where S: Socket,
-          A: AsyncService<S, AsyncWaitsHandle>, {
+          O: 'static, {
     type Connect = S;
 
     fn connected(&self, result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) {
@@ -83,7 +84,7 @@ impl<S, A> SocketAdapter for AsyncAdapter<S, A>
             }
         };
 
-        async_run::<S, A>(&self.waits, &self.tasks, &self.spawner, &self.service, handle, SocketStatus::Connected(r));
+        async_run::<S, O>(&self.waits, &self.tasks, &self.spawner, &self.service, handle, SocketStatus::Connected(r));
     }
 
     fn readed(&self, result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) {
@@ -98,7 +99,7 @@ impl<S, A> SocketAdapter for AsyncAdapter<S, A>
             }
         };
 
-        async_run::<S, A>(&self.waits, &self.tasks, &self.spawner, &self.service, handle, SocketStatus::Readed(r));
+        async_run::<S, O>(&self.waits, &self.tasks, &self.spawner, &self.service, handle, SocketStatus::Readed(r));
     }
 
     fn writed(&self, result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) {
@@ -113,7 +114,7 @@ impl<S, A> SocketAdapter for AsyncAdapter<S, A>
             }
         };
 
-        async_run::<S, A>(&self.waits, &self.tasks, &self.spawner, &self.service, handle, SocketStatus::Writed(r));
+        async_run::<S, O>(&self.waits, &self.tasks, &self.spawner, &self.service, handle, SocketStatus::Writed(r));
     }
 
     fn closed(&self, result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) {
@@ -128,19 +129,19 @@ impl<S, A> SocketAdapter for AsyncAdapter<S, A>
             }
         };
 
-        async_run::<S, A>(&self.waits, &self.tasks, &self.spawner, &self.service, handle, SocketStatus::Closed(r));
+        async_run::<S, O>(&self.waits, &self.tasks, &self.spawner, &self.service, handle, SocketStatus::Closed(r));
     }
 }
 
 //运行异步任务
-fn async_run<S, A>(waits: &Rc<RefCell<HashMap<usize, Waker, FnvBuildHasher>>>,
+fn async_run<S, O>(waits: &Rc<RefCell<HashMap<usize, Waker, FnvBuildHasher>>>,
                    tasks: &RefCell<LocalQueue<LocalTask<()>, ()>>,
                    spawner: &Rc<LocalQueueSpawner<LocalTask<()>, ()>>,
-                   service: &A,
+                   service: &Box<AsyncService<S, AsyncWaitsHandle, Out = O, Future = BoxFuture<'static, O>>>,
                    handle: SocketHandle<S>,
                    status: SocketStatus)
     where S: Socket,
-          A: AsyncService<S, AsyncWaitsHandle>, {
+          O: 'static, {
     if let Some(socket) = handle.as_handle() {
         let id = socket.borrow().get_token().unwrap().0;
         //有效的Tcp连接
@@ -179,11 +180,11 @@ fn async_run<S, A>(waits: &Rc<RefCell<HashMap<usize, Waker, FnvBuildHasher>>>,
     }
 }
 
-impl<S, A> AsyncAdapter<S, A>
+impl<S, O> AsyncAdapter<S, O>
     where S: Socket,
-          A: AsyncService<S, AsyncWaitsHandle>, {
+          O: 'static, {
     //构建一个指定异步服务的Tcp异步处理适配器
-    pub fn with_service(service: A) -> Self {
+    pub fn with_service(service: Box<AsyncService<S, AsyncWaitsHandle, Out = O, Future = BoxFuture<'static, O>>>) -> Self {
         let queue = LocalQueue::with_capacity(256);
         let spawner = queue.get_spawner();
 

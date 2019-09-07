@@ -1,6 +1,5 @@
 use std::mem;
 use std::sync::{Weak, Arc};
-use std::marker::PhantomData;
 use std::io::{ErrorKind, Result, Error};
 use std::sync::atomic::{AtomicUsize, Ordering};
 

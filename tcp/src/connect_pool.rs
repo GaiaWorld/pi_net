@@ -14,7 +14,7 @@ use mio::{Events, Poll, Token};
 use crossbeam_channel::{Sender, Receiver, unbounded};
 
 use crate::buffer_pool::{WriteBufferHandle, WriteBufferPool};
-use crate::driver::{DEFAULT_TCP_IP_V6, Socket, Stream, SocketAdapter, SocketHandle, SocketOption, SocketConfig, SocketDriver};
+use crate::driver::{DEFAULT_TCP_IP_V6, Socket, Stream, SocketAdapter, SocketOption, SocketConfig, SocketDriver};
 
 /*
 * Tcp连接池

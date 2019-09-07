@@ -1,12 +1,11 @@
 use std::ops::Range;
 use std::cell::RefCell;
-use std::sync::{Weak, Arc};
+use std::sync::Arc;
 use std::collections::VecDeque;
-use std::net::{Shutdown, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::{Result, Error, ErrorKind, Read, Write};
 
-use iovec::IoVec;
 use crossbeam_channel::Sender;
 use mio::{
     PollOpt, Token, Ready,

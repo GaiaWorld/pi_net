@@ -9,9 +9,8 @@ use std::collections::HashMap;
 use std::result::Result as GenResult;
 use std::task::{Context, Poll, Waker};
 use std::io::{Error, Result, ErrorKind};
-use std::net::{Shutdown, SocketAddr, IpAddr, Ipv6Addr, Ipv4Addr};
+use std::net::{SocketAddr, IpAddr, Ipv6Addr, Ipv4Addr};
 
-use iovec::IoVec;
 use fnv::FnvBuildHasher;
 use crossbeam_channel::Sender;
 use mio::{
@@ -21,8 +20,7 @@ use mio::{
 
 use atom::Atom;
 
-use crate::{buffer_pool::{WriteBufferHandle, WriteBuffer, WriteBufferPool},
-            util::{SocketReady, SocketContext}};
+use crate::{buffer_pool::{WriteBufferHandle, WriteBuffer, WriteBufferPool}, util::SocketContext};
 
 /*
 * 默认的ipv4地址
@@ -207,7 +205,7 @@ pub trait AsyncServiceName {
 /*
 * Tcp连接异步服务
 */
-pub trait AsyncService<S: Socket, H: AsyncIOWait>: AsyncServiceName + 'static {
+pub trait AsyncService<S: Socket, H: AsyncIOWait>: 'static {
     type Out;
 
     //使用关联类型，以保证可以延迟到实现时实例化类型，同时使用关联约束，以保证同时支持静态分派和动态分派
@@ -224,6 +222,19 @@ pub trait AsyncService<S: Socket, H: AsyncIOWait>: AsyncServiceName + 'static {
 
     //异步处理已关闭
     fn handle_closed(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future;
+}
+
+/*
+* Tcp连接异步服务工厂
+*/
+pub trait AsyncServiceFactory: 'static {
+    type Connect: Socket;
+    type Waits: AsyncIOWait;
+    type Out;
+    type Future: Future<Output = Self::Out> + Send + 'static;
+
+    //获取异步服务实例
+    fn new_service(&self) -> Box<dyn AsyncService<Self::Connect, Self::Waits, Out = Self::Out, Future = Self::Future>>;
 }
 
 /*

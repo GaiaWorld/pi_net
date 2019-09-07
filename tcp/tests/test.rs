@@ -10,14 +10,15 @@ use std::thread;
 use std::net::Shutdown;
 use std::time::Duration;
 use std::any::{Any, TypeId};
+use std::marker::PhantomData;
 use std::collections::HashMap;
 
 use iovec::{MAX_LENGTH, IoVec};
 use futures::future::{FutureExt, BoxFuture};
 
 use tcp::connect::TcpSocket;
-use tcp::server::{AsyncAdapter, PortsAdapter, SocketListener};
-use tcp::driver::{SocketConfig, Socket, AsyncIOWait, SocketAdapterFactory, AsyncService, AsyncServiceName, SocketStatus, SocketHandle, AsyncReadTask, AsyncWriteTask};
+use tcp::server::{AsyncWaitsHandle, AsyncAdapter, PortsAdapter, SocketListener};
+use tcp::driver::{SocketConfig, Socket, AsyncIOWait, SocketAdapterFactory, AsyncServiceName, AsyncService, AsyncServiceFactory, SocketStatus, SocketHandle, AsyncReadTask, AsyncWriteTask};
 use tcp::buffer_pool::WriteBufferPool;
 use tcp::util::{IoBytes, IoList};
 
@@ -158,38 +159,48 @@ impl AsyncServiceName for TestService {
     }
 }
 
-pub struct TestFactory {
-    ports: HashMap<u16, String>,
-}
+struct TestServiceFactory<S: Socket>(PhantomData<S>);
 
-impl SocketAdapterFactory for TestFactory {
-    type Connect = TcpSocket;
-    type Adapter = PortsAdapter<TcpSocket>;
+impl<S: Socket> AsyncServiceFactory for TestServiceFactory<S> {
+    type Connect = S;
+    type Waits = AsyncWaitsHandle;
+    type Out = ();
+    type Future = BoxFuture<'static, Self::Out>;
 
-    fn instance(&self) -> Self::Adapter {
-        let mut adapter = PortsAdapter::<TcpSocket>::new();
-        for (port, type_name) in &self.ports {
-            match type_name {
-                name if name == &TestService::service_name() => {
-                    adapter.set_adapter(port.clone(), Box::new(AsyncAdapter::<TcpSocket, _>::with_service(TestService)));
-                },
-                _ => (),
-            }
-        }
-
-        adapter
+    fn new_service(&self) -> Box<dyn AsyncService<Self::Connect, Self::Waits, Out = Self::Out, Future = Self::Future>> {
+        Box::new(TestService)
     }
 }
 
-impl TestFactory {
+pub struct TestFactory<S> {
+    ports: HashMap<u16, Box<dyn AsyncServiceFactory<Connect = S, Waits = AsyncWaitsHandle, Out = (), Future = BoxFuture<'static, ()>>>>,
+}
+
+impl<S: Socket> SocketAdapterFactory for TestFactory<S> {
+    type Connect = S;
+    type Adapter = PortsAdapter<S>;
+
+    fn instance(&self) -> Self::Adapter {
+        let mut ports_adapter = PortsAdapter::<S>::new();
+        for (port, factory) in &self.ports {
+            let service = factory.new_service();
+            let async_adapter = Box::new(AsyncAdapter::<S, ()>::with_service(service));
+            ports_adapter.set_adapter(port.clone(), async_adapter);
+        }
+
+        ports_adapter
+    }
+}
+
+impl<S: Socket> TestFactory<S> {
     fn new() -> Self {
         TestFactory {
             ports: HashMap::new(),
         }
     }
 
-    fn set<T: AsyncServiceName>(&mut self, port: u16) {
-        self.ports.insert(port, T::service_name());
+    fn set(&mut self, port: u16, factory: Box<dyn AsyncServiceFactory<Connect = S, Waits = AsyncWaitsHandle, Out = (), Future = BoxFuture<'static, ()>>>) {
+        self.ports.insert(port, factory);
     }
 }
 
@@ -197,8 +208,8 @@ impl TestFactory {
 fn test_socket_server() {
     let config = SocketConfig::new("0.0.0.0", &[38080]);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
-    let mut factory = TestFactory::new();
-    factory.set::<TestService>(38080);
+    let mut factory = TestFactory::<TcpSocket>::new();
+    factory.set(38080, Box::new(TestServiceFactory::<TcpSocket>(PhantomData)));
     match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Error, reason: {:?}", e);
@@ -215,8 +226,8 @@ fn test_socket_server() {
 fn test_socket_server_ipv6() {
     let config = SocketConfig::new("fe80::c0bc:ecf0:e91:2b3a", &[38080]);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
-    let mut factory = TestFactory::new();
-    factory.set::<TestService>(38080);
+    let mut factory = TestFactory::<TcpSocket>::new();
+    factory.set(38080, Box::new(TestServiceFactory::<TcpSocket>(PhantomData)));
     match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv6 Address Error, reason: {:?}", e);
@@ -233,8 +244,8 @@ fn test_socket_server_ipv6() {
 fn test_socket_server_shared() {
     let config = SocketConfig::new("::", &[38080]);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
-    let mut factory = TestFactory::new();
-    factory.set::<TestService>(38080);
+    let mut factory = TestFactory::<TcpSocket>::new();
+    factory.set(38080, Box::new(TestServiceFactory::<TcpSocket>(PhantomData)));
     match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 & Ipv6 Address Error, reason: {:?}", e);
