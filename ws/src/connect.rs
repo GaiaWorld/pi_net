@@ -156,9 +156,9 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                 context.set_type(head.get_type());
                 if let Some(p) = protocol {
                     p.decode_protocol(Self::new(handle.clone(), window_bits), context);
-                    context.reset(); //执行协议读后，需要重置当前连接的当前帧
                 }
 
+                context.reset(); //重置当前连接的当前帧
                 return;
             } else if head.is_first() {
                 //数据帧，当前是首帧，则设置帧类型，并继续读后续帧
@@ -182,9 +182,9 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                 //数据帧，当前是结束帧，则开始消息处理
                 if let Some(p) = protocol {
                     p.decode_protocol(Self::new(handle.clone(), window_bits), context);
-                    context.reset(); //执行协议读后，需要重置当前连接的当前帧
                 }
 
+                context.reset(); //重置当前连接的当前帧
                 return;
             } else {
                 //控制帧，则设置帧类型
@@ -213,7 +213,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                 if let Some(context) = h.as_mut() {
                     //修改当前连接为正在关闭中，并立即释放可写上下文
                     context.set_status(WsStatus::Closing);
-                    context.reset(); //执行协议读后，需要重置当前连接的当前帧
+                    context.reset(); //重置当前连接的当前帧
                 } else {
                     //无法获取上下文的可写引用，则表示有异常，立即关闭连接
                     handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handle close frame failed, reason: invalid writable context"))));
@@ -235,7 +235,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
             },
             WsFrameType::Ping => {
                 if let Some(context) = h.as_mut() {
-                    context.reset(); //执行协议读后，需要重置当前连接的当前帧
+                    context.reset(); //重置当前连接的当前帧
                 } else {
                     //无法获取上下文的可写引用，则表示有异常，立即关闭连接
                     handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handle ping frame failed, reason: invalid writable context"))));
