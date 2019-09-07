@@ -104,17 +104,17 @@ pub trait Stream: Sized + Send + 'static {
 * Tcp连接
 */
 pub trait Socket: Sized + Send + 'static {
-    //是否已关闭Tcp连接
+    //线程安全的判断是否已关闭Tcp连接
     fn is_closed(&self) -> bool;
 
-    //是否写后立即刷新连接
+    //线程安全的判断是否写后立即刷新连接
     fn is_flush(&self) -> bool;
 
     //获取当前Tcp连接的句柄
     fn get_handle(&self) -> SocketHandle<Self>;
 
-    //设置是否写后立即刷新连接
-    fn set_flush(&mut self, flush: bool);
+    //线程安全的设置是否写后立即刷新连接
+    fn set_flush(&self, flush: bool);
 
     //获取连接本地地址
     fn get_local(&self) -> &SocketAddr;
@@ -261,6 +261,27 @@ impl<S: Socket> SocketHandle<S> {
     //获取Tcp连接可写句柄
     pub fn as_handle(&self) -> Option<Arc<RefCell<S>>> {
         self.1.upgrade()
+    }
+
+    //线程安全的判断连接是否关闭
+    pub fn is_closed(&self) -> bool {
+        unsafe {
+            (&*self.0).is_closed()
+        }
+    }
+
+    //线程安全的判断是否写后立即刷新连接
+    pub fn is_flush(&self) -> bool {
+        unsafe {
+            (&*self.0).is_flush()
+        }
+    }
+
+    //线程安全的设置是否写后立即刷新连接
+    pub fn set_flush(&self, flush: bool) {
+        unsafe {
+            (&*self.0).set_flush(flush);
+        }
     }
 
     //线程安全的分配写缓冲

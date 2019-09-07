@@ -43,6 +43,21 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         }
     }
 
+    //线程安全的判断连接是否关闭
+    pub fn is_closed(&self) -> bool {
+        self.socket.is_closed()
+    }
+
+    //线程安全的判断是否写后立即刷新连接
+    pub fn is_flush(&self) -> bool {
+        self.socket.is_flush()
+    }
+
+    //线程安全的设置是否写后立即刷新连接
+    pub fn set_flush(&self, flush: bool) {
+        self.socket.set_flush(flush);
+    }
+
     //线程安全的分配一个用于发送的写缓冲区
     pub fn alloc(&self) -> WriteBuffer {
         self.socket.alloc().ok().unwrap().unwrap()

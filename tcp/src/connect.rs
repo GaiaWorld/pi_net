@@ -198,7 +198,7 @@ pub struct TcpSocket {
     readable_size:      usize,                                          //本次可读字节数
     read_buf:           Option<ReadBuffer>,                             //读缓冲
     write_buf:          Option<WriteBuffer>,                            //写缓冲
-    flush:              bool,                                           //Tcp连接写刷新状态
+    flush:              Arc<AtomicBool>,                                //Tcp连接写刷新状态
     closed:             Arc<AtomicBool>,                                //Tcp连接关闭状态
     buffer_pool:        Option<Arc<WriteBufferPool>>,                   //Tcp连接写缓冲池
     handle:             Option<SocketHandle<TcpSocket>>,                //Tcp连接句柄
@@ -227,7 +227,7 @@ impl Stream for TcpSocket {
             readable_size: 0,
             read_buf: None,
             write_buf: None,
-            flush: false,
+            flush: Arc::new(AtomicBool::new(false)),
             closed: Arc::new(AtomicBool::new(false)),
             buffer_pool: None,
             handle: None,
@@ -397,7 +397,7 @@ impl Stream for TcpSocket {
                         continue;
                     }
 
-                    if self.flush {
+                    if self.is_flush() {
                         //刷新流缓冲区，保证数据被立即发送
                         if let Err(e) = self.stream.flush() {
                             println!("!!!> Tcp Stream Flush Failed, reason: {:?}", e);
@@ -430,15 +430,15 @@ impl Socket for TcpSocket {
     }
 
     fn is_flush(&self) -> bool {
-        self.flush
+        self.flush.load(Ordering::SeqCst)
     }
 
     fn get_handle(&self) -> SocketHandle<Self> {
         self.handle.as_ref().unwrap().clone()
     }
 
-    fn set_flush(&mut self, flush: bool) {
-        self.flush = flush;
+    fn set_flush(&self, flush: bool) {
+        self.flush.store(flush, Ordering::SeqCst);
     }
 
     fn get_local(&self) -> &SocketAddr {
@@ -486,7 +486,6 @@ impl Socket for TcpSocket {
         }
 
         self.read_buf.as_mut().unwrap().ready(size); //为读就绪准备读缓冲区
-        self.ready.remove(Ready::writable()); //取消当前连接对可写事件的关注
         self.ready.insert(Ready::readable()); //设置当前连接需要关注可读事件
         self.readable_size = size;
         if let Some(rouser) = &self.readable_rouser {
@@ -513,7 +512,6 @@ impl Socket for TcpSocket {
         }
 
         //当前缓冲区没有未读的指定长度的可读数据，则需要通知连接读就绪，可以异步接收剩余的指定长度的数据
-        self.ready.remove(Ready::writable()); //取消当前连接对可写事件的关注
         self.ready.insert(Ready::readable()); //设置当前连接需要关注可读事件
         self.readable_size = size;
         if let Some(rouser) = &self.readable_rouser {
@@ -534,7 +532,6 @@ impl Socket for TcpSocket {
             return Err(Error::new(ErrorKind::BrokenPipe, "socket closed"));
         }
 
-        self.ready.remove(Ready::readable()); //取消当前连接对可读事件的关注
         self.ready.insert(Ready::writable()); //设置当前连接需要关注可写事件
         if let Some(rouser) = &self.writable_rouser {
             if let Some(token) = self.token {
