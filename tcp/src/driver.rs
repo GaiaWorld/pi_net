@@ -195,14 +195,6 @@ pub trait AsyncIOWait: Clone + Send + Sync + 'static {
 }
 
 /*
-* Tcp连接异步服务名
-*/
-pub trait AsyncServiceName {
-    //获取Tcp连接异步服务名
-    fn service_name() -> String;
-}
-
-/*
 * Tcp连接异步服务
 */
 pub trait AsyncService<S: Socket, H: AsyncIOWait>: 'static {

@@ -1,13 +1,9 @@
 use std::thread;
 use std::time::Duration;
-use std::marker::PhantomData;
-use std::collections::HashMap;
-
-use futures::future::{FutureExt, BoxFuture};
 
 use tcp::connect::TcpSocket;
-use tcp::server::{AsyncWaitsHandle, AsyncAdapter, PortsAdapter, AsyncPortsFactory, SocketListener};
-use tcp::driver::{Socket, SocketConfig, SocketAdapterFactory, AsyncServiceName, AsyncService, AsyncServiceFactory};
+use tcp::server::{AsyncPortsFactory, SocketListener};
+use tcp::driver::{SocketConfig, AsyncServiceFactory};
 use tcp::buffer_pool::WriteBufferPool;
 
 use ws::server::WebsocketListenerFactory;

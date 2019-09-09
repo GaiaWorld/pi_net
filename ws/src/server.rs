@@ -14,7 +14,7 @@ use httparse::{EMPTY_HEADER, Request};
 use futures::future::{FutureExt, BoxFuture};
 
 use tcp::{server::AsyncWaitsHandle,
-          driver::{Socket, AsyncIOWait, AsyncServiceName,
+          driver::{Socket, AsyncIOWait,
                   AsyncService, AsyncServiceFactory, SocketStatus,
                   SocketHandle, AsyncReadTask, AsyncWriteTask},
           util::{IoBytes, SocketContext}};
@@ -39,12 +39,6 @@ impl<S: Socket, H: AsyncIOWait> Default for WebsocketListener<S, H> {
             acceptor: WsAcceptor::default(),
             protocol: None,
         }
-    }
-}
-
-impl<S: Socket, H: AsyncIOWait> AsyncServiceName for WebsocketListener<S, H> {
-    fn service_name() -> String {
-        "WebsocketListener".to_string()
     }
 }
 
