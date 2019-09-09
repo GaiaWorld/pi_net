@@ -20,16 +20,16 @@ impl<S: Socket, H: AsyncIOWait> ChildProtocol<S, H> for TestChildProtocol {
         "echo"
     }
 
-    fn decode_protocol(&self, connect: WsSocket<S, H>, context: &mut WsContext) {
+    fn decode_protocol(&self, connect: WsSocket<S, H>, context: &mut WsContext) -> Result<()> {
         for _ in 0..3 {
             let mut buf = connect.alloc();
             buf.get_iolist_mut().push_back(context.to_vec().into());
             if let Err(e) = connect.send(context.get_type(), buf) {
-                println!("!!!> Send Failed, reason: {:?}", e);
+                return Err(e);
             }
         }
 
-        connect.read_continue();
+        Ok(())
     }
 }
 

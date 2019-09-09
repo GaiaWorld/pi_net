@@ -73,14 +73,6 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         self.socket.get_remote()
     }
 
-    //继续读下个Websocket消息
-    pub fn read_continue(&self) {
-        if let Err(e) = self.socket.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
-            //继续读失败，则立即关闭连接
-            self.socket.close(Err(Error::new(ErrorKind::Other, format!("websocket read next message failed, reason: {:?}", e))));
-        }
-    }
-
     //线程安全的分配一个用于发送的写缓冲区
     pub fn alloc(&self) -> WriteBuffer {
         self.socket.alloc().ok().unwrap().unwrap()
@@ -182,7 +174,13 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                     handle.close(Err(e));
                 }
 
-                context.reset(); //重置当前连接的当前帧
+                //重置当前连接的当前帧，并继续读后续消息
+                context.reset();
+                if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
+                    //继续读失败，则立即关闭连接
+                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read next message failed, reason: {:?}", e))));
+                }
+
                 return;
             } else if head.is_first() {
                 //数据帧，当前是首帧，则设置帧类型，并继续读后续帧
@@ -209,7 +207,13 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                     handle.close(Err(e));
                 }
 
-                context.reset(); //重置当前连接的当前帧
+                //重置当前连接的当前帧，并继续读后续消息
+                context.reset();
+                if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
+                    //继续读失败，则立即关闭连接
+                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read next message failed, reason: {:?}", e))));
+                }
+
                 return;
             } else {
                 //控制帧，则设置帧类型
