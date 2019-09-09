@@ -64,7 +64,7 @@ fn send_packet<S: Socket, E: MqttSession>(protocol: &WsMqttProtocol<E>, connect:
 fn handle_connect<S: Socket, E: MqttSession>(protocol: &WsMqttProtocol<E>, connect: &WsSocket<S, AsyncWaitsHandle>, packet: Connect) -> Result<()> {
     if let Protocol::MQTT(level) = packet.protocol {
         if level != WsMqttProtocol::<E>::LEVEL {
-            //协议等级不匹配，则回应，并关闭Ws连接
+            //协议等级不匹配，则回应，并返回错误原因
             let mut session_present = true;
             if packet.clean_session {
                 //如果需要在关闭连接后清理会话，则重置保留标记
@@ -81,11 +81,11 @@ fn handle_connect<S: Socket, E: MqttSession>(protocol: &WsMqttProtocol<E>, conne
             };
 
             if let Err(e) = send_packet(protocol, connect, &Packet::Connack(ack)) {
-                //发送回应失败，则立即中止连接请求
-                return Err(e);
+                //发送回应失败，则立即返回错误原因
+                return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt send failed by connect, reason: {:?}", e)));
             }
 
-            return connect.close(Err(Error::new(ErrorKind::ConnectionAborted, "mqtt connect failed, reason: invalid protocol version")));
+            return Err(Error::new(ErrorKind::ConnectionAborted, "mqtt connect failed, reason: invalid protocol version"));
         }
     }
 
