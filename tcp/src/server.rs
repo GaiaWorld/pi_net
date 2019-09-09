@@ -22,9 +22,7 @@ use r#async::{AsyncSpawner, AsyncExecutor,
 use crate::acceptor::Acceptor;
 use crate::connect_pool::TcpSocketPool;
 use crate::buffer_pool::WriteBufferPool;
-use crate::driver::{Socket, Stream, SocketAdapter,
-                    SocketAdapterFactory, AsyncIOWait, AsyncService,
-                    SocketStatus, SocketHandle, SocketConfig, SocketDriver};
+use crate::driver::{Socket, Stream, SocketAdapter, SocketAdapterFactory, AsyncIOWait, AsyncService, SocketStatus, SocketHandle, SocketConfig, SocketDriver, AsyncServiceFactory};
 
 /*
 * Tcp异步任务等待表
@@ -315,6 +313,59 @@ impl<S: Socket> PortsAdapter<S> {
 }
 
 /*
+* Tcp端口异步服务工厂
+*/
+pub struct AsyncPortsFactory<S: Socket> {
+    ports_factory: HashMap<u16, Box<dyn AsyncServiceFactory<Connect = S, Waits = AsyncWaitsHandle, Out = (), Future = BoxFuture<'static, ()>>>, FnvBuildHasher>,   //端口异步服务工厂表
+}
+
+impl<S: Socket> SocketAdapterFactory for AsyncPortsFactory<S> {
+    type Connect = S;
+    type Adapter = PortsAdapter<S>;
+
+    fn get_instance(&self) -> Self::Adapter {
+        let mut ports_adapter = Self::Adapter::new();
+
+        for (port, factory) in &self.ports_factory {
+            let service = factory.new_service();
+            let async_adapter = Box::new(AsyncAdapter::<S, ()>::with_service(service));
+            ports_adapter.set_adapter(port.clone(), async_adapter);
+        }
+
+        ports_adapter
+    }
+}
+
+impl<S: Socket> AsyncPortsFactory<S> {
+    //构建Tcp端口异步服务工厂
+    pub fn new() -> Self {
+        AsyncPortsFactory {
+            ports_factory: HashMap::with_hasher(FnvBuildHasher::default()),
+        }
+    }
+
+    //获取绑定端口的数量
+    pub fn size(&self) -> usize {
+        self.ports_factory.len()
+    }
+
+    //是否绑定了指定端口的异步服务工厂
+    pub fn is_bind(&self, port: u16) -> bool {
+        self.ports_factory.contains_key(&port)
+    }
+
+    //为指定端口绑定指定的异步服务工厂，返回上次绑定的异步服务工厂
+    pub fn bind(&mut self, port: u16, factory: Box<dyn AsyncServiceFactory<Connect = S, Waits = AsyncWaitsHandle, Out = (), Future = BoxFuture<'static, ()>>>) -> Option<Box<dyn AsyncServiceFactory<Connect = S, Waits = AsyncWaitsHandle, Out = (), Future = BoxFuture<'static, ()>>>> {
+        self.ports_factory.insert(port, factory)
+    }
+
+    //为指定端口解绑定指定的异步服务工厂
+    pub fn unbind(&mut self, port: u16) -> Option<Box<dyn AsyncServiceFactory<Connect = S, Waits = AsyncWaitsHandle, Out = (), Future = BoxFuture<'static, ()>>>> {
+        self.ports_factory.remove(&port)
+    }
+}
+
+/*
 * Tcp连接监听器
 */
 pub struct SocketListener<S: Socket + Stream, F: SocketAdapterFactory<Connect = S, Adapter = PortsAdapter<S>>> {
@@ -373,7 +424,7 @@ impl<S, F> SocketListener<S, F>
         //为所有连接池，设置不同端口适配器的连接驱动，并启动所有连接池
         for pool in pools {
             let mut driver_clone = driver.clone();
-            driver_clone.set_adapter(factory.instance()); //设置连接驱动的端口适配器
+            driver_clone.set_adapter(factory.get_instance()); //设置连接驱动的端口适配器
             if let Err(e) = pool.run(driver_clone, stack_size, event_size, timeout) {
                 //启动连接池失败
                 return Err(e);

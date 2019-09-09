@@ -183,7 +183,7 @@ pub trait SocketAdapterFactory {
     type Adapter: SocketAdapter<Connect = Self::Connect>;
 
     //获取Tcp连接适配器实例
-    fn instance(&self) -> Self::Adapter;
+    fn get_instance(&self) -> Self::Adapter;
 }
 
 /*

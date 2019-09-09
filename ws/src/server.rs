@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::cell::RefCell;
 use std::net::Shutdown;
 use std::str::from_utf8;
+use std::marker::PhantomData;
 use std::collections::HashMap;
 use std::result::Result as GenResult;
 use std::io::{ErrorKind, Result, Error};
@@ -12,8 +13,11 @@ use http::{HttpTryFrom, Response};
 use httparse::{EMPTY_HEADER, Request};
 use futures::future::{FutureExt, BoxFuture};
 
-use tcp::util::{IoBytes, SocketContext};
-use tcp::driver::{Socket, AsyncIOWait, AsyncServiceName, AsyncService, SocketStatus, SocketHandle, AsyncReadTask, AsyncWriteTask};
+use tcp::{server::AsyncWaitsHandle,
+          driver::{Socket, AsyncIOWait, AsyncServiceName,
+                  AsyncService, AsyncServiceFactory, SocketStatus,
+                  SocketHandle, AsyncReadTask, AsyncWriteTask},
+          util::{IoBytes, SocketContext}};
 
 use crate::{acceptor::{MAX_HANDSHAKE_HTTP_HEADER_LIMIT, WsAcceptor},
             connect::WsSocket,
@@ -100,5 +104,28 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for WebsocketListener<S, H> {
             }
         };
         future.boxed()
+    }
+}
+
+/*
+* Websocket连接监听器工厂
+*/
+pub struct WebsocketListenerFactory<S: Socket>(PhantomData<S>);
+
+impl<S: Socket> AsyncServiceFactory for WebsocketListenerFactory<S> {
+    type Connect = S;
+    type Waits = AsyncWaitsHandle;
+    type Out = ();
+    type Future = BoxFuture<'static, Self::Out>;
+
+    fn new_service(&self) -> Box<dyn AsyncService<Self::Connect, Self::Waits, Out = Self::Out, Future = Self::Future>> {
+        Box::new(WebsocketListener::<S, Self::Waits>::default())
+    }
+}
+
+impl<S: Socket> WebsocketListenerFactory<S> {
+    //构建Websocket连接监听器工厂
+    pub fn new() -> Self {
+        WebsocketListenerFactory(PhantomData)
     }
 }
