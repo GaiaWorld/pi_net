@@ -1,6 +1,8 @@
 use std::sync::Arc;
+use std::io::Result;
 use std::collections::HashMap;
 
+use bytes::BufMut;
 use fnv::FnvBuildHasher;
 
 use tcp::{driver::{Socket, AsyncIOWait}, buffer_pool::WriteBuffer};
@@ -16,7 +18,18 @@ pub trait ChildProtocol<S: Socket, H: AsyncIOWait>: Send + Sync + 'static {
     fn protocol_name(&self) -> &str;
 
     //解码子协议
-    fn decode_protocol(&self, connect: WsSocket<S, H>, context: &mut WsContext);
+    fn decode_protocol(&self, connect: WsSocket<S, H>, context: &mut WsContext) -> Result<()>;
+}
+
+/*
+* Websocket子协议工厂
+*/
+pub trait ChildProtocolFactory: 'static {
+    type Connect: Socket;
+    type Waits: AsyncIOWait;
+
+    //获取异步服务实例
+    fn new_protocol(&self) -> Arc<dyn ChildProtocol<Self::Connect, Self::Waits>>;
 }
 
 /*
@@ -98,7 +111,7 @@ impl WsFrameType {
 pub struct WsContext {
     status:         WsStatus,       //当前连接状态
     r#type:         WsFrameType,    //帧类型
-    frames:         Vec<Vec<u8>>,   //Websocket帧缓冲
+    frames:         Vec<u8>,        //Websocket帧缓冲
 }
 
 unsafe impl Send for WsContext {}
@@ -108,7 +121,7 @@ impl Default for WsContext {
         WsContext {
             status: WsStatus::HandShaking,
             r#type: WsFrameType::Undefined,
-            frames: Vec::with_capacity(3),
+            frames: Vec::with_capacity(32),
         }
     }
 }
@@ -166,19 +179,29 @@ impl WsContext {
         self.r#type = frame_type.into();
     }
 
-    //弹出帧栈
-    pub fn pop(&mut self) -> Option<Vec<u8>> {
-        self.frames.pop()
+    //获取帧缓冲的只读引用
+    pub fn as_buf(&self) -> &[u8] {
+        self.frames.as_slice()
     }
 
-    //压入帧栈
-    pub fn push(&mut self, frame: Vec<u8>) {
-        self.frames.push(frame);
+    //获取帧缓冲的可写引用
+    pub fn as_buf_mut(&mut self) -> &mut [u8] {
+        self.frames.as_mut_slice()
     }
 
     //获取帧缓冲数据
-    pub fn get_frames(&self) -> Vec<u8> {
-        self.frames.concat()
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.frames.to_vec()
+    }
+
+    //将引用追加到帧缓冲
+    pub fn extend_from_slice(&mut self, frame: &[u8]) {
+        self.frames.put(frame);
+    }
+
+    //将向量增加到帧缓冲
+    pub fn append(&mut self, frame: Vec<u8>) {
+        self.frames.put(frame);
     }
 
     //重置帧类型和帧缓冲

@@ -1,7 +1,7 @@
 use std::mem;
 use std::sync::Arc;
-use std::net::Shutdown;
 use std::marker::PhantomData;
+use std::net::{SocketAddr, Shutdown};
 use std::io::{ErrorKind, Result, Error};
 
 use mio::Token;
@@ -58,6 +58,29 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         self.socket.set_flush(flush);
     }
 
+    //线程安全的获取Tcp连接令牌
+    pub fn get_token(&self) -> Option<&Token> {
+        self.socket.get_token()
+    }
+
+    //线程安全的获取Tcp连接的本地地址
+    pub fn get_local(&self) -> &SocketAddr {
+        self.socket.get_local()
+    }
+
+    //线程安全的获取Tcp连接的远端地址
+    pub fn get_remote(&self) -> &SocketAddr {
+        self.socket.get_remote()
+    }
+
+    //继续读下个Websocket消息
+    pub fn read_continue(&self) {
+        if let Err(e) = self.socket.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
+            //继续读失败，则立即关闭连接
+            self.socket.close(Err(Error::new(ErrorKind::Other, format!("websocket read next message failed, reason: {:?}", e))));
+        }
+    }
+
     //线程安全的分配一个用于发送的写缓冲区
     pub fn alloc(&self) -> WriteBuffer {
         self.socket.alloc().ok().unwrap().unwrap()
@@ -85,7 +108,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
     //线程安全的异步发送指定负载
     pub fn send(&self, msg_type: WsFrameType, payload: WriteBuffer) -> Result<()> {
-        if let Some(mut buf) = WsFrame::<S, H>::single_with_window_bits_and_payload(msg_type, self.window_bits, payload).into_write_buf() {
+        if let Some(buf) = WsFrame::<S, H>::single_with_window_bits_and_payload(msg_type, self.window_bits, payload).into_write_buf() {
             if let Some(handle) = buf.finish() {
                 return self.socket.write(handle);
             }
@@ -132,7 +155,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
     pub async fn handle_readed(handle: &SocketHandle<S>,
                                waits: &H,
                                window_bits: u8,
-                               protocol: Option<Arc<dyn ChildProtocol<S, H>>>) {
+                               protocol: Arc<dyn ChildProtocol<S, H>>) {
         let mut h = handle.as_handle().unwrap().as_ref().borrow_mut().get_context().get::<WsContext>().unwrap();
         if h.as_ref().is_closed() || h.as_ref().is_closing() {
             //当前连接已关闭或正在关闭中，则忽略所有读
@@ -147,28 +170,16 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
             //根据帧类型，处理帧数据
             if let WsPayload::Raw(payload) = frame.payload() {
                 //当前帧有祼负载，则缓冲负载
-                context.push(payload);
+                context.append(payload);
             }
 
             let head = frame.get_head();
             if head.is_single() {
                 //数据帧，且只有单帧，则设置帧类型，并开始消息处理
                 context.set_type(head.get_type());
-                if let Some(p) = protocol {
-                    p.decode_protocol(Self::new(handle.clone(), window_bits), context);
-                }
-
-                let connect = Self::new(handle.clone(), window_bits);
-                for _ in 0..3 {
-                    let mut buf = connect.alloc();
-                    buf.get_iolist_mut().push_back(Vec::from(context.get_frames()).into());
-                    if let Err(e) = connect.send(context.get_type(), buf) {
-                        println!("!!!> Send Failed, reason: {:?}", e);
-                    }
-                }
-                if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
-                    //继续读失败，则立即关闭连接
-                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read next frame failed, reason: {:?}", e))));
+                if let Err(e) = protocol.decode_protocol(Self::new(handle.clone(), window_bits), context) {
+                    //协议处理失败，则立即关闭当前连接
+                    handle.close(Err(e));
                 }
 
                 context.reset(); //重置当前连接的当前帧
@@ -193,8 +204,9 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                 return;
             } else if head.is_finish() {
                 //数据帧，当前是结束帧，则开始消息处理
-                if let Some(p) = protocol {
-                    p.decode_protocol(Self::new(handle.clone(), window_bits), context);
+                if let Err(e) = protocol.decode_protocol(Self::new(handle.clone(), window_bits), context) {
+                    //协议处理失败，则立即关闭当前连接
+                    handle.close(Err(e));
                 }
 
                 context.reset(); //重置当前连接的当前帧
@@ -219,55 +231,57 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                             window_bits: u8,
                             mut h: ContextHandle<WsContext>) {
         let frame_type = h.as_ref().get_type();
-        let bin = h.as_ref().get_frames();
         match frame_type {
             wft@WsFrameType::Close => {
                 //处理关闭帧
                 if let Some(context) = h.as_mut() {
-                    //修改当前连接为正在关闭中，并立即释放可写上下文
+                    //修改当前连接为正在关闭中
                     context.set_status(WsStatus::Closing);
+
+                    //填充负载
+                    let payload;
+                    let bin = context.as_buf();
+                    if bin.len() == 0 {
+                        //没有关闭状态码
+                        payload = None;
+                    } else {
+                        //有关闭状态码
+                        payload = Some(vec![bin[0], bin[1]]);
+                    }
+
+                    //响应关闭控制帧，并不再继续读连接的数据
+                    WsSocket::resp_control(handle, waits, window_bits, wft, payload).await;
+
                     context.reset(); //重置当前连接的当前帧
                 } else {
                     //无法获取上下文的可写引用，则表示有异常，立即关闭连接
                     handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handle close frame failed, reason: invalid writable context"))));
                     return;
                 }
-
-                //填充负载
-                let payload;
-                if bin.len() == 0 {
-                    //没有关闭状态码
-                    payload = None;
-                } else {
-                    //有关闭状态码
-                    payload = Some(vec![bin[0], bin[1]]);
-                }
-
-                //响应关闭控制帧，并不再继续读连接的数据
-                WsSocket::resp_control(handle, waits, window_bits, wft, payload).await;
             },
             WsFrameType::Ping => {
                 if let Some(context) = h.as_mut() {
+                    //处理Ping帧
+                    let bin = context.as_buf();
+                    if bin.len() == 0 {
+                        //没有Ping负载，写入响应的Pong控制帧
+                        WsSocket::resp_control(handle, waits, window_bits, WsFrameType::Pong, None).await;
+                    } else {
+                        //有Ping负载，写入响应的Pong控制帧
+                        WsSocket::resp_control(handle, waits, window_bits, WsFrameType::Pong, Some(bin.to_vec())).await;
+                    }
+
+                    //继续读连接的数据
+                    if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
+                        //继续读失败，则立即关闭连接
+                        handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read next frame failed after handle ping, reason: {:?}", e))));
+                    }
+
                     context.reset(); //重置当前连接的当前帧
                 } else {
                     //无法获取上下文的可写引用，则表示有异常，立即关闭连接
                     handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handle ping frame failed, reason: invalid writable context"))));
                     return;
-                }
-
-                //处理Ping帧
-                if bin.len() == 0 {
-                    //没有Ping负载，写入响应的Pong控制帧
-                    WsSocket::resp_control(handle, waits, window_bits, WsFrameType::Pong, None).await;
-                } else {
-                    //有Ping负载，写入响应的Pong控制帧
-                    WsSocket::resp_control(handle, waits, window_bits, WsFrameType::Pong, Some(bin)).await;
-                }
-
-                //继续读连接的数据
-                if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
-                    //继续读失败，则立即关闭连接
-                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read next frame failed after handle ping, reason: {:?}", e))));
                 }
             },
             WsFrameType::Pong => {

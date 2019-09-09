@@ -118,13 +118,13 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
     }
 
     //握手，返回握手是否成功、握手请求的响应和子协议
-    pub fn handshake(&self, protocol: Option<Arc<dyn ChildProtocol<S, H>>>, mut req: Request) -> (bool, HttpResult<Response<()>>, Option<Arc<dyn ChildProtocol<S, H>>>) {
+    pub fn handshake(&self, protocol: &Arc<dyn ChildProtocol<S, H>>, mut req: Request) -> (bool, HttpResult<Response<()>>) {
         match check_handshake_request(&mut req, self.window_bits) {
             Err(e) => {
                 //握手请求失败
                 println!("!!!> Ws Check Handshake Failed, reason: {:?}", e);
                 let resp = reply_handshake(Err(StatusCode::BAD_REQUEST));
-                (resp.is_ok(), resp, None)
+                (resp.is_ok(), resp)
             },
             Ok(success) => {
                 match success {
@@ -138,27 +138,27 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
                         //匹配支持的任何一个子协议
                         for p in &protocols {
                             //将客户端需要的子协议名转换为全小写，并与服务器端支持的子协议进行对比
-                            if protocol.is_none() && protocols_len == 1 && (*p) == "" {
-                                //客户端没有指定子协议，且服务器也没有指定支持的子协议
+                            if protocols_len == 1 && (*p) == "" {
+                                //客户端没有指定子协议
                                 let resp = reply_handshake(Ok((ws_ext, None, ws_accept.as_str())));
-                                return (resp.is_ok(), resp, protocol);
-                            } else if protocol.is_some() && protocol.as_ref().unwrap().protocol_name() == (*p).to_lowercase().as_str() {
+                                return (resp.is_ok(), resp);
+                            } else if protocol.protocol_name() == (*p).to_lowercase().as_str() {
                                 //客户端需要的子协议中有服务器端支持的子协议，则握手成功，将客户端需要，且服务器端支持的子协议名原样返回
                                 let resp = reply_handshake(Ok((ws_ext, Some((*p)), ws_accept.as_str())));
-                                return (resp.is_ok(), resp, protocol);
+                                return (resp.is_ok(), resp);
                             }
                         }
 
                         //客户端指定了需要的子协议，且服务器端不支持客户端需要的任何子协议，则握手失败
                         println!("!!!> Ws Handshake Failed, reason: may not support client protocol, protocols: {:?}", protocols);
                         let resp = reply_handshake(Err(StatusCode::BAD_REQUEST));
-                        (resp.is_ok(), resp, None)
+                        (resp.is_ok(), resp)
                     },
                     _ => {
                         //握手请求冲突
                         println!("!!!> Ws Handshake Failed, reason: invalid status");
                         let resp = reply_handshake(Err(StatusCode::BAD_REQUEST));
-                        (resp.is_ok(), resp, None)
+                        (resp.is_ok(), resp)
                     },
                 }
             },
@@ -174,7 +174,7 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
     pub async fn accept<'h, 'b>(handle: SocketHandle<S>,
                                 waits: H,
                                 acceptor: WsAcceptor<S, H>,
-                                support_protocol: Option<Arc<dyn ChildProtocol<S, H>>>) {
+                                support_protocol: Arc<dyn ChildProtocol<S, H>>) {
         let mut headers = [EMPTY_HEADER; MAX_HANDSHAKE_HTTP_HEADER_LIMIT];
         let mut req = Request::new(&mut headers);
 
@@ -222,13 +222,13 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
                                       waits: H,
                                       acceptor: WsAcceptor<S, H>,
                                       req: Request<'h, 'b>,
-                                                                 support_protocol: Option<Arc<dyn ChildProtocol<S, H>>>) {
-        match acceptor.handshake(support_protocol, req) {
-            (_, Err(e), _) => {
+                                      support_protocol: Arc<dyn ChildProtocol<S, H>>) {
+        match acceptor.handshake(&support_protocol, req) {
+            (_, Err(e)) => {
                 //握手异常
                 handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handshake failed, reason: {:?}", e))));
             },
-            (is_ok, Ok(resp), protocol) => {
+            (is_ok, Ok(resp)) => {
                 //握手请求已完成，则返回
                 if is_ok {
                     //握手成功，则绑定连接上下文
@@ -312,7 +312,6 @@ fn check_handshake_request(req: &mut Request, window_bits: u8) -> Result<Status>
                 }
             },
             key if key == SEC_WEBSOCKET_PROTOCOL.as_str() => {
-                println!("!!!!!!");
                 //握手请求中有指定Websocket子协议
                 if let Ok(r) = unmatch_header_value(key, header.value) {
                     //已匹配子协议，则保存

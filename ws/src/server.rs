@@ -22,24 +22,15 @@ use tcp::{server::AsyncWaitsHandle,
 use crate::{acceptor::{MAX_HANDSHAKE_HTTP_HEADER_LIMIT, WsAcceptor},
             connect::WsSocket,
             frame::{WsHead, WsFrame},
-            util::{ChildProtocol, WsStatus, WsContext}};
+            util::{ChildProtocol, ChildProtocolFactory, WsStatus, WsContext}};
 use futures::Future;
 
 /*
 * Websocket连接监听器
 */
 pub struct WebsocketListener<S: Socket, H: AsyncIOWait> {
-    acceptor:   WsAcceptor<S, H>,                       //连接接受器
-    protocol:   Option<Arc<dyn ChildProtocol<S, H>>>,   //连接监听器支持的子协议
-}
-
-impl<S: Socket, H: AsyncIOWait> Default for WebsocketListener<S, H> {
-    fn default() -> Self {
-        WebsocketListener {
-            acceptor: WsAcceptor::default(),
-            protocol: None,
-        }
-    }
+    acceptor:   WsAcceptor<S, H>,               //连接接受器
+    protocol:   Arc<dyn ChildProtocol<S, H>>,   //连接监听器支持的子协议
 }
 
 impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for WebsocketListener<S, H> {
@@ -101,10 +92,22 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for WebsocketListener<S, H> {
     }
 }
 
+impl<S: Socket, H: AsyncIOWait> WebsocketListener<S, H> {
+    //构建指定子协议的Websocket连接监听器
+    pub fn with_protocol(protocol: Arc<dyn ChildProtocol<S, H>>) -> Self {
+        WebsocketListener {
+            acceptor: WsAcceptor::default(),
+            protocol: protocol,
+        }
+    }
+}
+
 /*
 * Websocket连接监听器工厂
 */
-pub struct WebsocketListenerFactory<S: Socket>(PhantomData<S>);
+pub struct WebsocketListenerFactory<S: Socket> {
+    protocol_factory: Arc<dyn ChildProtocolFactory<Connect = S, Waits = AsyncWaitsHandle>>,
+}
 
 impl<S: Socket> AsyncServiceFactory for WebsocketListenerFactory<S> {
     type Connect = S;
@@ -113,13 +116,17 @@ impl<S: Socket> AsyncServiceFactory for WebsocketListenerFactory<S> {
     type Future = BoxFuture<'static, Self::Out>;
 
     fn new_service(&self) -> Box<dyn AsyncService<Self::Connect, Self::Waits, Out = Self::Out, Future = Self::Future>> {
-        Box::new(WebsocketListener::<S, Self::Waits>::default())
+        Box::new(
+            WebsocketListener::with_protocol(
+                self.protocol_factory.new_protocol()))
     }
 }
 
 impl<S: Socket> WebsocketListenerFactory<S> {
-    //构建Websocket连接监听器工厂
-    pub fn new() -> Self {
-        WebsocketListenerFactory(PhantomData)
+    //构建指定子协议工厂的Websocket连接监听器工厂
+    pub fn with_protocol_factory(protocol_factory: Arc<dyn ChildProtocolFactory<Connect = S, Waits = AsyncWaitsHandle>>) -> Self {
+        WebsocketListenerFactory {
+            protocol_factory,
+        }
     }
 }

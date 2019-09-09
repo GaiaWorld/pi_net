@@ -287,6 +287,27 @@ impl<S: Socket> SocketHandle<S> {
         }
     }
 
+    //线程安全的获取连接令牌
+    pub fn get_token(&self) -> Option<&Token> {
+        unsafe {
+            (&*self.0).get_token()
+        }
+    }
+
+    //线程安全的获取连接本地地址
+    pub fn get_local(&self) -> &SocketAddr {
+        unsafe {
+            (&*self.0).get_local()
+        }
+    }
+
+    //线程安全的获取连接远端地址
+    pub fn get_remote(&self) -> &SocketAddr {
+        unsafe {
+            (&*self.0).get_remote()
+        }
+    }
+
     //线程安全的分配写缓冲
     pub fn alloc(&self) -> Result<Option<WriteBuffer>> {
         unsafe {
