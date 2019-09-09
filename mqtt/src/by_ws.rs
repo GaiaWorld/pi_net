@@ -75,7 +75,7 @@ fn handle_connect<S: Socket, E: MqttSession>(protocol: &WsMqttProtocol<E>, conne
                 session_present = false;
             }
 
-            let mut ack = Connack {
+            let ack = Connack {
                 session_present,
                 code: ConnectReturnCode::RefusedProtocolVersion,
             };
