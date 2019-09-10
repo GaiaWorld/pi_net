@@ -43,6 +43,26 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         }
     }
 
+    //线程安全的异步广播指定负载
+    pub fn broadcast(connects: &[WsSocket<S, H>], msg_type: WsFrameType, payload: WriteBuffer) -> Result<()> {
+        if connects.len() == 0 {
+            //连接为空，则忽略
+            return Ok(());
+        }
+
+        if let Some(mut buf) = WsFrame::<S, H>::single_with_window_bits_and_payload(msg_type, connects[0].window_bits, payload).into_write_buf() {
+            if let Some(handle) = buf.finish() {
+                for connect in connects {
+                    connect.socket.write(handle.clone());
+                }
+            }
+
+            return Ok(());
+        }
+
+        Err(Error::new(ErrorKind::InvalidData, "invalid payload"))
+    }
+
     //线程安全的判断连接是否关闭
     pub fn is_closed(&self) -> bool {
         self.socket.is_closed()
@@ -76,26 +96,6 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
     //线程安全的分配一个用于发送的写缓冲区
     pub fn alloc(&self) -> WriteBuffer {
         self.socket.alloc().ok().unwrap().unwrap()
-    }
-
-    //线程安全的异步广播指定负载
-    pub fn broadcast(connects: &[WsSocket<S, H>], msg_type: WsFrameType, payload: WriteBuffer) -> Result<()> {
-        if connects.len() == 0 {
-            //连接为空，则忽略
-            return Ok(());
-        }
-
-        if let Some(mut buf) = WsFrame::<S, H>::single_with_window_bits_and_payload(msg_type, connects[0].window_bits, payload).into_write_buf() {
-            if let Some(handle) = buf.finish() {
-                for connect in connects {
-                    connect.socket.write(handle.clone());
-                }
-            }
-
-            return Ok(());
-        }
-
-        Err(Error::new(ErrorKind::InvalidData, "invalid payload"))
     }
 
     //线程安全的异步发送指定负载

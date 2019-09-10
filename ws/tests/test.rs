@@ -54,10 +54,10 @@ fn test_websocket_listener() {
                      Arc::new(TestChildProtocolFactory))));
     match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
-            println!("!!!> Socket Listener Bind Error, reason: {:?}", e);
+            println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
         },
         Ok(driver) => {
-            println!("===> Socket Listener Bind Ok");
+            println!("===> Websocket Listener Bind Ok");
         }
     }
 

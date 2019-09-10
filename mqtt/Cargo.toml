@@ -6,8 +6,10 @@ edition = "2018"
 
 [dependencies]
 fnv = "1.0"
+mio = "0.6"
 mqtt311 = "0.2"
+parking_lot = "0.9"
 hash = { path = "../../pi_lib/hash", features = ["xxhash"] }
-atom = { path = "../../pi_lib/atom" }
 tcp = { path = "../tcp" }
 ws = { path = "../ws" }
+atom = { path = "../../pi_lib/atom" }
