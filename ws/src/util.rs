@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use bytes::BufMut;
 use fnv::FnvBuildHasher;
 
-use tcp::{driver::{Socket, AsyncIOWait}, buffer_pool::WriteBuffer};
+use tcp::{driver::{Socket, AsyncIOWait},
+          buffer_pool::WriteBuffer,
+          util::SocketContext};
 
 use crate::{connect::WsSocket,
             frame::{CLOSE_OPCODE, TEXT_OPCODE, BINARY_OPCODE, PING_OPCODE, PONG_OPCODE}};
@@ -18,7 +20,7 @@ pub trait ChildProtocol<S: Socket, H: AsyncIOWait>: Send + Sync + 'static {
     fn protocol_name(&self) -> &str;
 
     //解码子协议
-    fn decode_protocol(&self, connect: WsSocket<S, H>, context: &mut WsContext) -> Result<()>;
+    fn decode_protocol(&self, connect: WsSocket<S, H>, context: &mut WsSession) -> Result<()>;
 }
 
 /*
@@ -105,28 +107,29 @@ impl WsFrameType {
 }
 
 /*
-* Websocket上下文
+* Websocket会话
 */
-#[derive(Debug)]
-pub struct WsContext {
-    status:         WsStatus,       //当前连接状态
-    r#type:         WsFrameType,    //帧类型
-    frames:         Vec<u8>,        //Websocket帧缓冲
+pub struct WsSession {
+    status:     WsStatus,       //当前连接状态
+    r#type:     WsFrameType,    //帧类型
+    frames:     Vec<u8>,        //Websocket帧缓冲
+    context:    SocketContext,  //会话上下文
 }
 
-unsafe impl Send for WsContext {}
+unsafe impl Send for WsSession {}
 
-impl Default for WsContext {
+impl Default for WsSession {
     fn default() -> Self {
-        WsContext {
+        WsSession {
             status: WsStatus::HandShaking,
             r#type: WsFrameType::Undefined,
             frames: Vec::with_capacity(32),
+            context: SocketContext::empty(),
         }
     }
 }
 
-impl WsContext {
+impl WsSession {
     //判断是否已握手
     pub fn is_handshaked(&self) -> bool {
         match &self.status {
@@ -208,5 +211,15 @@ impl WsContext {
     pub fn reset(&mut self) {
         self.r#type = WsFrameType::Undefined;
         self.frames.clear();
+    }
+
+    //获取Websocket会话上下文的只读引用
+    pub fn get_context(&self) -> &SocketContext {
+        &self.context
+    }
+
+    //获取Websocket会话上下文的可写引用
+    pub fn get_context_mut(&mut self) -> &mut SocketContext {
+        &mut self.context
     }
 }

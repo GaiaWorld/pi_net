@@ -18,7 +18,7 @@ use futures::future::{FutureExt, BoxFuture};
 
 use tcp::connect::TcpSocket;
 use tcp::server::{AsyncWaitsHandle, AsyncAdapter, PortsAdapter, AsyncPortsFactory, SocketListener};
-use tcp::driver::{SocketConfig, Socket, AsyncIOWait, SocketAdapterFactory, AsyncServiceName, AsyncService, AsyncServiceFactory, SocketStatus, SocketHandle, AsyncReadTask, AsyncWriteTask};
+use tcp::driver::{SocketConfig, Socket, AsyncIOWait, SocketAdapterFactory, AsyncService, AsyncServiceFactory, SocketStatus, SocketHandle, AsyncReadTask, AsyncWriteTask};
 use tcp::buffer_pool::WriteBufferPool;
 use tcp::util::{IoBytes, IoList};
 
@@ -150,12 +150,6 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
             }
         };
         future.boxed()
-    }
-}
-
-impl AsyncServiceName for TestService {
-    fn service_name() -> String {
-        "TestService".to_string()
     }
 }
 

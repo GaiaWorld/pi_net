@@ -79,11 +79,8 @@ pub trait Stream: Sized + Send + 'static {
     //取消当前流事件轮询选项
     fn unset_poll_opt(&mut self, opt: PollOpt);
 
-    //设置可读事件唤醒器
-    fn set_readable_rouser(&mut self, rouser: Option<Sender<Token>>);
-
-    //设置可写事件唤醒器
-    fn set_writable_rouser(&mut self, rouser: Option<Sender<(Token, WriteBufferHandle)>>);
+    //设置事件唤醒器
+    fn set_rouser(&mut self, rouser: Option<Sender<(Token, Option<WriteBufferHandle>)>>);
 
     //设置关闭事件监听器
     fn set_close_listener(&mut self, listener: Option<Sender<(Token, Result<()>)>>);

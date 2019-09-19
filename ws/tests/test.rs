@@ -11,7 +11,7 @@ use tcp::buffer_pool::WriteBufferPool;
 use ws::{server::WebsocketListenerFactory,
          connect::WsSocket,
          frame::WsHead,
-         util::{ChildProtocol, ChildProtocolFactory, WsContext}};
+         util::{ChildProtocol, ChildProtocolFactory, WsSession}};
 
 struct TestChildProtocol;
 
@@ -20,7 +20,7 @@ impl<S: Socket, H: AsyncIOWait> ChildProtocol<S, H> for TestChildProtocol {
         "echo"
     }
 
-    fn decode_protocol(&self, connect: WsSocket<S, H>, context: &mut WsContext) -> Result<()> {
+    fn decode_protocol(&self, connect: WsSocket<S, H>, context: &mut WsSession) -> Result<()> {
         for _ in 0..3 {
             let mut buf = connect.alloc();
             buf.get_iolist_mut().push_back(context.to_vec().into());

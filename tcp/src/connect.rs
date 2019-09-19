@@ -26,6 +26,7 @@ struct ReadBuffer {
     read_pos:       usize,              //缓冲区已读位置
     buf_once:       Option<Vec<u8>>,    //临时缓冲区，用于缓存临时的大量数据
     recv_pos_once:  usize,              //临时缓冲区接收位置
+    read_pos_once:  usize,              //临时缓冲区已读位置
 }
 
 impl ReadBuffer {
@@ -41,19 +42,33 @@ impl ReadBuffer {
             read_pos: 0,
             buf_once: None,
             recv_pos_once: 0,
+            read_pos_once: 0,
         }
     }
 
     //判断缓冲区是否为空
     pub fn is_empty(&self) -> bool {
-        (self.recv_pos == 0) && (self.read_pos == 0)
+        self.buf_once.is_none() && (self.recv_pos == 0) && (self.read_pos == 0)
+    }
+
+    //判断当前是否使用临时缓冲区
+    pub fn used_temp_buf(&self) -> bool {
+        if let Some(buf) = &self.buf_once {
+            //临时缓冲区存在
+            if buf.capacity() > self.recv_pos_once {
+                //临时缓冲区还未全部填充
+                return true;
+            }
+        }
+
+        false
     }
 
     //为异步读准备读缓冲区
     pub fn ready(&mut self, len: usize) {
-        self.need_size = len; //设置需要异步接收的字节数
-        if len > self.buf.capacity() {
-            //如果需要读取的数据长度大于当前缓冲区的有效容量，则提供指定长度的临时缓冲区，以保证可以异步接收指定有效长度的数据
+        if (len > self.buf.capacity()) || (self.buf.capacity() < ((self.recv_pos - self.read_pos) + len)) {
+            //如果本次需要读取的数据长度大于当前缓冲区的最大容量，或如果本次需要读取指定有效长度的数据，且未读取数据长度加上本次需要读取的数据长度之和，大于当前缓冲区的最大容量
+            //则提供未读取数据长度加上本次需要读取的数据长度之和的临时缓冲区，将未读数据复制到临时缓冲区的头部，以保证未读数据不丢失，且可以异步接收本次指定有效长度的数据
             let mut buf: Vec<u8> = Vec::with_capacity(len);
             buf.resize(len, 0);
 
@@ -65,9 +80,13 @@ impl ReadBuffer {
                 self.read_pos = 0;
             }
 
-            self.buf_once = Some(buf); //重置临时缓冲区
-        } else if (len > 0) && (self.buf.capacity() < (self.read_pos + len)) {
-            //如果需要读取指定有效长度的数据，且当前缓冲区空闲容量不足，则清理缓冲区，以保证可以异步接收指定有效长度的数据
+            //重置临时缓冲区和缓冲位置
+            self.buf_once = Some(buf);
+            self.recv_pos_once = readable_len;
+            self.read_pos_once = 0;
+            self.need_size = len - readable_len; //设置需要异步接收的剩余字节数
+        } else if (self.buf.capacity() - self.recv_pos) < len {
+            //如果本次需要读取指定有效长度的数据，且当前缓冲区空闲容量不足，但清理已读数据后，可以接收本次指定长度的数据，则清理缓冲区，以保证可以异步接收本次指定有效长度的数据
             let readable_len = self.recv_pos - self.read_pos;
 
             //将缓冲区内未读的可读数据填充到缓冲区的首部，并设置缓冲位置
@@ -78,17 +97,31 @@ impl ReadBuffer {
                     .copy_to(self.buf.as_mut_ptr(), readable_len);
                 self.recv_pos = readable_len;
                 self.read_pos = 0;
+                self.need_size = len - readable_len; //设置需要异步接收的剩余字节数
             }
+        } else {
+            //否则本次需要读取的数据长度，对缓冲区没有影响，则只设置需要异步接收的剩余字节数
+            self.need_size = len;
         }
     }
 
     //从缓冲区的已读位置开始读取指定长度的数据
     pub fn read(&mut self, len: usize) -> Option<&[u8]> {
         //同步返回数据
-        if self.recv_pos_once > 0 {
-            //临时缓冲区有数据
-            self.recv_pos_once = 0; //重置临时缓冲区接收位置
-            return Some(self.buf_once.as_ref().unwrap().as_slice());
+        if self.recv_pos_once > 0 && (self.recv_pos_once > self.read_pos_once) {
+            //临时缓冲区有数据，且未读完
+            let recv_pos = self.recv_pos_once;
+            let read_pos = self.read_pos_once;
+
+            if (len == 0) && (recv_pos > read_pos) {
+                //如果需要读取任意有效长度的数据，且当前临时缓冲区内有可读数据
+                self.read_pos_once += recv_pos - read_pos; //更新已读位置
+                return self.window_ref_once(read_pos..recv_pos);
+            } else if (len > 0) && (len <= (recv_pos - read_pos)) {
+                //如果需要读取指定有效长度的数据，且当前临时缓冲区内至少有指定有效长度的可读数据
+                self.read_pos_once += len; //更新已读位置
+                return self.window_ref_once(read_pos..read_pos + len);
+            }
         } else {
             //缓冲区有数据
             let recv_pos = self.recv_pos;
@@ -111,7 +144,20 @@ impl ReadBuffer {
         None
     }
 
-    //获取指定范围的可读引用
+    //获取指定范围的临时缓冲区的可读引用
+    fn window_ref_once(&self, range: Range<usize>) -> Option<&[u8]> {
+        if let Some(buf) = &self.buf_once {
+            if range.is_empty() || buf.capacity() < range.end {
+                return None;
+            }
+
+            Some(&buf[range.start..range.end])
+        } else {
+            None
+        }
+    }
+
+    //获取指定范围的缓冲区的可读引用
     fn window_ref(&self, range: Range<usize>) -> Option<&[u8]> {
         if range.is_empty() || self.buf.capacity() < range.end {
             return None;
@@ -167,6 +213,11 @@ impl WriteBuffer {
                 self.write_pos = s.get_iovec().iter().map(|vec| { (*vec).len() }).sum();
                 self.send_pos = 0;
             }
+        } else {
+            if let Some(handle) = &self.handle {
+                //当前写缓冲区的数据未发送完，则返回当前未发送完的写缓冲区数据
+                shared = handle.get_shared();
+            }
         }
 
         shared
@@ -184,24 +235,23 @@ impl WriteBuffer {
 * Tcp连接
 */
 pub struct TcpSocket {
-    local:              SocketAddr,                                     //TCP连接本地地址
-    remote:             SocketAddr,                                     //TCP连接远端地址
-    token:              Option<Token>,                                  //连接令牌
-    uid:                Option<usize>,                                  //连接唯一id
-    stream:             TcpStream,                                      //TCP流
-    ready:              SocketReady,                                    //Tcp事件准备状态
-    poll_opt:           PollOpt,                                        //Tcp事件轮询选项
-    readable_rouser:    Option<Sender<Token>>,                          //可读事件唤醒器
-    writable_rouser:    Option<Sender<(Token, WriteBufferHandle)>>,     //可写事件唤醒器
-    close_listener:     Option<Sender<(Token, Result<()>)>>,            //关闭事件监听器
-    readable_size:      usize,                                          //本次可读字节数
-    read_buf:           Option<ReadBuffer>,                             //读缓冲
-    write_buf:          Option<WriteBuffer>,                            //写缓冲
-    flush:              Arc<AtomicBool>,                                //Tcp连接写刷新状态
-    closed:             Arc<AtomicBool>,                                //Tcp连接关闭状态
-    buffer_pool:        Option<Arc<WriteBufferPool>>,                   //Tcp连接写缓冲池
-    handle:             Option<SocketHandle<TcpSocket>>,                //Tcp连接句柄
-    context:            SocketContext,                                  //Tcp连接上下文
+    local:          SocketAddr,                                         //TCP连接本地地址
+    remote:         SocketAddr,                                         //TCP连接远端地址
+    token:          Option<Token>,                                      //连接令牌
+    uid:            Option<usize>,                                      //连接唯一id
+    stream:         TcpStream,                                          //TCP流
+    ready:          SocketReady,                                        //Tcp事件准备状态
+    poll_opt:       PollOpt,                                            //Tcp事件轮询选项
+    rouser:         Option<Sender<(Token, Option<WriteBufferHandle>)>>, //事件唤醒器
+    close_listener: Option<Sender<(Token, Result<()>)>>,                //关闭事件监听器
+    readable_size:  usize,                                              //本次可读字节数
+    read_buf:       Option<ReadBuffer>,                                 //读缓冲
+    write_buf:      Option<WriteBuffer>,                                //写缓冲
+    flush:          Arc<AtomicBool>,                                    //Tcp连接写刷新状态
+    closed:         Arc<AtomicBool>,                                    //Tcp连接关闭状态
+    buffer_pool:    Option<Arc<WriteBufferPool>>,                       //Tcp连接写缓冲池
+    handle:         Option<SocketHandle<TcpSocket>>,                    //Tcp连接句柄
+    context:        SocketContext,                                      //Tcp连接上下文
 }
 
 unsafe impl Send for TcpSocket {}
@@ -220,8 +270,7 @@ impl Stream for TcpSocket {
             stream: stream,
             ready: SocketReady::empty(),
             poll_opt: PollOpt::level(), //默认的连接事件轮询选项
-            readable_rouser: None,
-            writable_rouser: None,
+            rouser: None,
             close_listener: None,
             readable_size: 0,
             read_buf: None,
@@ -278,12 +327,8 @@ impl Stream for TcpSocket {
         self.poll_opt.remove(opt);
     }
 
-    fn set_readable_rouser(&mut self, rouser: Option<Sender<Token>>) {
-        self.readable_rouser = rouser;
-    }
-
-    fn set_writable_rouser(&mut self, rouser: Option<Sender<(Token, WriteBufferHandle)>>) {
-        self.writable_rouser = rouser;
+    fn set_rouser(&mut self, rouser: Option<Sender<(Token, Option<WriteBufferHandle>)>>) {
+        self.rouser = rouser;
     }
 
     fn set_close_listener(&mut self, listener: Option<Sender<(Token, Result<()>)>>) {
@@ -296,21 +341,42 @@ impl Stream for TcpSocket {
 
     //连接关闭状态不阻止接收
     fn recv(&mut self) -> Result<usize> {
-        let mut recv_pos = self.read_buf.as_ref().unwrap().recv_pos;
+        let mut recv_pos;
+        let used_temp_buf = self.read_buf.as_ref().unwrap().used_temp_buf();
+        if used_temp_buf {
+            //当前需要接收数据并填充临时缓冲区，则获取当前临时缓冲区的接收位置
+            recv_pos = self.read_buf.as_mut().unwrap().recv_pos_once;
+        } else {
+            //当前需要接收数据并填充缓冲区，则获取当前缓冲区的接收位置
+            recv_pos = self.read_buf.as_mut().unwrap().recv_pos;
+        }
         let readable_size = self.readable_size; //按需接收的字节数
         let need_recv_pos = recv_pos + self.read_buf.as_mut().unwrap().need_size; //本次读缓冲区的已接收需要达到的位置
 
         loop{
-            match self.stream.read(&mut self.read_buf.as_mut().unwrap().buf[recv_pos..]) {
-                Ok(0) => {
-                    //在流内没有接收到任何数据，因为读缓冲区的容量至少大于0，所以需要继续尝试接收数据
-                    pause();
-                    continue;
-                },
+            let result;
+            if used_temp_buf {
+                if let Some(buf) = &mut self.read_buf.as_mut().unwrap().buf_once {
+                    result = self.stream.read(&mut buf[recv_pos..]);
+                } else {
+                    result = Err(Error::new(ErrorKind::Other, "invalid temp buffer"));
+                }
+            } else {
+                result = self.stream.read(&mut self.read_buf.as_mut().unwrap().buf[recv_pos..]);
+            }
+
+            match result {
                 Ok(len) => {
                     //在流内接收到数据
                     recv_pos += len; //临时接收位置
-                    self.read_buf.as_mut().unwrap().recv_pos = recv_pos; //移动读缓冲区的已接收位置
+                    if used_temp_buf {
+                        //移动临时缓冲区的已接收位置
+                        self.read_buf.as_mut().unwrap().recv_pos_once = recv_pos;
+                    } else {
+                        //移动缓冲区的已接收位置
+                        self.read_buf.as_mut().unwrap().recv_pos = recv_pos;
+                    }
+
                     if self.read_buf.as_mut().unwrap().need_size <= len {
                         //如果本次接收的字节数大于等于读缓冲区需要接收的字节数，则重置读缓冲区需要接收的字节数
                         self.read_buf.as_mut().unwrap().need_size = 0;
@@ -487,10 +553,10 @@ impl Socket for TcpSocket {
         self.read_buf.as_mut().unwrap().ready(size); //为读就绪准备读缓冲区
         self.ready.insert(Ready::readable()); //设置当前连接需要关注可读事件
         self.readable_size = size;
-        if let Some(rouser) = &self.readable_rouser {
+        if let Some(rouser) = &self.rouser {
             if let Some(token) = self.token {
                 //唤醒连接，并通知连接需要再接收指定长度的数据
-                if let Err(e) = rouser.send(token) {
+                if let Err(e) = rouser.send((token, None)) {
                     return Err(Error::new(ErrorKind::BrokenPipe, e));
                 }
             }
@@ -513,10 +579,10 @@ impl Socket for TcpSocket {
         //当前缓冲区没有未读的指定长度的可读数据，则需要通知连接读就绪，可以异步接收剩余的指定长度的数据
         self.ready.insert(Ready::readable()); //设置当前连接需要关注可读事件
         self.readable_size = size;
-        if let Some(rouser) = &self.readable_rouser {
+        if let Some(rouser) = &self.rouser {
             if let Some(token) = self.token {
                 //唤醒连接，并通知连接需要再接收指定长度的数据
-                if let Err(e) = rouser.send(token) {
+                if let Err(e) = rouser.send((token, None)) {
                     return Err(Error::new(ErrorKind::BrokenPipe, e));
                 }
             }
@@ -532,12 +598,12 @@ impl Socket for TcpSocket {
         }
 
         self.ready.insert(Ready::writable()); //设置当前连接需要关注可写事件
-        if let Some(rouser) = &self.writable_rouser {
+        if let Some(rouser) = &self.rouser {
             if let Some(token) = self.token {
                 //唤醒连接，并通知连接需要发送数据
                 //因为异步写入缓冲区，且异步唤醒的原因，写缓冲区的数据可能会被上次唤醒所消耗，则出现多余的空唤醒
                 //但因为一定是先写入缓冲区完成后再唤醒，所以不会出现写缓冲区有数据，且没唤醒的情况
-                if let Err(e) = rouser.send((token, handle)) {
+                if let Err(e) = rouser.send((token, Some(handle))) {
                     return Err(Error::new(ErrorKind::BrokenPipe, e));
                 }
             }

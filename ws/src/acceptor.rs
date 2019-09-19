@@ -24,7 +24,7 @@ use pi_crypto::digest::{DigestAlgorithm, digest};
 
 use tcp::driver::{Socket, AsyncIOWait, SocketHandle, AsyncReadTask, AsyncWriteTask};
 
-use crate::util::{ChildProtocol, WsContext};
+use crate::util::{ChildProtocol, WsSession};
 
 /*
 * Websocket握手请求的响应序列化缓冲长度
@@ -231,8 +231,8 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
             (is_ok, Ok(resp)) => {
                 //握手请求已完成，则返回
                 if is_ok {
-                    //握手成功，则绑定连接上下文
-                    handle.as_handle().unwrap().as_ref().borrow_mut().get_context_mut().set(WsContext::default());
+                    //握手成功，则绑定Tcp连接上下文
+                    handle.as_handle().unwrap().as_ref().borrow_mut().get_context_mut().set(WsSession::default());
                 }
 
                 let mut buf = handle.as_handle().as_ref().unwrap().borrow().get_write_buffer().alloc().ok().unwrap().unwrap();

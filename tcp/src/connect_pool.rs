@@ -20,22 +20,20 @@ use crate::driver::{DEFAULT_TCP_IP_V6, Socket, Stream, SocketAdapter, SocketOpti
 * Tcp连接池
 */
 pub struct TcpSocketPool<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
-    uid:                    u8,                                         //Tcp连接池唯一id
-    name:                   String,                                     //Tcp连接池名称
-    config:                 SocketConfig,                               //Tcp连接配置
-    poll:                   Poll,                                       //Socket事件轮询器
-    sockets:                Slab<Arc<RefCell<S>>>,                      //Socket连接表
-    map:                    HashMap<SocketAddr, Token, FnvBuildHasher>, //Socket映射表
-    driver:                 Option<SocketDriver<S, A>>,                 //Socket驱动
-    socket_recv:            Receiver<S>,                                //Socket接收器
-    wakeup_readable_sent:   Sender<Token>,                              //唤醒可读事件的发送器
-    wakeup_readable_recv:   Receiver<Token>,                            //唤醒可读事件的接收器
-    wakeup_writable_sent:   Sender<(Token, WriteBufferHandle)>,         //唤醒可写事件的发送器
-    wakeup_writable_recv:   Receiver<(Token, WriteBufferHandle)>,       //唤醒可写事件的接收器
-    close_sent:             Sender<(Token, Result<()>)>,                //关闭事件的发送器
-    close_recv:             Receiver<(Token, Result<()>)>,              //关闭事件的接收器
-    wait_close:             Vec<(Token, Result<()>)>,                   //等待关闭队列
-    buffer:                 WriteBufferPool,                            //写缓冲池
+    uid:            u8,                                             //Tcp连接池唯一id
+    name:           String,                                         //Tcp连接池名称
+    config:         SocketConfig,                                   //Tcp连接配置
+    poll:           Poll,                                           //Socket事件轮询器
+    sockets:        Slab<Arc<RefCell<S>>>,                          //Socket连接表
+    map:            HashMap<SocketAddr, Token, FnvBuildHasher>,     //Socket映射表
+    driver:         Option<SocketDriver<S, A>>,                     //Socket驱动
+    socket_recv:    Receiver<S>,                                    //Socket接收器
+    wakeup_sent:    Sender<(Token, Option<WriteBufferHandle>)>,     //唤醒事件的发送器
+    wakeup_recv:    Receiver<(Token, Option<WriteBufferHandle>)>,   //唤醒事件的接收器
+    close_sent:     Sender<(Token, Result<()>)>,                    //关闭事件的发送器
+    close_recv:     Receiver<(Token, Result<()>)>,                  //关闭事件的接收器
+    wait_close:     Vec<(Token, Result<()>)>,                       //等待关闭队列
+    buffer:         WriteBufferPool,                                //写缓冲池
 }
 
 unsafe impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Send for TcpSocketPool<S, A> {}
@@ -61,8 +59,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
             }
         };
 
-        let (wakeup_readable_sent, wakeup_readable_recv) = unbounded();
-        let (wakeup_writable_sent, wakeup_writable_recv) = unbounded();
+        let (wakeup_sent, wakeup_recv) = unbounded();
         let (close_sent, close_recv) = unbounded();
         Ok(TcpSocketPool {
             uid,
@@ -73,10 +70,8 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
             map,
             driver: None,
             socket_recv: receiver,
-            wakeup_readable_sent,
-            wakeup_readable_recv,
-            wakeup_writable_sent,
-            wakeup_writable_recv,
+            wakeup_sent,
+            wakeup_recv,
             close_sent,
             close_recv,
             wait_close: Vec::new(),
@@ -118,9 +113,7 @@ fn event_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(mut pool: TcpSo
     loop {
         handle_accepted(&mut pool);
 
-        handle_wakeup_readable(&mut pool);
-
-        handle_wakeup_writable(&mut pool);
+        handle_wakeup(&mut pool);
 
         if let Err(e) = pool.poll.poll(&mut events, poll_timeout) {
             println!("!!!> Tcp Socket Pool Poll Failed, timeout: {:?}, ports: {:?}, reason: {:?}", poll_timeout, &pool_name, e);
@@ -157,8 +150,7 @@ fn handle_accepted<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut
         } else {
             //连接注册成功
             init_socket::<S, A>(&mut socket,
-                                pool.wakeup_readable_sent.clone(),
-                                pool.wakeup_writable_sent.clone(),
+                                pool.wakeup_sent.clone(),
                                 pool.close_sent.clone(),
                                 &socket_opts);
 
@@ -181,13 +173,11 @@ fn create_socket_uid(pool_uid: u8, Token(id): Token) -> usize {
 
 //初始化Tcp连接，为连接绑定唤醒器，并设置连接通用选项
 fn init_socket<S: Socket + Stream, A: SocketAdapter<Connect = S>>(socket: &mut S,
-                                                                  wakeup_readable_sent: Sender<Token>,
-                                                                  wakeup_writable_sent: Sender<(Token, WriteBufferHandle)>,
+                                                                  wakeup_sent: Sender<(Token, Option<WriteBufferHandle>)>,
                                                                   close_listener: Sender<(Token, Result<()>)>,
                                                                   socket_opts: &SocketOption) {
     //连接绑定唤醒器和监听器
-    socket.set_readable_rouser(Some(wakeup_readable_sent));
-    socket.set_writable_rouser(Some(wakeup_writable_sent));
+    socket.set_rouser(Some(wakeup_sent));
     socket.set_close_listener(Some(close_listener));
 
     //设置连接是否ipv6独占，独占后可以与ipv4共享相同的端口
@@ -209,34 +199,33 @@ fn init_socket<S: Socket + Stream, A: SocketAdapter<Connect = S>>(socket: &mut S
     socket.init_buffer_capacity(socket_opts.read_buffer_capacity, socket_opts.write_buffer_capacity);
 }
 
-//批量唤醒Tcp连接的可读事件
-fn handle_wakeup_readable<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut TcpSocketPool<S, A>) {
+//批量唤醒Tcp连接
+fn handle_wakeup<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut TcpSocketPool<S, A>) {
     //接收所有唤醒令牌，因为单线程异步唤醒，所以不会出现一次轮询多次唤醒，所以不需要对唤醒令牌去重
-    for token in pool.wakeup_readable_recv.try_iter().collect::<Vec<Token>>() {
-        if let Some(socket) = pool.sockets.get(token.0) {
-            if let Err(e) = pool.poll.reregister(socket.borrow().get_stream(), token, socket.borrow().get_ready(), socket.borrow().get_poll_opt().clone()) {
-                //注册可读事件失败，则通知
-                pool.driver.as_ref().unwrap().get_adapter().readed(Err((socket.borrow().get_handle(), e)));
-            }
-        }
-    }
-}
+    for item in pool.wakeup_recv.try_iter().collect::<Vec<(Token, Option<WriteBufferHandle>)>>() {
+        match item {
+            (token, None) => {
+                //唤醒并注册可读事件
+                if let Some(socket) = pool.sockets.get(token.0) {
+                    if let Err(e) = pool.poll.reregister(socket.borrow().get_stream(), token, socket.borrow().get_ready(), socket.borrow().get_poll_opt().clone()) {
+                        //注册可读事件失败，则通知
+                        pool.driver.as_ref().unwrap().get_adapter().readed(Err((socket.borrow().get_handle(), e)));
+                    }
+                }
+            },
+            (token, buf) => {
+                //唤醒并注册可写事件
+                if let Some(socket) = pool.sockets.get(token.0) {
+                    //唤醒指定令牌的Tcp连接
+                    if let Err(e) = pool.poll.reregister(socket.borrow().get_stream(), token, socket.borrow().get_ready(), socket.borrow().get_poll_opt().clone()) {
+                        //注册可写事件失败，则通知，并立即释放连接的引用
+                        return pool.driver.as_ref().unwrap().get_adapter().writed(Err((socket.borrow().get_handle(), e)));
+                    }
 
-//批量唤醒Tcp连接的可写事件
-fn handle_wakeup_writable<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut TcpSocketPool<S, A>) {
-    //接收所有唤醒令牌和写缓冲
-    let mut tuples = pool.wakeup_writable_recv.try_iter().collect::<Vec<(Token, WriteBufferHandle)>>();
-
-    for (token, buf) in tuples {
-        if let Some(socket) = pool.sockets.get(token.0) {
-            //唤醒指定令牌的Tcp连接
-            if let Err(e) = pool.poll.reregister(socket.borrow().get_stream(), token, socket.borrow().get_ready(), socket.borrow().get_poll_opt().clone()) {
-                //注册可写事件失败，则通知，并立即释放连接的引用
-                return pool.driver.as_ref().unwrap().get_adapter().writed(Err((socket.borrow().get_handle(), e)));
-            }
-
-            //注册可写事件成功，则为指定令牌的Tcp连接写入数据
-            socket.borrow_mut().write(buf);
+                    //注册可写事件成功，则为指定令牌的Tcp连接写入数据
+                    socket.borrow_mut().write(buf.unwrap());
+                }
+            },
         }
     }
 }

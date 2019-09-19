@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::cmp::Ordering;
 
-use fnv::FnvBuildHasher;
+use dashmap::DashMap;
 use mqtt311::{QoS, LastWill};
 
 use atom::Atom;
@@ -11,7 +11,7 @@ use ws::connect::WsSocket;
 /*
 * Mqtt会话
 */
-pub trait MqttSession: Default + Send + Sync + 'static {
+pub trait MqttSession: Default + Clone + Ord + Send + Sync + 'static {
     type Connect;
 
     //获取连接
@@ -35,23 +35,11 @@ pub trait MqttSession: Default + Send + Sync + 'static {
     //设置是否清理会话
     fn set_clean(&mut self, clean: bool);
 
-    //判断会话是否已订阅了指定主题
-    fn is_subscribed(&self, topic: &Atom) -> bool;
-
-    //获取会话订阅的所有主题
-    fn topics(&self) -> Option<Vec<Atom>>;
-
-    //订阅指定主题
-    fn subscribe(&mut self, topic: Atom, qos: u8);
-
-    //取消订阅指定的主题
-    fn unsubscribe(&mut self, topic: &Atom);
-
     //获取Will
     fn get_will(&self) -> Option<(&str, &str, u8, bool)>;
 
     //设置Will
-    fn set_will(&mut self, topic: String, msg: String, Qos: u8, retain: bool);
+    fn set_will(&mut self, topic: String, msg: String, qos: u8, retain: bool);
 
     //取消息Will
     fn unset_will(&mut self) -> Option<(String, String, u8, bool)>;
@@ -94,7 +82,6 @@ pub struct QosZeroSession<S: Socket> {
     connect:        Option<WsSocket<S, AsyncWaitsHandle>>,  //Websocket连接
     is_accepted:    bool,                                   //是否已连接
     is_clean:       bool,                                   //是否清理会话
-    sub_tab:        HashMap<Atom, QoS, FnvBuildHasher>,     //订阅表
     will:           Option<LastWill>,                       //Will
     user:           Option<String>,                         //会话用户
     pwd:            Option<String>,                         //会话用户密码
@@ -104,13 +91,72 @@ pub struct QosZeroSession<S: Socket> {
 unsafe impl<S: Socket> Send for QosZeroSession<S> {}
 unsafe impl<S: Socket> Sync for QosZeroSession<S> {}
 
+impl<S: Socket> PartialEq<QosZeroSession<S>> for QosZeroSession<S> {
+    fn eq(&self, other: &Self) -> bool {
+        if let Some(ws) = &self.connect {
+            if let Some(ws_other) = &other.connect {
+                return ws.get_token().eq(&ws_other.get_token())
+            }
+        }
+
+        false
+    }
+}
+
+impl<S: Socket> Eq for QosZeroSession<S> {}
+
+impl<S: Socket> PartialOrd<QosZeroSession<S>> for QosZeroSession<S> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if let Some(ws) = &self.connect {
+            if let Some(ws_other) = &other.connect {
+                ws.get_token().partial_cmp(&ws_other.get_token())
+            } else {
+                Some(Ordering::Greater)
+            }
+        } else if other.connect.is_none() {
+            Some(Ordering::Equal)
+        } else {
+            Some(Ordering::Less)
+        }
+    }
+}
+
+impl<S: Socket> Ord for QosZeroSession<S> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if let Some(ws) = &self.connect {
+            if let Some(ws_other) = &other.connect {
+                ws.get_token().cmp(&ws_other.get_token())
+            } else {
+                Ordering::Greater
+            }
+        } else if other.connect.is_none() {
+            Ordering::Equal
+        } else {
+            Ordering::Less
+        }
+    }
+}
+
+impl<S: Socket> Clone for QosZeroSession<S> {
+    fn clone(&self) -> Self {
+        QosZeroSession {
+            connect: self.connect.clone(),
+            is_accepted: self.is_accepted,
+            is_clean: self.is_clean,
+            will: self.will.clone(),
+            user: self.user.clone(),
+            pwd: self.pwd.clone(),
+            keep_alive: self.keep_alive,
+        }
+    }
+}
+
 impl<S: Socket> Default for QosZeroSession<S> {
     fn default() -> Self {
         QosZeroSession {
             connect: None,
             is_accepted: false,
             is_clean: false,
-            sub_tab: HashMap::with_hasher(FnvBuildHasher::default()),
             will: None,
             user: None,
             pwd: None,
@@ -148,28 +194,6 @@ impl<S: Socket> MqttSession for QosZeroSession<S> {
 
     fn set_clean(&mut self, clean: bool) {
         self.is_clean = clean;
-    }
-
-    fn is_subscribed(&self, topic: &Atom) -> bool {
-        self.sub_tab.contains_key(topic)
-    }
-
-    fn topics(&self) -> Option<Vec<Atom>> {
-        if self.sub_tab.len() == 0 {
-            return None;
-        }
-
-        Some(self.sub_tab.keys().map(|topic| {
-            topic.clone()
-        }).collect())
-    }
-
-    fn subscribe(&mut self, topic: Atom, qos: u8) {
-        self.sub_tab.insert(topic, QoS::from_u8(qos).unwrap());
-    }
-
-    fn unsubscribe(&mut self, topic: &Atom) {
-        self.sub_tab.remove(topic);
     }
 
     fn get_will(&self) -> Option<(&str, &str, u8, bool)> {

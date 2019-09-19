@@ -76,11 +76,15 @@ impl SocketReady {
     //移除当前就绪状态
     pub fn remove(&self, ready: Ready) {
         if ready.is_readable() && ready.is_writable() {
-            self.0.fetch_xor(3, Ordering::SeqCst);
+            self.0.store(0, Ordering::SeqCst);
         } else if ready.is_readable() {
-            self.0.fetch_xor(1, Ordering::SeqCst);
+            self.0.fetch_update(|v| {
+                Some(v & !1)
+            }, Ordering::SeqCst, Ordering::SeqCst);
         } else if ready.is_writable() {
-            self.0.fetch_xor(2, Ordering::SeqCst);
+            self.0.fetch_update(|v| {
+                Some(v & !2)
+            }, Ordering::SeqCst, Ordering::SeqCst);
         }
     }
 }

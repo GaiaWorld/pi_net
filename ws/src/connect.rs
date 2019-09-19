@@ -11,7 +11,7 @@ use tcp::{driver::{Socket, AsyncIOWait, SocketHandle, AsyncWriteTask},
           util::{ContextHandle, SocketContext}};
 
 use crate::{frame::{WsHead, WsPayload, WsFrame},
-            util::{ChildProtocol, WsFrameType, WsContext, WsStatus}};
+            util::{ChildProtocol, WsFrameType, WsSession, WsStatus}};
 
 /*
 * 服务端状态码
@@ -29,6 +29,16 @@ pub struct WsSocket<S: Socket, H: AsyncIOWait> {
 }
 
 unsafe impl<S: Socket, H: AsyncIOWait> Send for WsSocket<S, H> {}
+
+impl<S: Socket, H: AsyncIOWait> Clone for WsSocket<S, H> {
+    fn clone(&self) -> Self {
+        WsSocket {
+            socket: self.socket.clone(),
+            window_bits: self.window_bits,
+            marker: PhantomData,
+        }
+    }
+}
 
 /*
 * Websocket连接同步方法
@@ -93,6 +103,11 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         self.socket.get_remote()
     }
 
+    //获取连接会话的句柄
+    pub fn get_session(&self) -> Option<ContextHandle<WsSession>> {
+        self.socket.as_handle().unwrap().as_ref().borrow_mut().get_context().get::<WsSession>()
+    }
+
     //线程安全的分配一个用于发送的写缓冲区
     pub fn alloc(&self) -> WriteBuffer {
         self.socket.alloc().ok().unwrap().unwrap()
@@ -153,7 +168,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                                waits: &H,
                                window_bits: u8,
                                protocol: Arc<dyn ChildProtocol<S, H>>) {
-        let mut h = handle.as_handle().unwrap().as_ref().borrow_mut().get_context().get::<WsContext>().unwrap();
+        let mut h = handle.as_handle().unwrap().as_ref().borrow_mut().get_context().get::<WsSession>().unwrap();
         if h.as_ref().is_closed() || h.as_ref().is_closing() {
             //当前连接已关闭或正在关闭中，则忽略所有读
             return;
@@ -225,7 +240,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                 context.set_type(head.get_type());
             }
         } else {
-            //无法获取上下文的可写引用，则表示有异常，立即关闭Ws连接
+            //无法获取会话的可写引用，则表示有异常，立即关闭Ws连接
             close::<S, H>(handle, Err(Error::new(ErrorKind::Other, format!("Websocket Read Failed, reason: invalid writable context"))));
             return;
         }
@@ -238,7 +253,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
     async fn handle_control(handle: &SocketHandle<S>,
                             waits: &H,
                             window_bits: u8,
-                            mut h: ContextHandle<WsContext>) {
+                            mut h: ContextHandle<WsSession>) {
         let frame_type = h.as_ref().get_type();
         match frame_type {
             wft@WsFrameType::Close => {
@@ -263,7 +278,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
                     context.reset(); //重置当前连接的当前帧
                 } else {
-                    //无法获取上下文的可写引用，则表示有异常，立即关闭Tcp连接
+                    //无法获取会话的可写引用，则表示有异常，立即关闭Tcp连接
                     handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handle close frame failed, reason: invalid writable context"))));
                     return;
                 }
@@ -288,7 +303,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
                     context.reset(); //重置当前连接的当前帧
                 } else {
-                    //无法获取上下文的可写引用，则表示有异常，立即关闭Tcp连接
+                    //无法获取会话的可写引用，则表示有异常，立即关闭Tcp连接
                     handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handle ping frame failed, reason: invalid writable context"))));
                     return;
                 }
@@ -328,26 +343,26 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
     //异步处理Tcp已写事件
     pub async fn handle_writed(handle: SocketHandle<S>, waits: H) {
-        if let Some(mut h) = handle.as_handle().unwrap().as_ref().borrow().get_context().get::<WsContext>() {
+        if let Some(mut h) = handle.as_handle().unwrap().as_ref().borrow().get_context().get::<WsSession>() {
             if let Some(context) = h.as_mut() {
                 if context.is_closed() || context.is_handshaked() {
                     //当前连接已关闭或连接已握手，则忽略写成功事件
                     return;
                 } else if context.is_closing() {
-                    //当前连接正在关闭，且已发送回应的关闭帧，则修改当前连接状态为已关闭，立即释放可写上下文，并立即关闭Tcp连接
+                    //当前连接正在关闭，且已发送回应的关闭帧，则修改当前连接状态为已关闭，立即释放可写会话，并立即关闭Tcp连接
                     context.set_status(WsStatus::Closed);
                     handle.close(Ok(()));
                 } else {
-                    //当前连接正在握手，则修改当前连接状态为已握手，并立即释放可写上下文
+                    //当前连接正在握手，则修改当前连接状态为已握手，并立即释放可写会话
                     context.set_status(WsStatus::HandShaked);
                 }
             } else {
-                //无法获取上下文的可写引用，则表示有异常，立即关闭Tcp连接
+                //无法获取会话的可写引用，则表示有异常，立即关闭Tcp连接
                 handle.close(Err(Error::new(ErrorKind::Other, format!("websocket write failed, reason: invalid writable context"))));
                 return;
             }
         } else {
-            //连接上下文为空，则立即关闭Tcp连接
+            //连接会话为空，则立即关闭Tcp连接
             handle.close(Err(Error::new(ErrorKind::Other, format!("websocket write failed, reason: websocket context empty"))));
             return;
         }
@@ -362,13 +377,13 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
     //异步处理Tcp已关闭事件
     pub async fn handle_closed(handle: SocketHandle<S>, waits: H, result: Result<()>) {
         let mut is_closed = false;
-        if let Some(mut h) = handle.as_handle().unwrap().as_ref().borrow().get_context().get::<WsContext>() {
+        if let Some(mut h) = handle.as_handle().unwrap().as_ref().borrow().get_context().get::<WsSession>() {
             is_closed = h.as_ref().is_closed();
         }
 
         if is_closed {
-            //连接已关闭，则立即释放连接上下文
-            if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().get_context_mut().remove::<WsContext>() {
+            //连接已关闭，则立即释放连接会话
+            if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().get_context_mut().remove::<WsSession>() {
                 println!("!!!> Free Context Failed by Websocket Close, reason: {:?}", e);
             }
         }
