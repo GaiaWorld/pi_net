@@ -83,9 +83,24 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for WebsocketListener<S, H> {
     }
 
     fn handle_closed(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future {
+        let window_bits = self.acceptor.window_bits();
+        let protocol = self.protocol.clone();
+
         let future = async move {
             if let SocketStatus::Closed(result) = status {
-                WsSocket::handle_closed(handle, waits, result).await;
+                WsSocket::handle_closed(handle, waits, window_bits, protocol, result).await;
+            }
+        };
+        future.boxed()
+    }
+
+    fn handle_timeouted(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future {
+        let window_bits = self.acceptor.window_bits();
+        let protocol = self.protocol.clone();
+
+        let future = async move {
+            if let SocketStatus::Timeout(event) = status {
+                WsSocket::handle_timeouted(handle, waits, window_bits, protocol, event).await;
             }
         };
         future.boxed()

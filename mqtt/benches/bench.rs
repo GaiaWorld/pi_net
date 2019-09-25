@@ -9,6 +9,8 @@ use std::time::Duration;
 use std::sync::{Arc, RwLock as StdRwLock};
 
 use dashmap::DashMap;
+use evmap::{Options, ReadHandle, WriteHandle};
+use twox_hash::RandomXxHashBuilder;
 use parking_lot::RwLock;
 use mqtt311::{TopicPath, Topic};
 

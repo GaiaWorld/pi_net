@@ -23,6 +23,7 @@ use crate::acceptor::Acceptor;
 use crate::connect_pool::TcpSocketPool;
 use crate::buffer_pool::WriteBufferPool;
 use crate::driver::{Socket, Stream, SocketAdapter, SocketAdapterFactory, AsyncIOWait, AsyncService, SocketStatus, SocketHandle, SocketConfig, SocketDriver, AsyncServiceFactory};
+use crate::util::SocketEvent;
 
 /*
 * Tcp异步任务等待表
@@ -129,6 +130,10 @@ impl<S, O> SocketAdapter for AsyncAdapter<S, O>
 
         async_run::<S, O>(&self.waits, &self.tasks, &self.spawner, &self.service, handle, SocketStatus::Closed(r));
     }
+
+    fn timeouted(&self, handle: SocketHandle<Self::Connect>, event: SocketEvent) {
+        async_run::<S, O>(&self.waits, &self.tasks, &self.spawner, &self.service, handle, SocketStatus::Timeout(event));
+    }
 }
 
 //运行异步任务
@@ -153,6 +158,7 @@ fn async_run<S, O>(waits: &Rc<RefCell<HashMap<usize, Waker, FnvBuildHasher>>>,
                     SocketStatus::Readed(_) => service.handle_readed(handle, waits, status),
                     SocketStatus::Writed(_) => service.handle_writed(handle, waits, status),
                     SocketStatus::Closed(_) => service.handle_closed(handle, waits, status),
+                    SocketStatus::Timeout(_) => service.handle_timeouted(handle, waits, status),
                 };
                 mem::drop(w); //因为后续操作在异步等待队列引用的作用域内，所以必须显示释放异步等待队列引用，以保证后续可以继续借用异步等待队列
                 let task = LocalTask::new(spawner.clone(), async move {
@@ -287,6 +293,15 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
                     }
                 }
             },
+        }
+    }
+
+    fn timeouted(&self, handle: SocketHandle<Self::Connect>, event: SocketEvent) {
+        if let Some(socket) = handle.as_handle() {
+            let port = socket.borrow().get_local().port();
+            if let Some(adapter) = self.ports.get(&port) {
+                adapter.timeouted(handle, event);
+            }
         }
     }
 }

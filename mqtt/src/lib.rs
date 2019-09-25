@@ -2,7 +2,6 @@ extern crate fnv;
 extern crate mio;
 extern crate mqtt311;
 extern crate parking_lot;
-extern crate dashmap;
 
 #[macro_use]
 extern crate lazy_static;

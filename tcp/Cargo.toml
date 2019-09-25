@@ -9,6 +9,7 @@ mio = "0.6"
 slab = "0.4"
 lazy_static = "1.3"
 atom = { path = "../../pi_lib/atom" }
+local_timer = { path = "../../pi_lib/local_timer" }
 rustls = "0.15"
 crossbeam-channel = "0.3"
 iovec = "0.1"

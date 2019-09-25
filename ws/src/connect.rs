@@ -8,7 +8,7 @@ use mio::Token;
 
 use tcp::{driver::{Socket, AsyncIOWait, SocketHandle, AsyncWriteTask},
           buffer_pool::WriteBuffer,
-          util::{ContextHandle, SocketContext}};
+          util::{ContextHandle, SocketContext, SocketEvent}};
 
 use crate::{frame::{WsHead, WsPayload, WsFrame},
             util::{ChildProtocol, WsFrameType, WsSession, WsStatus}};
@@ -106,6 +106,21 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
     //获取连接会话的句柄
     pub fn get_session(&self) -> Option<ContextHandle<WsSession>> {
         self.socket.as_handle().unwrap().as_ref().borrow_mut().get_context().get::<WsSession>()
+    }
+
+    //线程安全的获取Tcp连接的唯一id
+    pub fn get_uid(&self) -> Option<usize> {
+        self.socket.get_uid()
+    }
+
+    //线程安全的设置Tcp连接超时定时器
+    pub fn set_timeout(&self, timeout: usize, event: SocketEvent) {
+        self.socket.set_timeout(timeout, event);
+    }
+
+    //线程安全的取消Tcp连接超时定时器
+    pub fn unset_timeout(&self) {
+        self.socket.unset_timeout();
     }
 
     //线程安全的分配一个用于发送的写缓冲区
@@ -375,21 +390,40 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
     }
 
     //异步处理Tcp已关闭事件
-    pub async fn handle_closed(handle: SocketHandle<S>, waits: H, result: Result<()>) {
-        let mut is_closed = false;
-        if let Some(mut h) = handle.as_handle().unwrap().as_ref().borrow().get_context().get::<WsSession>() {
-            is_closed = h.as_ref().is_closed();
-        }
-
-        if is_closed {
-            //连接已关闭，则立即释放连接会话
-            if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().get_context_mut().remove::<WsSession>() {
-                println!("!!!> Free Context Failed by Websocket Close, reason: {:?}", e);
-            }
-        }
+    pub async fn handle_closed(handle: SocketHandle<S>, waits: H, window_bits: u8, protocol: Arc<dyn ChildProtocol<S, H>>, result: Result<()>) {
+        let uid = handle.get_uid();
+        let local = handle.get_local();
+        let remote = handle.get_remote();
 
         if let Err(e) = result {
-            println!("!!!> Websocket Closed by Error, reason: {:?}", e);
+            println!("!!!> Websocket Closed by Error, uid: {:?}, local: {:?}, remote: {:?}, reason: {:?}", uid, local, remote, e);
+        }
+
+        //连接已关闭，则立即释放Tcp连接会话
+        match handle.as_handle().unwrap().as_ref().borrow_mut().get_context_mut().remove::<WsSession>() {
+            Err(e) => {
+                println!("!!!> Free Context Failed by Websocket Close, uid: {:?}, local: {:?}, remote: {:?}, reason: {:?}", uid, local, remote, e);
+            },
+            Ok(opt) => {
+                if let Some(context) = opt {
+                    //关闭连接子协议
+                    protocol.close_protocol(Self::new(handle.clone(), window_bits), context);
+                }
+            },
+        }
+    }
+
+    //异步处理Tcp已超时事件
+    pub async fn handle_timeouted(handle: SocketHandle<S>, waits: H, window_bits: u8, protocol: Arc<dyn ChildProtocol<S, H>>, event: SocketEvent) {
+        let mut h = handle.as_handle().unwrap().as_ref().borrow_mut().get_context().get::<WsSession>().unwrap();
+        if let Some(context) = h.as_mut() {
+            if let Err(e) = protocol.protocol_timeout(Self::new(handle.clone(), window_bits), context, event) {
+                //协议超时处理失败，则立即关闭当前Ws连接
+                close::<S, H>(&handle, Err(e));
+            } else {
+                //协议超时处理成功，则立即关闭当前Ws连接
+                close::<S, H>(&handle, Ok(()));
+            }
         }
     }
 }

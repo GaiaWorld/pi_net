@@ -399,3 +399,57 @@ impl IoList {
         self.0 = 0;
     }
 }
+
+/*
+* Tcp连接的事件
+*/
+pub struct SocketEvent {
+    inner: *mut (), //内部事件
+}
+
+unsafe impl Send for SocketEvent {}
+
+impl SocketEvent {
+    //创建空的事件
+    pub fn empty() -> Self {
+        SocketEvent {
+            inner: ptr::null_mut(),
+        }
+    }
+
+    //判断事件是否为空
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_null()
+    }
+
+    //获取事件
+    pub fn get<T: 'static>(&self) -> Option<T> {
+        if self.is_empty() {
+            return None;
+        }
+
+        Some(unsafe { *Box::from_raw(self.inner as *mut T) })
+    }
+
+    //设置事件，如果当前事件不为空，则设置失败
+    pub fn set<T: 'static>(&mut self, event: T) -> bool {
+        if !self.is_empty() {
+            return false;
+        }
+
+        self.inner = Box::into_raw(Box::new(event)) as *mut T as *mut ();
+        true
+    }
+
+    //移除事件，如果当前有事件，则返回被移除的事件
+    pub fn remove<T: 'static>(&mut self) -> Option<T> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let result = self.get();
+        self.inner = ptr::null_mut();
+        result
+    }
+}
+

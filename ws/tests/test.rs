@@ -7,6 +7,7 @@ use tcp::connect::TcpSocket;
 use tcp::server::{AsyncWaitsHandle, AsyncPortsFactory, SocketListener};
 use tcp::driver::{Socket, SocketConfig, AsyncIOWait, AsyncServiceFactory};
 use tcp::buffer_pool::WriteBufferPool;
+use tcp::util::SocketEvent;
 
 use ws::{server::WebsocketListenerFactory,
          connect::WsSocket,
@@ -28,6 +29,16 @@ impl<S: Socket, H: AsyncIOWait> ChildProtocol<S, H> for TestChildProtocol {
                 return Err(e);
             }
         }
+
+        Ok(())
+    }
+
+    fn close_protocol(&self, connect: WsSocket<S, H>, context: WsSession) {
+        println!("websocket closed");
+    }
+
+    fn protocol_timeout(&self, connect: WsSocket<S, H>, context: &mut WsSession, event: SocketEvent) -> Result<()> {
+        println!("websocket timeout");
 
         Ok(())
     }

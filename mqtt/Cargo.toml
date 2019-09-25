@@ -10,7 +10,6 @@ mio = "0.6"
 mqtt311 = "0.2"
 parking_lot = "0.9"
 lazy_static = "1.4"
-dashmap = { path = "E:/wsl_build/dashmap-master" }
 hash = { path = "../../pi_lib/hash", features = ["xxhash"] }
 tcp = { path = "../tcp" }
 ws = { path = "../ws" }

@@ -20,7 +20,8 @@ use mio::{
 
 use atom::Atom;
 
-use crate::{buffer_pool::{WriteBufferHandle, WriteBuffer, WriteBufferPool}, util::SocketContext};
+use crate::{buffer_pool::{WriteBufferHandle, WriteBuffer, WriteBufferPool},
+            util::{SocketContext, SocketEvent}};
 
 /*
 * 默认的ipv4地址
@@ -65,7 +66,7 @@ pub trait Stream: Sized + Send + 'static {
     fn get_ready(&self) -> Ready;
 
     //设置当前流事件准备状态
-    fn set_ready(&mut self, ready: Ready);
+    fn set_ready(&self, ready: Ready);
 
     //取消当前流事件准备状态
     fn unset_ready(&mut self, ready: Ready);
@@ -80,10 +81,19 @@ pub trait Stream: Sized + Send + 'static {
     fn unset_poll_opt(&mut self, opt: PollOpt);
 
     //设置事件唤醒器
-    fn set_rouser(&mut self, rouser: Option<Sender<(Token, Option<WriteBufferHandle>)>>);
+    fn set_rouser(&mut self, rouser: Option<Sender<(Token, SocketWakeup)>>);
 
     //设置关闭事件监听器
     fn set_close_listener(&mut self, listener: Option<Sender<(Token, Result<()>)>>);
+
+    //设置定时器监听器
+    fn set_timer_listener(&mut self, listener: Option<Sender<(Token, Option<(usize, SocketEvent)>)>>);
+
+    //设置定时器句柄，返回上个定时器句柄
+    fn set_timer_handle(&mut self, timer: usize) -> Option<usize>;
+
+    //取消定时器句柄，返回定时器句柄
+    fn unset_timer_handle(&mut self) -> Option<usize>;
 
     //设置写缓冲池句柄
     fn set_write_buffer(&mut self, buffer: WriteBufferPool);
@@ -129,6 +139,12 @@ pub trait Socket: Sized + Send + 'static {
     //获取连接上下文的可写引用
     fn get_context_mut(&mut self) -> &mut SocketContext;
 
+    //设置连接的超时定时器，同时只允许设置一个定时器，新的定时器会覆盖未超时的旧定时器
+    fn set_timeout(&self, timeout: usize, event: SocketEvent);
+
+    //取消连接的未超时超时定时器
+    fn unset_timeout(&self);
+
     //设置连接读写缓冲区容量
     fn init_buffer_capacity(&mut self, read_size: usize, write_size: usize);
 
@@ -170,6 +186,9 @@ pub trait SocketAdapter: 'static {
 
     //已关闭
     fn closed(&self, result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>);
+
+    //已超时
+    fn timeouted(&self, handle: SocketHandle<Self::Connect>, event: SocketEvent);
 }
 
 /*
@@ -211,6 +230,9 @@ pub trait AsyncService<S: Socket, H: AsyncIOWait>: 'static {
 
     //异步处理已关闭
     fn handle_closed(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future;
+
+    //异步处理已超时
+    fn handle_timeouted(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future;
 }
 
 /*
@@ -234,6 +256,15 @@ pub enum SocketStatus {
     Readed(Result<()>),     //已读
     Writed(Result<()>),     //已写
     Closed(Result<()>),     //已关闭
+    Timeout(SocketEvent),   //已超时
+}
+
+/*
+* Tcp连接唤醒类型
+*/
+pub enum SocketWakeup {
+    Write(WriteBufferHandle),   //写唤醒
+    Read(bool),                 //读唤醒，表示唤醒后接收，还是唤醒后继续执行已读回调
 }
 
 /*
@@ -302,6 +333,31 @@ impl<S: Socket> SocketHandle<S> {
     pub fn get_remote(&self) -> &SocketAddr {
         unsafe {
             (&*self.0).get_remote()
+        }
+    }
+
+    //线程安全的获取连接唯一id
+    pub fn get_uid(&self) -> Option<usize> {
+        unsafe {
+            if let Some(uid) = (&*self.0).get_uid() {
+                return Some(uid.clone());
+            }
+
+            None
+        }
+    }
+
+    //线程安全的设置超时定时器
+    pub fn set_timeout(&self, timeout: usize, event: SocketEvent) {
+        unsafe {
+            (&*self.0).set_timeout(timeout, event);
+        }
+    }
+
+    //线程安全的取消超时定时器
+    pub fn unset_timeout(&self) {
+        unsafe {
+            (&*self.0).unset_timeout();
         }
     }
 
@@ -409,7 +465,7 @@ impl<S: Socket, W: AsyncIOWait> Future for AsyncWriteTask<S, W> {
                 Poll::Ready(Err(Error::new(ErrorKind::Other, "async write failed, get socket error")))
             },
             Some(s) => {
-                let mut socket = s.borrow_mut();
+                let socket = s.borrow();
                 socket.write_ready(self.buf.clone());
                 Poll::Ready(Ok(())) //写数据完成
             },

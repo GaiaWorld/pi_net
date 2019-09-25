@@ -15,9 +15,10 @@ extern crate iovec;
 extern crate fnv;
 extern crate futures;
 
-extern crate atom;
+extern crate local_timer;
 extern crate apm;
 extern crate r#async;
+extern crate atom;
 
 pub mod server;
 pub mod driver;

@@ -1,17 +1,19 @@
+use std::sync::Arc;
 use std::cmp::Ordering;
+use std::fmt::{self, Debug};
+use std::hash::{Hash, Hasher};
 
-use dashmap::DashMap;
 use mqtt311::{QoS, LastWill};
-
-use atom::Atom;
 
 use tcp::{server::AsyncWaitsHandle, driver::Socket};
 use ws::connect::WsSocket;
 
+use crate::util::ValueEq;
+
 /*
 * Mqtt会话
 */
-pub trait MqttSession: Default + Clone + Ord + Send + Sync + 'static {
+pub trait MqttSession: Ord + Hash + Debug + Clone + Send + Sync + 'static {
     type Connect;
 
     //获取连接
@@ -80,6 +82,7 @@ pub trait MqttSession: Default + Clone + Ord + Send + Sync + 'static {
 */
 pub struct QosZeroSession<S: Socket> {
     connect:        Option<WsSocket<S, AsyncWaitsHandle>>,  //Websocket连接
+    client_id:      String,                                 //客户端id
     is_accepted:    bool,                                   //是否已连接
     is_clean:       bool,                                   //是否清理会话
     will:           Option<LastWill>,                       //Will
@@ -93,13 +96,7 @@ unsafe impl<S: Socket> Sync for QosZeroSession<S> {}
 
 impl<S: Socket> PartialEq<QosZeroSession<S>> for QosZeroSession<S> {
     fn eq(&self, other: &Self) -> bool {
-        if let Some(ws) = &self.connect {
-            if let Some(ws_other) = &other.connect {
-                return ws.get_token().eq(&ws_other.get_token())
-            }
-        }
-
-        false
+        self.client_id.eq(&other.client_id)
     }
 }
 
@@ -107,33 +104,27 @@ impl<S: Socket> Eq for QosZeroSession<S> {}
 
 impl<S: Socket> PartialOrd<QosZeroSession<S>> for QosZeroSession<S> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        if let Some(ws) = &self.connect {
-            if let Some(ws_other) = &other.connect {
-                ws.get_token().partial_cmp(&ws_other.get_token())
-            } else {
-                Some(Ordering::Greater)
-            }
-        } else if other.connect.is_none() {
-            Some(Ordering::Equal)
-        } else {
-            Some(Ordering::Less)
-        }
+        self.client_id.partial_cmp(&other.client_id)
     }
 }
 
 impl<S: Socket> Ord for QosZeroSession<S> {
     fn cmp(&self, other: &Self) -> Ordering {
+        self.client_id.cmp(&other.client_id)
+    }
+}
+
+impl<S: Socket> Hash for QosZeroSession<S> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         if let Some(ws) = &self.connect {
-            if let Some(ws_other) = &other.connect {
-                ws.get_token().cmp(&ws_other.get_token())
-            } else {
-                Ordering::Greater
-            }
-        } else if other.connect.is_none() {
-            Ordering::Equal
-        } else {
-            Ordering::Less
+            ws.get_token().hash(state);
         }
+    }
+}
+
+impl<S: Socket> Debug for QosZeroSession<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "QosZeroSession {{ client_id: {:?}, is_accepted: {}, is_clean: {}, keep_alive: {} }}", self.client_id, self.is_accepted, self.is_clean, self.keep_alive)
     }
 }
 
@@ -141,6 +132,7 @@ impl<S: Socket> Clone for QosZeroSession<S> {
     fn clone(&self) -> Self {
         QosZeroSession {
             connect: self.connect.clone(),
+            client_id: self.client_id.clone(),
             is_accepted: self.is_accepted,
             is_clean: self.is_clean,
             will: self.will.clone(),
@@ -151,17 +143,9 @@ impl<S: Socket> Clone for QosZeroSession<S> {
     }
 }
 
-impl<S: Socket> Default for QosZeroSession<S> {
-    fn default() -> Self {
-        QosZeroSession {
-            connect: None,
-            is_accepted: false,
-            is_clean: false,
-            will: None,
-            user: None,
-            pwd: None,
-            keep_alive: 0,
-        }
+impl<S: Socket> ValueEq for Arc<QosZeroSession<S>> {
+    fn value_eq(this: &Self, other: &Self) -> bool {
+        Arc::ptr_eq(this, other)
     }
 }
 
@@ -248,5 +232,27 @@ impl<S: Socket> MqttSession for QosZeroSession<S> {
 
     fn set_keep_alive(&mut self, keep_alive: u16) {
         self.keep_alive = keep_alive;
+    }
+}
+
+impl<S: Socket> QosZeroSession<S> {
+    //构建指定客户端id的会话
+    pub fn with_client_id(client_id: String) -> Self {
+        QosZeroSession {
+            connect: None,
+            client_id,
+            is_accepted: false,
+            is_clean: false,
+            will: None,
+            user: None,
+            pwd: None,
+            keep_alive: 0,
+        }
+    }
+}
+
+impl ValueEq for usize {
+    fn value_eq(this: &Self, other: &Self) -> bool {
+        this == other
     }
 }

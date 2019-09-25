@@ -1,4 +1,6 @@
-use std::collections::{hash_map::Entry, BTreeMap};
+use std::sync::Arc;
+use std::fmt::Debug;
+use std::cmp::Ordering;
 
 use mqtt311::{Topic, TopicPath};
 
@@ -6,26 +8,33 @@ use atom::Atom;
 use hash::XHashMap;
 
 /*
+* 值指针相等
+*/
+pub trait ValueEq {
+    fn value_eq(this: &Self, other: &Self) -> bool;
+}
+
+/*
 * 路径节点
 */
 #[derive(Clone)]
-struct PathNode<V: Ord + Clone> {
+struct PathNode<V: ValueEq + Ord + Debug + Clone> {
     topic:      Topic,                          //节点主题名
     level:      usize,                          //节点级别
-    unmatch:    BTreeMap<V, ()>,                //待匹配
+    unmatch:    Vec<V>,                         //待匹配列表
     childs:     XHashMap<Atom, PathNode<V>>,    //子节点
 }
 
-unsafe impl<V: Ord + Clone> Send for PathNode<V> {}
-unsafe impl<V: Ord + Clone> Sync for PathNode<V> {}
+unsafe impl<V: ValueEq + Ord + Debug + Clone> Send for PathNode<V> {}
+unsafe impl<V: ValueEq + Ord + Debug + Clone> Sync for PathNode<V> {}
 
-impl<V: Ord + Clone> PathNode<V> {
+impl<V: ValueEq + Ord + Debug + Clone> PathNode<V> {
     //构建一个指定节点主题名的路径节点
     pub fn new(topic: Topic, level: usize) -> Self {
         PathNode {
             topic,
             level,
-            unmatch: BTreeMap::new(),
+            unmatch: Vec::new(),
             childs: XHashMap::default(),
         }
     }
@@ -35,12 +44,12 @@ impl<V: Ord + Clone> PathNode<V> {
 * 路径匹配树
 */
 #[derive(Clone)]
-pub struct PathTree<V: Ord + Clone> {
+pub struct PathTree<V: ValueEq + Ord + Debug + Clone> {
     root:   PathNode<V>,    //根节点
     size:   usize,          //值数量
 }
 
-impl<V: Ord + Clone> PathTree<V> {
+impl<V: ValueEq + Ord + Debug + Clone> PathTree<V> {
     //构建空路径匹配树
     pub fn empty() -> Self {
         PathTree {
@@ -66,10 +75,10 @@ impl<V: Ord + Clone> PathTree<V> {
             return None;
         }
 
-        let mut map = BTreeMap::new(); //用于记录并去重
+        let mut map = Vec::new(); //用于记录并去重
         lookup(Some(&self.root), &path, path.len(), 0, &mut map);
 
-        Some(map.keys().cloned().collect())
+        Some(map)
     }
 
     //插入一个路径对应的值
@@ -93,7 +102,13 @@ impl<V: Ord + Clone> PathTree<V> {
                         let mut n = PathNode::new(topic.clone(), index);
                         if path.is_final(index) {
                             //路径已结束，则将值插入当前节点的待匹配列表中
-                            n.unmatch.insert(value, ());
+                            if let Err(index) = n.unmatch.binary_search_by(|v: &V| {
+                                v.cmp(&value)
+                            }) {
+                                //不在待匹配列表中，则插入指定位置，保证列表有序
+                                n.unmatch.insert(index, value)
+                            }
+
                             node.childs.insert(key.clone(), n);
                             break;
                         }
@@ -105,7 +120,12 @@ impl<V: Ord + Clone> PathTree<V> {
                         //指定主题的节点存在
                         if path.is_final(index) {
                             //路径已结束，则将值插入当前节点的待匹配列表中
-                            n.unmatch.insert(value, ());
+                            if let Err(index) = n.unmatch.binary_search_by(|v: &V| {
+                                v.cmp(&value)
+                            }) {
+                                //不在待匹配列表中，则插入指定位置，保证列表有序
+                                n.unmatch.insert(index, value)
+                            }
                             break;
                         }
                     },
@@ -145,7 +165,12 @@ impl<V: Ord + Clone> PathTree<V> {
                         //指定主题的节点存在
                         if path.is_final(index) {
                             //路径已结束，则将值移除当前节点的待匹配列表中
-                            n.unmatch.remove(&value);
+                            if let Ok(index) = n.unmatch.binary_search_by(|s| {
+                                value.cmp(s)
+                            }) {
+                                //从待匹配列表中找到指定会话，则移除
+                                n.unmatch.remove(index);
+                            }
                             return Ok(())
                         }
                     },
@@ -163,7 +188,7 @@ impl<V: Ord + Clone> PathTree<V> {
 }
 
 //递归遍历查找匹配指定路径的值
-fn lookup<V: Ord + Clone>(mut path_node: Option<&PathNode<V>>, path: &TopicPath, path_len: usize, index: usize, values: &mut BTreeMap<V, ()>) {
+fn lookup<V: ValueEq + Ord + Debug + Clone>(mut path_node: Option<&PathNode<V>>, path: &TopicPath, path_len: usize, index: usize, values: &mut Vec<V>) {
     if path_node.is_none() {
         //当前路径树节点为空，则返回
         return;
@@ -190,9 +215,7 @@ fn lookup<V: Ord + Clone>(mut path_node: Option<&PathNode<V>>, path: &TopicPath,
                         //指定路径的主题已结束
                         if let Some(n) = node.childs.get(&Atom::from("+")) {
 //                            println!("!!!!!!7");
-                            for value in n.unmatch.keys() {
-                                values.insert(value.clone(), ());
-                            }
+                            values.extend_from_slice(&n.unmatch[..])
                         }
                     } else {
                         //指定路径的主题未结束, 路径树的当前节点中存在当级匹配路径，则尝试查找当级匹配路径，并返回
@@ -214,14 +237,10 @@ fn lookup<V: Ord + Clone>(mut path_node: Option<&PathNode<V>>, path: &TopicPath,
                     if path.is_final(i) {
                         //指定路径的主题已结束
                         if let Some(r) = node.childs.get(&Atom::from("+")) {
-                            for value in r.unmatch.keys() {
-                                values.insert(value.clone(), ());
-                            }
+                            values.extend_from_slice(&r.unmatch[..]);
                         }
 
-                        for value in n.unmatch.keys() {
-                            values.insert(value.clone(), ());
-                        }
+                        values.extend_from_slice(&n.unmatch[..]);
                         break;
                     } else {
                         //路径树的当前节点中存在当级匹配路径，则查找后继续
@@ -239,8 +258,6 @@ fn lookup<V: Ord + Clone>(mut path_node: Option<&PathNode<V>>, path: &TopicPath,
 }
 
 //获取指定全匹配节点下的所有值
-fn all_values<V: Ord + Clone>(node: &PathNode<V>, values: &mut BTreeMap<V, ()>) {
-    for value in node.unmatch.keys() {
-        values.insert(value.clone(), ());
-    }
+fn all_values<V: ValueEq + Ord + Debug + Clone>(node: &PathNode<V>, values: &mut Vec<V>) {
+    values.extend_from_slice(&node.unmatch[..]);
 }

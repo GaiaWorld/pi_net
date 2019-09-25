@@ -7,7 +7,7 @@ use fnv::FnvBuildHasher;
 
 use tcp::{driver::{Socket, AsyncIOWait},
           buffer_pool::WriteBuffer,
-          util::SocketContext};
+          util::{SocketContext, SocketEvent}};
 
 use crate::{connect::WsSocket,
             frame::{CLOSE_OPCODE, TEXT_OPCODE, BINARY_OPCODE, PING_OPCODE, PONG_OPCODE}};
@@ -19,8 +19,14 @@ pub trait ChildProtocol<S: Socket, H: AsyncIOWait>: Send + Sync + 'static {
     //获取子协议名称
     fn protocol_name(&self) -> &str;
 
-    //解码子协议
+    //解码子协议，返回错误将立即关闭当前连接
     fn decode_protocol(&self, connect: WsSocket<S, H>, context: &mut WsSession) -> Result<()>;
+
+    //关闭子协议
+    fn close_protocol(&self, connect: WsSocket<S, H>, context: WsSession);
+
+    //子协议超时，返回即关闭当前连接
+    fn protocol_timeout(&self, connect: WsSocket<S, H>, context: &mut WsSession, event: SocketEvent) -> Result<()>;
 }
 
 /*

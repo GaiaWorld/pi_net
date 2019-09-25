@@ -151,6 +151,13 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
         };
         future.boxed()
     }
+
+    fn handle_timeouted(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future {
+        let future = async move {
+            println!("!!!> Socket Timeout, token: {:?}, remote: {:?}, local: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local());
+        };
+        future.boxed()
+    }
 }
 
 struct TestServiceFactory<S: Socket>(PhantomData<S>);
