@@ -14,7 +14,7 @@ use crate::util::ValueEq;
 /*
 * Mqtt会话
 */
-pub trait MqttSession: Ord + Hash + Debug + Clone + Send + Sync + 'static {
+pub trait MqttSession: Debug + Send + Sync + 'static {
     type Connect;
 
     //获取连接

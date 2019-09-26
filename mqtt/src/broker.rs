@@ -23,7 +23,7 @@ pub const MQTT_RESPONSE_SYS_TOPIC: &'static str = "$r";
 /*
 * Mqtt代理服务
 */
-pub trait MqttBrokerService<S: Socket> {
+pub trait MqttBrokerService<C> {
     //获取服务质量
     fn get_qos(&self) -> u8;
 
@@ -31,10 +31,10 @@ pub trait MqttBrokerService<S: Socket> {
     fn set_qos(&mut self, qos: u8);
 
     //指定Mqtt客户端请求的指定主题的服务
-    fn request(&self, connect: Arc<QosZeroSession<S>>, topic: String) -> Result<()>;
+    fn request(&self, connect: Arc<dyn MqttSession<Connect = C>>, topic: String) -> Result<()>;
 
     //处理Mqtt客户端关闭事件
-    fn closed(&self, connect: Arc<QosZeroSession<S>>, context: BrokerSession, reason: Result<()>);
+    fn closed(&self, connect: Arc<dyn MqttSession<Connect = C>>, context: BrokerSession, reason: Result<()>);
 }
 
 /*
@@ -70,12 +70,12 @@ impl<S: Socket> SubCache<S> {
 */
 #[derive(Clone)]
 pub struct MqttBroker<S: Socket> {
-    services:   Arc<RwLock<XHashMap<String, Arc<dyn MqttBrokerService<S>>>>>,   //服务表，保存指定主题的服务
-    sessions:   Arc<RwLock<XHashMap<String, Arc<QosZeroSession<S>>>>>,          //会话表
-    sub_tab:    Arc<RwLock<XHashMap<String, Arc<RwLock<SubCache<S>>>>>>,        //会话订阅表
-    patterns:   Arc<RwLock<PathTree<Arc<QosZeroSession<S>>>>>,                  //订阅模式表
-    publics:    Arc<RwLock<Vec<(String, u8)>>>,                                 //已发布的公共主题列表
-    topics:     Arc<RwLock<XHashMap<Arc<QosZeroSession<S>>, Vec<String>>>>,     //用户已订阅主题表
+    services:   Arc<RwLock<XHashMap<String, Arc<dyn MqttBrokerService<<QosZeroSession<S> as MqttSession>::Connect>>>>>, //服务表，保存指定主题的服务
+    sessions:   Arc<RwLock<XHashMap<String, Arc<QosZeroSession<S>>>>>,                                                  //会话表
+    sub_tab:    Arc<RwLock<XHashMap<String, Arc<RwLock<SubCache<S>>>>>>,                                                //会话订阅表
+    patterns:   Arc<RwLock<PathTree<Arc<QosZeroSession<S>>>>>,                                                          //订阅模式表
+    publics:    Arc<RwLock<Vec<(String, u8)>>>,                                                                         //已发布的公共主题列表
+    topics:     Arc<RwLock<XHashMap<Arc<QosZeroSession<S>>, Vec<String>>>>,                                             //用户已订阅主题表
 }
 
 unsafe impl<S: Socket> Send for MqttBroker<S> {}
@@ -95,12 +95,12 @@ impl<S: Socket> MqttBroker<S> {
     }
 
     //获取指定主题的服务
-    pub fn get_service(&self, topic: &String) -> Option<Arc<dyn MqttBrokerService<S>>> {
+    pub fn get_service(&self, topic: &String) -> Option<Arc<dyn MqttBrokerService<<QosZeroSession<S> as MqttSession>::Connect>>> {
         self.services.read().get(topic).cloned()
     }
 
     //注册指定主题的服务
-    pub fn register_service(&self, topic: String, server: Arc<dyn MqttBrokerService<S>>) {
+    pub fn register_service(&self, topic: String, server: Arc<dyn MqttBrokerService<<QosZeroSession<S> as MqttSession>::Connect>>) {
         self.services.write().insert(topic, server);
     }
 

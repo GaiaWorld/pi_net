@@ -9,4 +9,5 @@ members = [
   "tcp",
   "ws",
   "mqtt",
+  "rpc",
 ]

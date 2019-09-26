@@ -88,19 +88,15 @@ impl ChildProtocol<TcpSocket, AsyncWaitsHandle> for WsMqtt311 {
                 if let Some(context) = opt {
                     let client_id = context.get_client_id();
                     if let Some(session) = WS_MQTT3_BROKER.get_session(client_id) {
-                        let connect;
                         if session.is_clean() {
                             //需要清理会话
                             WS_MQTT3_BROKER.unsubscribe_all(&session); //退订当前会话订阅的所有主题
-                            connect = WS_MQTT3_BROKER.remove_session(client_id).unwrap(); //从会话表中移除会话
-                        } else {
-                            //不需要清理会话
-                            connect = WS_MQTT3_BROKER.get_session(client_id).unwrap(); //从会话表中获取会话
+                            WS_MQTT3_BROKER.remove_session(client_id); //从会话表中移除会话
                         }
 
                         //处理Mqtt客户端关闭
                         if let Some(service) = WS_MQTT3_BROKER.get_service(&MQTT_CLOSE_SYS_TOPIC.to_string()) {
-                            service.closed(connect, context, reason);
+                            service.closed(session, context, reason);
                         }
                     }
                 }
