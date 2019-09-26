@@ -391,23 +391,15 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
     //异步处理Tcp已关闭事件
     pub async fn handle_closed(handle: SocketHandle<S>, waits: H, window_bits: u8, protocol: Arc<dyn ChildProtocol<S, H>>, result: Result<()>) {
-        let uid = handle.get_uid();
-        let local = handle.get_local();
-        let remote = handle.get_remote();
-
-        if let Err(e) = result {
-            println!("!!!> Websocket Closed by Error, uid: {:?}, local: {:?}, remote: {:?}, reason: {:?}", uid, local, remote, e);
-        }
-
-        //连接已关闭，则立即释放Tcp连接会话
+        //连接已关闭，则立即释放Tcp连接的上下文
         match handle.as_handle().unwrap().as_ref().borrow_mut().get_context_mut().remove::<WsSession>() {
             Err(e) => {
-                println!("!!!> Free Context Failed by Websocket Close, uid: {:?}, local: {:?}, remote: {:?}, reason: {:?}", uid, local, remote, e);
+                println!("!!!> Free Context Failed by Websocket Close, uid: {:?}, local: {:?}, remote: {:?}, reason: {:?}", handle.get_uid(), handle.get_local(), handle.get_remote(), e);
             },
             Ok(opt) => {
                 if let Some(context) = opt {
                     //关闭连接子协议
-                    protocol.close_protocol(Self::new(handle.clone(), window_bits), context);
+                    protocol.close_protocol(Self::new(handle.clone(), window_bits), context, result);
                 }
             },
         }

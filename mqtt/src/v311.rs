@@ -16,7 +16,9 @@ use tcp::{server::AsyncWaitsHandle, driver::Socket, connect::TcpSocket, util::So
 use ws::{connect::WsSocket,
          util::{ChildProtocol, ChildProtocolFactory, WsFrameType, WsSession}};
 
-use crate::{broker::{Retain, MqttBroker}, session::{MqttSession, QosZeroSession}};
+use crate::{broker::{MQTT_CLOSE_SYS_TOPIC, Retain, MqttBroker},
+            session::{MqttSession, QosZeroSession},
+            util::BrokerSession};
 
 /*
 * 全局Mqtt3.1.1协议代理
@@ -76,22 +78,33 @@ impl ChildProtocol<TcpSocket, AsyncWaitsHandle> for WsMqtt311 {
         }
     }
 
-    fn close_protocol(&self, connect: WsSocket<TcpSocket, AsyncWaitsHandle>, mut context: WsSession) {
-        //连接已关闭，则清理Mqtt会话
-        if let Some(handle) = context.get_context().get::<(String, u16)>() {
-            let (client_id, _) = handle.as_ref();
-            if let Some(session) = WS_MQTT3_BROKER.get_session(client_id) {
-                if session.is_clean() {
-                    //如果会话需要被清理
-                    WS_MQTT3_BROKER.unsubscribe_all(&session); //退订当前会话订阅的所有主题
-                    WS_MQTT3_BROKER.remove_session(client_id); //从会话表中移除会话
-                }
-            }
-        }
+    fn close_protocol(&self, connect: WsSocket<TcpSocket, AsyncWaitsHandle>, mut context: WsSession, reason: Result<()>) {
+        //连接已关闭，则立即释放Ws会话的上下文
+        match context.get_context_mut().remove::<BrokerSession>() {
+            Err(e) => {
+                println!("!!!> Free Context Failed of Mqtt Close, reason: {:?}", e);
+            },
+            Ok(opt) => {
+                if let Some(context) = opt {
+                    let client_id = context.get_client_id();
+                    if let Some(session) = WS_MQTT3_BROKER.get_session(client_id) {
+                        let connect;
+                        if session.is_clean() {
+                            //需要清理会话
+                            WS_MQTT3_BROKER.unsubscribe_all(&session); //退订当前会话订阅的所有主题
+                            connect = WS_MQTT3_BROKER.remove_session(client_id).unwrap(); //从会话表中移除会话
+                        } else {
+                            //不需要清理会话
+                            connect = WS_MQTT3_BROKER.get_session(client_id).unwrap(); //从会话表中获取会话
+                        }
 
-        //连接已关闭，则立即释放Ws连接会话
-        if let Err(e) = context.get_context_mut().remove::<(String, u16)>() {
-            println!("!!!> Free Context Failed of Mqtt Close, reason: {:?}", e);
+                        //处理Mqtt客户端关闭
+                        if let Some(service) = WS_MQTT3_BROKER.get_service(&MQTT_CLOSE_SYS_TOPIC.to_string()) {
+                            service.closed(connect, context, reason);
+                        }
+                    }
+                }
+            },
         }
     }
 
@@ -207,7 +220,7 @@ fn accept(protocol: &WsMqtt311,
     //在Ws连接会话中绑定当前连接与当前客户端会话
     if let Some(mut handle) = connect.get_session() {
         if let Some(ws_session) = handle.as_mut() {
-            ws_session.get_context_mut().set::<(String, u16)>((client_id.clone(), packet.keep_alive));
+            ws_session.get_context_mut().set::<BrokerSession>(BrokerSession::new(client_id.clone(), packet.keep_alive));
         }
     }
 
@@ -248,10 +261,10 @@ fn reset_session(protocol: &WsMqtt311,
 //获取Ws连接绑定的客户端id和客户端保持时长
 #[inline(always)]
 fn get_client_context(connect: &WsSocket<TcpSocket, AsyncWaitsHandle>) -> Result<(String, u16)> {
-    if let Some(handle) = connect.get_session().unwrap().as_ref().get_context().get::<(String, u16)>() {
+    if let Some(handle) = connect.get_session().unwrap().as_ref().get_context().get::<BrokerSession>() {
         //Ws连接绑定的客户端存在
         let h = handle.as_ref();
-        Ok((h.0.clone(), h.1))
+        Ok((h.get_client_id().clone(), h.get_keep_alive()))
     } else {
         //Ws连接绑定的客户端不存在，则立即返回错误原因
         Err(Error::new(ErrorKind::ConnectionRefused, "mqtt subscribe failed, reason: invalid connect"))
@@ -292,6 +305,14 @@ fn publish(protocol: &WsMqtt311,
         retain = Some(packet.clone());
     }
 
+    if let Some(service) = WS_MQTT3_BROKER.get_service(&packet.topic_name) {
+        //如果指定主题有服务，则只执行服务
+        if let Some(session) = WS_MQTT3_BROKER.get_session(&client_id) {
+            return service.request(session, packet.topic_name.clone());
+        }
+    }
+
+    //如果指定主题没有服务，则执行标准发布
     let mut is_public = true; //是否为公共主题
 
     if let Some(sessions) = WS_MQTT3_BROKER.subscribed(is_public, &topic_path.path, qos, retain) {

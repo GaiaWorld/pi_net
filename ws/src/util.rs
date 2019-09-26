@@ -23,7 +23,7 @@ pub trait ChildProtocol<S: Socket, H: AsyncIOWait>: Send + Sync + 'static {
     fn decode_protocol(&self, connect: WsSocket<S, H>, context: &mut WsSession) -> Result<()>;
 
     //关闭子协议
-    fn close_protocol(&self, connect: WsSocket<S, H>, context: WsSession);
+    fn close_protocol(&self, connect: WsSocket<S, H>, context: WsSession, reason: Result<()>);
 
     //子协议超时，返回即关闭当前连接
     fn protocol_timeout(&self, connect: WsSocket<S, H>, context: &mut WsSession, event: SocketEvent) -> Result<()>;

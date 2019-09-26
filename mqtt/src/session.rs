@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::io::Result;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
@@ -75,6 +76,9 @@ pub trait MqttSession: Ord + Hash + Debug + Clone + Send + Sync + 'static {
 
     //设置连接保持间隔时长
     fn set_keep_alive(&mut self, keep_alive: u16);
+
+    //关闭连接
+    fn close(&self, reason: Result<()>) -> Result<()>;
 }
 
 /*
@@ -232,6 +236,14 @@ impl<S: Socket> MqttSession for QosZeroSession<S> {
 
     fn set_keep_alive(&mut self, keep_alive: u16) {
         self.keep_alive = keep_alive;
+    }
+
+    fn close(&self, reason: Result<()>) -> Result<()> {
+        if let Some(connect) = &self.connect {
+            return connect.close(reason);
+        }
+
+        Ok(())
     }
 }
 

@@ -154,7 +154,10 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
 
     fn handle_timeouted(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future {
         let future = async move {
-            println!("!!!> Socket Timeout, token: {:?}, remote: {:?}, local: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local());
+            if let Some(socket) = handle.as_handle() {
+                let token = socket.as_ref().borrow_mut().get_token().unwrap().clone();
+                println!("!!!> Socket Timeout, token: {:?}, remote: {:?}, local: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local());
+            }
         };
         future.boxed()
     }

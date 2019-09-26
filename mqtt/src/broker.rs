@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::io::Result;
 
 use parking_lot::RwLock;
 
@@ -6,8 +7,35 @@ use mqtt311::{TopicPath, Publish};
 
 use tcp::driver::Socket;
 
-use crate::{session::{MqttSession, QosZeroSession}, util::PathTree};
+use crate::{session::{MqttSession, QosZeroSession}, util::{PathTree, BrokerSession}};
 use hash::XHashMap;
+
+/*
+* Mqtt连接关闭的系统主题
+*/
+pub const MQTT_CLOSE_SYS_TOPIC: &'static str = "$close";
+
+/*
+* Mqtt连接回应的系统主题
+*/
+pub const MQTT_RESPONSE_SYS_TOPIC: &'static str = "$r";
+
+/*
+* Mqtt代理服务
+*/
+pub trait MqttBrokerService<S: Socket> {
+    //获取服务质量
+    fn get_qos(&self) -> u8;
+
+    //设置服务质量
+    fn set_qos(&mut self, qos: u8);
+
+    //指定Mqtt客户端请求的指定主题的服务
+    fn request(&self, connect: Arc<QosZeroSession<S>>, topic: String) -> Result<()>;
+
+    //处理Mqtt客户端关闭事件
+    fn closed(&self, connect: Arc<QosZeroSession<S>>, context: BrokerSession, reason: Result<()>);
+}
 
 /*
 * 保留的发布消息
@@ -42,11 +70,12 @@ impl<S: Socket> SubCache<S> {
 */
 #[derive(Clone)]
 pub struct MqttBroker<S: Socket> {
-    sessions:   Arc<RwLock<XHashMap<String, Arc<QosZeroSession<S>>>>>,      //会话表
-    sub_tab:    Arc<RwLock<XHashMap<String, Arc<RwLock<SubCache<S>>>>>>,    //会话订阅表
-    patterns:   Arc<RwLock<PathTree<Arc<QosZeroSession<S>>>>>,              //订阅模式表
-    publics:    Arc<RwLock<Vec<(String, u8)>>>,                             //已发布的公共主题列表
-    topics:     Arc<RwLock<XHashMap<Arc<QosZeroSession<S>>, Vec<String>>>>, //用户已订阅主题表
+    services:   Arc<RwLock<XHashMap<String, Arc<dyn MqttBrokerService<S>>>>>,   //服务表，保存指定主题的服务
+    sessions:   Arc<RwLock<XHashMap<String, Arc<QosZeroSession<S>>>>>,          //会话表
+    sub_tab:    Arc<RwLock<XHashMap<String, Arc<RwLock<SubCache<S>>>>>>,        //会话订阅表
+    patterns:   Arc<RwLock<PathTree<Arc<QosZeroSession<S>>>>>,                  //订阅模式表
+    publics:    Arc<RwLock<Vec<(String, u8)>>>,                                 //已发布的公共主题列表
+    topics:     Arc<RwLock<XHashMap<Arc<QosZeroSession<S>>, Vec<String>>>>,     //用户已订阅主题表
 }
 
 unsafe impl<S: Socket> Send for MqttBroker<S> {}
@@ -56,12 +85,28 @@ impl<S: Socket> MqttBroker<S> {
     //构建Mqtt代理
     pub fn new() -> Self {
         MqttBroker {
+            services: Arc::new(RwLock::new(XHashMap::default())),
             sessions: Arc::new(RwLock::new(XHashMap::default())),
             sub_tab: Arc::new(RwLock::new(XHashMap::default())),
             patterns: Arc::new(RwLock::new(PathTree::empty())),
             publics: Arc::new(RwLock::new(Vec::new())),
             topics: Arc::new(RwLock::new(XHashMap::default())),
         }
+    }
+
+    //获取指定主题的服务
+    pub fn get_service(&self, topic: &String) -> Option<Arc<dyn MqttBrokerService<S>>> {
+        self.services.read().get(topic).cloned()
+    }
+
+    //注册指定主题的服务
+    pub fn register_service(&self, topic: String, server: Arc<dyn MqttBrokerService<S>>) {
+        self.services.write().insert(topic, server);
+    }
+
+    //注销指定主题的服务
+    pub fn unregister_service(&self, topic: &String) {
+        self.services.write().remove(topic);
     }
 
     //会话数量
@@ -387,6 +432,11 @@ impl<S: Socket> MqttBroker<S> {
                 }
             },
         }
+    }
+
+    //服务器订阅增加指定的主题
+    pub fn add_topic(&self, is_public: bool, topic: String, qos: u8, retain: Option<Publish>) -> Option<Vec<Arc<QosZeroSession<S>>>> {
+        self.subscribed(is_public, &topic, qos, retain)
     }
 }
 

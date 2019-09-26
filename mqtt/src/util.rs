@@ -1,11 +1,11 @@
-use std::sync::Arc;
 use std::fmt::Debug;
-use std::cmp::Ordering;
 
 use mqtt311::{Topic, TopicPath};
 
 use atom::Atom;
 use hash::XHashMap;
+
+use tcp::util::SocketContext;
 
 /*
 * 值指针相等
@@ -260,4 +260,46 @@ fn lookup<V: ValueEq + Ord + Debug + Clone>(mut path_node: Option<&PathNode<V>>,
 //获取指定全匹配节点下的所有值
 fn all_values<V: ValueEq + Ord + Debug + Clone>(node: &PathNode<V>, values: &mut Vec<V>) {
     values.extend_from_slice(&node.unmatch[..]);
+}
+
+/*
+* Mqtt代理会话
+*/
+pub struct BrokerSession {
+    client_id:  String,         //客户端id
+    keep_alive: u16,            //连接保持间隔时长，单位秒，服务器端在1.5倍间隔时长内没有收到任何控制报文，则主动关闭连接
+    context:    SocketContext,  //会话上下文
+}
+
+unsafe impl Send for BrokerSession {}
+
+impl BrokerSession {
+    //构建Mqtt代理会话
+    pub fn new(client_id: String, keep_alive: u16) -> Self {
+        BrokerSession {
+            client_id,
+            keep_alive,
+            context: SocketContext::empty(),
+        }
+    }
+
+    //获取客户端id
+    pub fn get_client_id(&self) -> &String {
+        &self.client_id
+    }
+
+    //获取连接保持间隔时长
+    pub fn get_keep_alive(&self) -> u16 {
+        self.keep_alive
+    }
+
+    //获取Mqtt代理会话上下文的只读引用
+    pub fn get_context(&self) -> &SocketContext {
+        &self.context
+    }
+
+    //获取Mqtt代理会话上下文的可写引用
+    pub fn get_context_mut(&mut self) -> &mut SocketContext {
+        &mut self.context
+    }
 }
