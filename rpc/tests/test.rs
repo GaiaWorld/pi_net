@@ -70,19 +70,19 @@ impl Handler for TestRpcHandler {
 
 #[test]
 fn test_rpc_service() {
-    let config = SocketConfig::new("0.0.0.0", &[38080]);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
-    let mut factory = AsyncPortsFactory::<TcpSocket>::new();
-    factory.bind(38080,
-                 Box::new(WebsocketListenerFactory::<TcpSocket>::with_protocol_factory(
-                     Arc::new(WsMqtt311Factory::with_name("mqttv3.1")))));
-
     let event_handler = Arc::new(TestRpcEventHandler);
     let rpc_handler = Arc::new(TestRpcHandler);
     let service = Arc::new(RpcService::new(event_handler.clone(),rpc_handler, event_handler.clone()));
     WS_MQTT3_BROKER.register_service(MQTT_CONNECT_SYS_TOPIC.clone(), service.clone());
     WS_MQTT3_BROKER.register_service("rpc/test".to_string(), service.clone());
     WS_MQTT3_BROKER.register_service(MQTT_CLOSE_SYS_TOPIC.clone(), service);
+
+    let mut factory = AsyncPortsFactory::<TcpSocket>::new();
+    factory.bind(38080,
+                 Box::new(WebsocketListenerFactory::<TcpSocket>::with_protocol_factory(
+                     Arc::new(WsMqtt311Factory::with_name("mqttv3.1")))));
+    let config = SocketConfig::new("0.0.0.0", &[38080]);
+    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
     match SocketListener::bind(factory, buffer, config, 1024, 2 * 1024 * 1024, 1024, Some(10)) {
         Err(e) => {

@@ -178,10 +178,11 @@ impl<S: Socket> AsyncServiceFactory for TestServiceFactory<S> {
 
 #[test]
 fn test_socket_server() {
-    let config = SocketConfig::new("0.0.0.0", &[38080]);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
     let mut factory = AsyncPortsFactory::<TcpSocket>::new();
     factory.bind(38080, Box::new(TestServiceFactory::<TcpSocket>(PhantomData)));
+    let config = SocketConfig::new("0.0.0.0", &[38080]);
+    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
+
     match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Error, reason: {:?}", e);
@@ -196,10 +197,11 @@ fn test_socket_server() {
 
 #[test]
 fn test_socket_server_ipv6() {
-    let config = SocketConfig::new("fe80::c0bc:ecf0:e91:2b3a", &[38080]);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
     let mut factory = AsyncPortsFactory::<TcpSocket>::new();
     factory.bind(38080, Box::new(TestServiceFactory::<TcpSocket>(PhantomData)));
+    let config = SocketConfig::new("fe80::c0bc:ecf0:e91:2b3a", &[38080]);
+    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
+
     match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv6 Address Error, reason: {:?}", e);
@@ -214,10 +216,11 @@ fn test_socket_server_ipv6() {
 
 #[test]
 fn test_socket_server_shared() {
-    let config = SocketConfig::new("::", &[38080]);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
     let mut factory = AsyncPortsFactory::<TcpSocket>::new();
     factory.bind(38080, Box::new(TestServiceFactory::<TcpSocket>(PhantomData)));
+    let config = SocketConfig::new("::", &[38080]);
+    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
+
     match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 & Ipv6 Address Error, reason: {:?}", e);

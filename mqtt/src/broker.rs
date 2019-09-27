@@ -78,12 +78,12 @@ impl<S: Socket> SubCache<S> {
 */
 #[derive(Clone)]
 pub struct MqttBroker<S: Socket> {
-    services:   Arc<RwLock<XHashMap<String, Arc<dyn MqttBrokerService>>>>, //服务表，保存指定主题的服务
-    sessions:   Arc<RwLock<XHashMap<String, Arc<QosZeroSession<S>>>>>,                                                  //会话表
-    sub_tab:    Arc<RwLock<XHashMap<String, Arc<RwLock<SubCache<S>>>>>>,                                                //会话订阅表
-    patterns:   Arc<RwLock<PathTree<Arc<QosZeroSession<S>>>>>,                                                          //订阅模式表
-    publics:    Arc<RwLock<Vec<(String, u8)>>>,                                                                         //已发布的公共主题列表
-    topics:     Arc<RwLock<XHashMap<Arc<QosZeroSession<S>>, Vec<String>>>>,                                             //用户已订阅主题表
+    services:   Arc<RwLock<XHashMap<String, Arc<dyn MqttBrokerService>>>>,  //服务表，保存指定主题的服务
+    sessions:   Arc<RwLock<XHashMap<String, Arc<QosZeroSession<S>>>>>,      //会话表
+    sub_tab:    Arc<RwLock<XHashMap<String, Arc<RwLock<SubCache<S>>>>>>,    //会话订阅表
+    patterns:   Arc<RwLock<PathTree<Arc<QosZeroSession<S>>>>>,              //订阅模式表
+    publics:    Arc<RwLock<Vec<(String, u8)>>>,                             //已发布的公共主题列表
+    topics:     Arc<RwLock<XHashMap<Arc<QosZeroSession<S>>, Vec<String>>>>, //用户已订阅主题表
 }
 
 unsafe impl<S: Socket> Send for MqttBroker<S> {}
