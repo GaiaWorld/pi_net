@@ -33,7 +33,11 @@ impl<S: Socket, H: AsyncIOWait> ChildProtocol<S, H> for TestChildProtocol {
         Ok(())
     }
 
-    fn close_protocol(&self, connect: WsSocket<S, H>, context: WsSession) {
+    fn close_protocol(&self, connect: WsSocket<S, H>, context: WsSession, reason: Result<()>) {
+        if let Err(e) = reason {
+            return println!("websocket closed, reason: {:?}", e);
+        }
+
         println!("websocket closed");
     }
 

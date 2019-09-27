@@ -9,13 +9,14 @@ use tcp::connect::TcpSocket;
 use tcp::server::{AsyncWaitsHandle, AsyncPortsFactory, SocketListener};
 use tcp::driver::{Socket, SocketConfig, AsyncIOWait, AsyncServiceFactory};
 use tcp::buffer_pool::WriteBufferPool;
-
 use ws::{server::WebsocketListenerFactory,
          connect::WsSocket,
          frame::WsHead,
          util::{ChildProtocol, ChildProtocolFactory, WsSession}};
-
-use mqtt::{v311::{WsMqtt311, WsMqtt311Factory}, util::PathTree};
+use mqtt::{v311::{WS_MQTT3_BROKER, WsMqtt311, WsMqtt311Factory},
+           broker::{MQTT_CONNECT_SYS_TOPIC, MQTT_CLOSE_SYS_TOPIC, MqttBrokerService},
+           session::MqttConnect,
+           util::{PathTree, BrokerSession}};
 
 #[test]
 fn test_topic_tree() {
@@ -48,6 +49,27 @@ fn test_topic_tree() {
     }
 }
 
+struct TestBrokerService;
+
+impl MqttBrokerService for TestBrokerService {
+    fn connected(&self, connect: Arc<dyn MqttConnect>) -> Result<()> {
+        println!("mqtt connected, connect: {:?}", connect);
+        Ok(())
+    }
+
+    fn request(&self, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()> {
+        connect.send(&topic, payload)
+    }
+
+    fn closed(&self, connect: Arc<dyn MqttConnect>, context: BrokerSession, reason: Result<()>) {
+        if let Err(e) = reason {
+            return println!("mqtt closed, connect: {:?}, reason: {:?}", connect, e);
+        }
+
+        println!("mqtt closed, connect: {:?}", connect);
+    }
+}
+
 #[test]
 fn test_mqtt_311() {
     let config = SocketConfig::new("0.0.0.0", &[38080]);
@@ -56,6 +78,12 @@ fn test_mqtt_311() {
     factory.bind(38080,
                  Box::new(WebsocketListenerFactory::<TcpSocket>::with_protocol_factory(
                      Arc::new(WsMqtt311Factory::with_name("mqttv3.1")))));
+
+    let service = Arc::new(TestBrokerService);
+    WS_MQTT3_BROKER.register_service(MQTT_CONNECT_SYS_TOPIC.clone(), service.clone());
+    WS_MQTT3_BROKER.register_service("rpc/test".to_string(), service.clone());
+    WS_MQTT3_BROKER.register_service(MQTT_CLOSE_SYS_TOPIC.clone(), service);
+
     match SocketListener::bind(factory, buffer, config, 1024, 2 * 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Mqtt Listener Bind Error, reason: {:?}", e);

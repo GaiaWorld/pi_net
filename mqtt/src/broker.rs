@@ -7,34 +7,42 @@ use mqtt311::{TopicPath, Publish};
 
 use tcp::driver::Socket;
 
-use crate::{session::{MqttSession, QosZeroSession}, util::{PathTree, BrokerSession}};
+use crate::{session::{MqttSession, MqttConnect, QosZeroSession}, util::{PathTree, BrokerSession}};
 use hash::XHashMap;
 
 /*
-* Mqtt连接关闭的系统主题
+* Mqtt连接接受的系统主题
 */
-pub const MQTT_CLOSE_SYS_TOPIC: &'static str = "$close";
+lazy_static! {
+    pub static ref MQTT_CONNECT_SYS_TOPIC: String = "$connect".to_string();
+}
 
 /*
 * Mqtt连接回应的系统主题
 */
-pub const MQTT_RESPONSE_SYS_TOPIC: &'static str = "$r";
+lazy_static! {
+    pub static ref MQTT_RESPONSE_SYS_TOPIC: String = "$r".to_string();
+}
+
+/*
+* Mqtt连接关闭的系统主题
+*/
+lazy_static! {
+    pub static ref MQTT_CLOSE_SYS_TOPIC: String = "$close".to_string();
+}
 
 /*
 * Mqtt代理服务
 */
-pub trait MqttBrokerService<C> {
-    //获取服务质量
-    fn get_qos(&self) -> u8;
-
-    //设置服务质量
-    fn set_qos(&mut self, qos: u8);
+pub trait MqttBrokerService {
+    //处理Mqtt客户端连接事件
+    fn connected(&self, connect: Arc<dyn MqttConnect>) -> Result<()>;
 
     //指定Mqtt客户端请求的指定主题的服务
-    fn request(&self, connect: Arc<dyn MqttSession<Connect = C>>, topic: String) -> Result<()>;
+    fn request(&self, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()>;
 
     //处理Mqtt客户端关闭事件
-    fn closed(&self, connect: Arc<dyn MqttSession<Connect = C>>, context: BrokerSession, reason: Result<()>);
+    fn closed(&self, connect: Arc<dyn MqttConnect>, context: BrokerSession, reason: Result<()>);
 }
 
 /*
@@ -70,7 +78,7 @@ impl<S: Socket> SubCache<S> {
 */
 #[derive(Clone)]
 pub struct MqttBroker<S: Socket> {
-    services:   Arc<RwLock<XHashMap<String, Arc<dyn MqttBrokerService<<QosZeroSession<S> as MqttSession>::Connect>>>>>, //服务表，保存指定主题的服务
+    services:   Arc<RwLock<XHashMap<String, Arc<dyn MqttBrokerService>>>>, //服务表，保存指定主题的服务
     sessions:   Arc<RwLock<XHashMap<String, Arc<QosZeroSession<S>>>>>,                                                  //会话表
     sub_tab:    Arc<RwLock<XHashMap<String, Arc<RwLock<SubCache<S>>>>>>,                                                //会话订阅表
     patterns:   Arc<RwLock<PathTree<Arc<QosZeroSession<S>>>>>,                                                          //订阅模式表
@@ -95,12 +103,12 @@ impl<S: Socket> MqttBroker<S> {
     }
 
     //获取指定主题的服务
-    pub fn get_service(&self, topic: &String) -> Option<Arc<dyn MqttBrokerService<<QosZeroSession<S> as MqttSession>::Connect>>> {
+    pub fn get_service(&self, topic: &String) -> Option<Arc<dyn MqttBrokerService>> {
         self.services.read().get(topic).cloned()
     }
 
     //注册指定主题的服务
-    pub fn register_service(&self, topic: String, server: Arc<dyn MqttBrokerService<<QosZeroSession<S> as MqttSession>::Connect>>) {
+    pub fn register_service(&self, topic: String, server: Arc<dyn MqttBrokerService>) {
         self.services.write().insert(topic, server);
     }
 
@@ -139,8 +147,10 @@ impl<S: Socket> MqttBroker<S> {
     }
 
     //插入指定会话
-    pub fn insert_session(&self, client_id: String, session: QosZeroSession<S>) {
-        self.sessions.write().insert(client_id, Arc::new(session));
+    pub fn insert_session(&self, client_id: String, session: QosZeroSession<S>) -> Arc<QosZeroSession<S>> {
+        let connect = Arc::new(session);
+        self.sessions.write().insert(client_id, connect.clone());
+        connect
     }
 
     //移除指定会话，返回被移除的会话

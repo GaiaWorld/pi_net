@@ -1,15 +1,19 @@
 use std::sync::Arc;
-use std::io::Result;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
+use std::io::{Cursor, Result, Error, ErrorKind};
 
-use mqtt311::{QoS, LastWill};
+use mqtt311::{MqttWrite, QoS, LastWill, Packet, Publish};
 
-use tcp::{server::AsyncWaitsHandle, driver::Socket};
+use tcp::{server::AsyncWaitsHandle,
+          driver::Socket,
+          buffer_pool::WriteBuffer};
 use ws::connect::WsSocket;
 
-use crate::util::ValueEq;
+use crate::{v311::WsMqtt311, util::{ValueEq, BrokerSession}};
+use tcp::util::ContextHandle;
+use std::net::SocketAddr;
 
 /*
 * Mqtt会话
@@ -76,6 +80,29 @@ pub trait MqttSession: Debug + Send + Sync + 'static {
 
     //设置连接保持间隔时长
     fn set_keep_alive(&mut self, keep_alive: u16);
+}
+
+/*
+* Mqtt连接
+*/
+pub trait MqttConnect: Debug + Send + Sync + 'static {
+    //获取连接的唯一id
+    fn get_uid(&self) -> Option<usize>;
+
+    //获取连接的令牌
+    fn get_token(&self) -> Option<usize>;
+
+    //获取本地地址
+    fn get_local_addr(&self) -> Option<SocketAddr>;
+
+    //获取远端地址
+    fn get_remote_addr(&self) -> Option<SocketAddr>;
+
+    //获取连接的代理会话
+    fn get_session(&self) -> Option<ContextHandle<BrokerSession>>;
+
+    //发送消息
+    fn send(&self, topic: &String, payload: Arc<Vec<u8>>) -> Result<()>;
 
     //关闭连接
     fn close(&self, reason: Result<()>) -> Result<()>;
@@ -236,6 +263,78 @@ impl<S: Socket> MqttSession for QosZeroSession<S> {
 
     fn set_keep_alive(&mut self, keep_alive: u16) {
         self.keep_alive = keep_alive;
+    }
+}
+
+impl<S: Socket> MqttConnect for QosZeroSession<S> {
+    fn get_uid(&self) -> Option<usize> {
+        if let Some(connect) = &self.connect {
+            return connect.get_uid()
+        }
+
+        None
+    }
+
+    fn get_token(&self) -> Option<usize> {
+        if let Some(connect) = &self.connect {
+            if let Some(token) = connect.get_token() {
+                return Some(token.0);
+            }
+        }
+
+        None
+    }
+
+    fn get_local_addr(&self) -> Option<SocketAddr> {
+        if let Some(connect) = &self.connect {
+            return Some(connect.get_local().clone());
+        }
+
+        None
+    }
+
+    fn get_remote_addr(&self) -> Option<SocketAddr> {
+        if let Some(connect) = &self.connect {
+            return Some(connect.get_remote().clone());
+        }
+
+        None
+    }
+
+    fn get_session(&self) -> Option<ContextHandle<BrokerSession>> {
+        if let Some(connect) = &self.connect {
+            return connect.get_session().unwrap().as_ref().get_context().get::<BrokerSession>();
+        }
+
+        None
+    }
+
+    fn send(&self, topic: &String, payload: Arc<Vec<u8>>) -> Result<()> {
+        if let Some(connect) = &self.connect {
+            //构建指定负载的报文
+            let packet = Packet::Publish(Publish {
+                dup: false,
+                qos: QoS::AtMostOnce,
+                retain: false,
+                topic_name: topic.clone(),
+                pkid: None,
+                payload,
+            });
+
+            //序列化报文
+            let mut buf: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+            if let Err(e) = buf.write_packet(&packet) {
+                //序列化Mqtt报文失败
+                return Err(Error::new(ErrorKind::InvalidData, format!("mqtt session send failed, reason: {:?}", e)));
+            }
+
+            //通过Ws连接发送指定报文
+            let mut ws_payload = connect.alloc();
+            ws_payload.get_iolist_mut().push_back(buf.into_inner().into());
+            connect.send(WsMqtt311::WS_MSG_TYPE, ws_payload);
+        }
+
+        Ok(())
     }
 
     fn close(&self, reason: Result<()>) -> Result<()> {

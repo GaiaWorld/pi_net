@@ -16,7 +16,7 @@ use tcp::{server::AsyncWaitsHandle, driver::Socket, connect::TcpSocket, util::So
 use ws::{connect::WsSocket,
          util::{ChildProtocol, ChildProtocolFactory, WsFrameType, WsSession}};
 
-use crate::{broker::{MQTT_CLOSE_SYS_TOPIC, Retain, MqttBroker},
+use crate::{broker::{MQTT_CONNECT_SYS_TOPIC, MQTT_CLOSE_SYS_TOPIC, Retain, MqttBroker},
             session::{MqttSession, QosZeroSession},
             util::BrokerSession};
 
@@ -24,7 +24,7 @@ use crate::{broker::{MQTT_CLOSE_SYS_TOPIC, Retain, MqttBroker},
 * 全局Mqtt3.1.1协议代理
 */
 lazy_static! {
-    static ref WS_MQTT3_BROKER: MqttBroker<TcpSocket> = MqttBroker::new();
+    pub static ref WS_MQTT3_BROKER: MqttBroker<TcpSocket> = MqttBroker::new();
 }
 
 /*
@@ -94,8 +94,8 @@ impl ChildProtocol<TcpSocket, AsyncWaitsHandle> for WsMqtt311 {
                             WS_MQTT3_BROKER.remove_session(client_id); //从会话表中移除会话
                         }
 
-                        //处理Mqtt客户端关闭
-                        if let Some(service) = WS_MQTT3_BROKER.get_service(&MQTT_CLOSE_SYS_TOPIC.to_string()) {
+                        //处理Mqtt连接关闭
+                        if let Some(service) = WS_MQTT3_BROKER.get_service(&MQTT_CLOSE_SYS_TOPIC) {
                             service.closed(session, context, reason);
                         }
                     }
@@ -221,14 +221,23 @@ fn accept(protocol: &WsMqtt311,
     }
 
     //清理当前客户端会话
+    let mqtt_connect;
     if is_exist_session {
         if clean_session {
             //需要清理会话，则创建新会话，并重置当前客户端会话
-            reset_session(protocol, connect, client_id, packet);
+            mqtt_connect = reset_session(protocol, connect, client_id, packet);
+        } else {
+            //不需要清理，则获取已存在的会话
+            mqtt_connect = WS_MQTT3_BROKER.get_session(&client_id).unwrap();
         }
     } else {
         //当前客户端会话不存在，则创建新会话，并设置当前客户端会话
-        reset_session(protocol, connect, client_id, packet);
+        mqtt_connect = reset_session(protocol, connect, client_id, packet);
+    }
+
+    if let Some(service) = WS_MQTT3_BROKER.get_service(&MQTT_CONNECT_SYS_TOPIC) {
+        //指定主题的服务存在，则执行服务
+        service.connected(mqtt_connect);
     }
 
     Ok(())
@@ -238,7 +247,7 @@ fn accept(protocol: &WsMqtt311,
 fn reset_session(protocol: &WsMqtt311,
                  connect: WsSocket<TcpSocket, AsyncWaitsHandle>,
                  client_id: String,
-                 packet: Connect) {
+                 packet: Connect) -> Arc<QosZeroSession<TcpSocket>> {
     let mut session = QosZeroSession::with_client_id(client_id.clone());
     session.bind_connect(connect.clone());
     session.set_accept(true);
@@ -249,9 +258,9 @@ fn reset_session(protocol: &WsMqtt311,
     session.set_user_pwd(packet.username, packet.password);
     session.set_keep_alive(packet.keep_alive);
 
-    WS_MQTT3_BROKER.insert_session(client_id, session);
-
     update_timeout(&connect, packet.client_id, packet.keep_alive);
+
+    WS_MQTT3_BROKER.insert_session(client_id, session)
 }
 
 //获取Ws连接绑定的客户端id和客户端保持时长
@@ -304,7 +313,7 @@ fn publish(protocol: &WsMqtt311,
     if let Some(service) = WS_MQTT3_BROKER.get_service(&packet.topic_name) {
         //如果指定主题有服务，则只执行服务
         if let Some(session) = WS_MQTT3_BROKER.get_session(&client_id) {
-            return service.request(session, packet.topic_name.clone());
+            return service.request(session, packet.topic_name.clone(), packet.payload);
         }
     }
 
