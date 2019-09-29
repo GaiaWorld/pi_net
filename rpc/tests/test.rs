@@ -81,7 +81,8 @@ fn test_rpc_service() {
     factory.bind(38080,
                  Box::new(WebsocketListenerFactory::<TcpSocket>::with_protocol_factory(
                      Arc::new(WsMqtt311Factory::with_name("mqttv3.1")))));
-    let config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
+    let mut config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
+    config.set_option(16384, 16384, 16384, 16);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
     match SocketListener::bind(factory, buffer, config, 1024, 2 * 1024 * 1024, 1024, Some(10)) {

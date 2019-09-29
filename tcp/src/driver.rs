@@ -633,6 +633,39 @@ impl SocketConfig {
         }
     }
 
+    //设置配置的连接通用选项
+    pub fn set_option(&mut self,
+                      recv_buffer_size: usize,
+                      send_buffer_size: usize,
+                      read_buffer_capacity: usize,
+                      write_buffer_capacity: usize) {
+        let option = match self {
+            SocketConfig::Raw(_ports, option) => {
+                option
+            },
+            SocketConfig::Tls(_ports, _cert_file, _key_file, _cert_path, option) => {
+                option
+            },
+            SocketConfig::RawIpv4(_ip, _ports, option) => {
+                option
+            },
+            SocketConfig::TlsIpv4(_ip, _ports, _cert_file, _key_file, _cert_path, option) => {
+                option
+            },
+            SocketConfig::RawIpv6(_ip, _ports, option) => {
+                option
+            },
+            SocketConfig::TlsIpv6(_ip, _ports, _cert_file, _key_file, _cert_path, option) => {
+                option
+            },
+        };
+
+        option.recv_buffer_size = recv_buffer_size;
+        option.send_buffer_size = send_buffer_size;
+        option.read_buffer_capacity = read_buffer_capacity;
+        option.write_buffer_capacity = write_buffer_capacity;
+    }
+
     //获取配置的地址列表
     pub fn addrs(&self) -> Vec<SocketAddr> {
         let mut addrs = Vec::with_capacity(1);
