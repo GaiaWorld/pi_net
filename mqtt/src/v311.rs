@@ -507,3 +507,40 @@ impl WsMqtt311Factory {
         }
     }
 }
+
+//服务器订阅增加指定的主题
+pub fn add_topic(is_public: bool, topic: String, qos: u8, retain: Option<Publish>) -> Option<Vec<Arc<QosZeroSession<TcpSocket>>>> {
+    WS_MQTT3_BROKER.subscribed(is_public, &topic, qos, retain)
+}
+
+//服务器发布指定主题的消息
+pub fn publish_topic(is_public: bool, topic: String, qos: u8, retain: Option<Publish>, payload: Arc<Vec<u8>>) -> Result<()> {
+    //获取订阅了当前主题的Mqtt会话
+    if let Some(sessions) = WS_MQTT3_BROKER.subscribed(is_public, &topic, qos, retain) {
+        //获取Mqtt会话的Ws连接
+        let mut connects: Vec<WsSocket<TcpSocket, AsyncWaitsHandle>> = Vec::with_capacity(sessions.len());
+        for session in sessions {
+            //返回会话绑定的Ws连接
+            if let Some(connect) = session.get_connect() {
+                connects.push(connect.clone());
+            }
+        };
+
+        //构建指定负载的报文
+        let packet = Packet::Publish(Publish {
+            dup: false,
+            qos: QoS::AtMostOnce,
+            retain: false,
+            topic_name: topic.clone(),
+            pkid: None,
+            payload,
+        });
+
+        if let Err(e) = broadcast_packet(&connects[..], &packet) {
+            //发布消息失败，则立即返回错误原因
+            return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt broker broadcast failed, reason: {:?}", e)));
+        }
+    }
+
+    Ok(())
+}

@@ -2,13 +2,13 @@ use std::sync::Arc;
 use std::io::Result;
 
 use parking_lot::RwLock;
-
 use mqtt311::{TopicPath, Publish};
+
+use hash::XHashMap;
 
 use tcp::driver::Socket;
 
 use crate::{session::{MqttSession, MqttConnect, QosZeroSession}, util::{PathTree, BrokerSession}};
-use hash::XHashMap;
 
 /*
 * Mqtt连接接受的系统主题
@@ -442,11 +442,6 @@ impl<S: Socket> MqttBroker<S> {
                 }
             },
         }
-    }
-
-    //服务器订阅增加指定的主题
-    pub fn add_topic(&self, is_public: bool, topic: String, qos: u8, retain: Option<Publish>) -> Option<Vec<Arc<QosZeroSession<S>>>> {
-        self.subscribed(is_public, &topic, qos, retain)
     }
 }
 
