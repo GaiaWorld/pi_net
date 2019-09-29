@@ -180,7 +180,7 @@ impl<S: Socket> AsyncServiceFactory for TestServiceFactory<S> {
 fn test_socket_server() {
     let mut factory = AsyncPortsFactory::<TcpSocket>::new();
     factory.bind(38080, Box::new(TestServiceFactory::<TcpSocket>(PhantomData)));
-    let config = SocketConfig::new("0.0.0.0", &[38080]);
+    let config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
     match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
@@ -199,7 +199,7 @@ fn test_socket_server() {
 fn test_socket_server_ipv6() {
     let mut factory = AsyncPortsFactory::<TcpSocket>::new();
     factory.bind(38080, Box::new(TestServiceFactory::<TcpSocket>(PhantomData)));
-    let config = SocketConfig::new("fe80::c0bc:ecf0:e91:2b3a", &[38080]);
+    let config = SocketConfig::new("fe80::c0bc:ecf0:e91:2b3a", factory.bind_ports().as_slice());
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
     match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
@@ -218,7 +218,7 @@ fn test_socket_server_ipv6() {
 fn test_socket_server_shared() {
     let mut factory = AsyncPortsFactory::<TcpSocket>::new();
     factory.bind(38080, Box::new(TestServiceFactory::<TcpSocket>(PhantomData)));
-    let config = SocketConfig::new("::", &[38080]);
+    let config = SocketConfig::new("::", factory.bind_ports().as_slice());
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
     match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {

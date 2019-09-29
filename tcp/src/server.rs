@@ -369,6 +369,13 @@ impl<S: Socket> AsyncPortsFactory<S> {
         self.ports_factory.contains_key(&port)
     }
 
+    //获取已绑定异步服务的端口列表
+    pub fn bind_ports(&self) -> Vec<u16> {
+        self.ports_factory.keys().map(|port| {
+            port.clone()
+        }).collect()
+    }
+
     //为指定端口绑定指定的异步服务工厂，返回上次绑定的异步服务工厂
     pub fn bind(&mut self, port: u16, factory: Box<dyn AsyncServiceFactory<Connect = S, Waits = AsyncWaitsHandle, Out = (), Future = BoxFuture<'static, ()>>>) -> Option<Box<dyn AsyncServiceFactory<Connect = S, Waits = AsyncWaitsHandle, Out = (), Future = BoxFuture<'static, ()>>>> {
         self.ports_factory.insert(port, factory)

@@ -65,7 +65,7 @@ fn test_websocket_listener() {
     factory.bind(38080,
                  Box::new(WebsocketListenerFactory::<TcpSocket>::with_protocol_factory(
                      Arc::new(TestChildProtocolFactory))));
-    let config = SocketConfig::new("0.0.0.0", &[38080]);
+    let config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
     match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {

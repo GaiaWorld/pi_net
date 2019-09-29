@@ -25,42 +25,39 @@ pub const CLOSED_EVENT_NAME: &'static str = "net_connect_close";
 * Rpc服务
 */
 pub struct RpcService {
-    connected_handler:  Arc<
-        dyn Handler<
-            A = usize,
-            B = (),
-            C = (),
-            D = (),
-            E = (),
-            F = (),
-            G = (),
-            H = (),
-            HandleResult = GenResult<(), String>>
-    >,                              //已连接异步处理器
-    request_handler:    Arc<
-        dyn Handler<
-            A = u8,
-            B = Option<SocketAddr>,
-            C = Arc<Vec<u8>>,
-            D = (),
-            E = (),
-            F = (),
-            G = (),
-            H = (),
-            HandleResult = ()>
-    >,                              //请求服务异步处理器
-    closed_handler:     Arc<
-        dyn Handler<
-            A = usize,
-            B = (),
-            C = (),
-            D = (),
-            E = (),
-            F = (),
-            G = (),
-            H = (),
-            HandleResult = GenResult<(), String>>
-    >,                              //已关闭异步处理器
+    connected_handler:  Option<Arc<dyn Handler<
+        A = usize,
+        B = (),
+        C = (),
+        D = (),
+        E = (),
+        F = (),
+        G = (),
+        H = (),
+        HandleResult = GenResult<(), String>>
+    >>,                              //已连接异步处理器
+    request_handler:    Option<Arc<dyn Handler<
+        A = u8,
+        B = Option<SocketAddr>,
+        C = Arc<Vec<u8>>,
+        D = (),
+        E = (),
+        F = (),
+        G = (),
+        H = (),
+        HandleResult = ()>
+    >>,                              //请求服务异步处理器
+    closed_handler:     Option<Arc<dyn Handler<
+        A = usize,
+        B = (),
+        C = (),
+        D = (),
+        E = (),
+        F = (),
+        G = (),
+        H = (),
+        HandleResult = GenResult<(), String>>
+    >>,                              //已关闭异步处理器
 }
 
 unsafe impl Send for RpcService {}
@@ -73,9 +70,11 @@ impl MqttBrokerService for RpcService {
                 let rpc_connect = Arc::new(RpcConnect::new(connect.clone()));
                 if session.get_context_mut().set::<Arc<RpcConnect>>(rpc_connect.clone()) {
                     //异步处理Rpc已连接
-                    let connect_uid = rpc_connect.get_id();
-                    self.connected_handler.handle(rpc_connect, Atom::from(CONNECTED_EVENT_NAME), Args::OneArgs(connect_uid));
-                    return Ok(());
+                    if let Some(handler) = &self.connected_handler {
+                        let connect_uid = rpc_connect.get_id();
+                        handler.handle(rpc_connect, Atom::from(CONNECTED_EVENT_NAME), Args::OneArgs(connect_uid));
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -95,10 +94,12 @@ impl MqttBrokerService for RpcService {
                         Ok(bin) => {
                             //解码请求成功，则异步处理请求
                             let rpc_connect = h.as_ref();
-                            self.request_handler.handle(rpc_connect.clone(),
-                                                        Atom::from(topic),
-                                                        Args::ThreeArgs(0, rpc_connect.get_remote_addr(), Arc::new(bin)));
-                            return Ok(());
+                            if let Some(handler) = &self.request_handler {
+                                handler.handle(rpc_connect.clone(),
+                                               Atom::from(topic),
+                                               Args::ThreeArgs(0, rpc_connect.get_remote_addr(), Arc::new(bin)));
+                                return Ok(());
+                            }
                         },
                     }
                 }
@@ -117,8 +118,10 @@ impl MqttBrokerService for RpcService {
             Ok(opt) => {
                 if let Some(rpc_connect) = opt {
                     //异步处理Rpc连接关闭
-                    let connect_uid = rpc_connect.get_id();
-                    self.connected_handler.handle(rpc_connect, Atom::from(CLOSED_EVENT_NAME), Args::OneArgs(connect_uid));
+                    if let Some(handler) = &self.connected_handler {
+                        let connect_uid = rpc_connect.get_id();
+                        handler.handle(rpc_connect, Atom::from(CLOSED_EVENT_NAME), Args::OneArgs(connect_uid));
+                    }
                 }
             },
         }
@@ -127,46 +130,94 @@ impl MqttBrokerService for RpcService {
 
 impl RpcService {
     //构建Rpc服务
-    pub fn new(connected_handler: Arc<
-                   dyn Handler<
-                       A = usize,
-                       B = (),
-                       C = (),
-                       D = (),
-                       E = (),
-                       F = (),
-                       G = (),
-                       H = (),
-                       HandleResult = GenResult<(), String>>
+    pub fn new() -> Self {
+        RpcService {
+            connected_handler: None,
+            request_handler: None,
+            closed_handler: None,
+        }
+    }
+
+    //构建指定处理器的Rpc服务
+    pub fn with_handler(connected_handler: Arc<dyn Handler<
+                   A = usize,
+                   B = (),
+                   C = (),
+                   D = (),
+                   E = (),
+                   F = (),
+                   G = (),
+                   H = (),
+                   HandleResult = GenResult<(), String>>
                >,
-               request_handler: Arc<
-                   dyn Handler<
-                       A = u8,
-                       B = Option<SocketAddr>,
-                       C = Arc<Vec<u8>>,
-                       D = (),
-                       E = (),
-                       F = (),
-                       G = (),
-                       H = (),
-                       HandleResult = ()>
+               request_handler: Arc<dyn Handler<
+                   A = u8,
+                   B = Option<SocketAddr>,
+                   C = Arc<Vec<u8>>,
+                   D = (),
+                   E = (),
+                   F = (),
+                   G = (),
+                   H = (),
+                   HandleResult = ()>
                >,
-               closed_handler: Arc<
-                   dyn Handler<
-                       A = usize,
-                       B = (),
-                       C = (),
-                       D = (),
-                       E = (),
-                       F = (),
-                       G = (),
-                       H = (),
-                       HandleResult = GenResult<(), String>>
+               closed_handler: Arc<dyn Handler<
+                   A = usize,
+                   B = (),
+                   C = (),
+                   D = (),
+                   E = (),
+                   F = (),
+                   G = (),
+                   H = (),
+                   HandleResult = GenResult<(), String>>
                >) -> Self {
         RpcService {
-            connected_handler,
-            request_handler,
-            closed_handler,
+            connected_handler: Some(connected_handler),
+            request_handler: Some(request_handler),
+            closed_handler: Some(closed_handler),
         }
+    }
+
+    //设置Rpc服务的已连接事件处理器
+    pub fn set_connected_handler(&mut self, handler: Arc<dyn Handler<
+        A = usize,
+        B = (),
+        C = (),
+        D = (),
+        E = (),
+        F = (),
+        G = (),
+        H = (),
+        HandleResult = GenResult<(), String>>>) {
+        self.connected_handler = Some(handler);
+    }
+
+    //设置Rpc的请求服务处理器
+    pub fn set_request_handler(&mut self, handler: Arc<dyn Handler<
+        A = u8,
+        B = Option<SocketAddr>,
+        C = Arc<Vec<u8>>,
+        D = (),
+        E = (),
+        F = (),
+        G = (),
+        H = (),
+        HandleResult = ()>>) {
+        self.request_handler = Some(handler);
+    }
+
+    //设置Rpc服务的已关闭事件处理器
+    pub fn set_closed_handler(&mut self, handler: Arc<dyn Handler<
+        A = usize,
+        B = (),
+        C = (),
+        D = (),
+        E = (),
+        F = (),
+        G = (),
+        H = (),
+        HandleResult = GenResult<(), String>>>) {
+        self.closed_handler = Some(handler);
     }
 }
