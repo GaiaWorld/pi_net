@@ -16,6 +16,5 @@ ws = { path = "../ws" }
 atom = { path = "../../pi_lib/atom" }
 
 [dev-dependencies]
-dashmap = { path = "E:/wsl_build/dashmap-master" }
 twox-hash = "1.5"
 parking_lot = "0.9"

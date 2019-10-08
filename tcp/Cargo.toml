@@ -16,4 +16,4 @@ iovec = "0.1"
 apm = { path = "../../pi_lib/apm" }
 fnv = "1.0"
 async = { path = "../../pi_lib/async" }
-futures-preview = "=0.3.0-alpha.18"
+futures-preview = "=0.3.0-alpha.19"
