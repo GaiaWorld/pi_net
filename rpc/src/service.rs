@@ -7,7 +7,9 @@ use atom::Atom;
 use gray::GrayVersion;
 use handler::{Args, Handler};
 
-use mqtt::{broker::MqttBrokerService, session::MqttConnect, util::BrokerSession};
+use mqtt::broker::MqttBrokerService;
+use mqtt::session::MqttConnect;
+use mqtt::util::BrokerSession;
 
 use crate::connect::{decode, encode, RpcConnect};
 
