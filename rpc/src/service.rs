@@ -180,18 +180,22 @@ unsafe impl Send for RpcService {}
 
 impl MqttBrokerService for RpcService {
     fn request(&self, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()> {
+		println!("rpc request===============================");
         if let Some(mut handle) = connect.get_session() {
             if let Some(session) = handle.as_mut() {
                 if let Some(mut h) = session.get_context().get::<Arc<RpcConnect>>() {
                     match decode(h.as_ref().as_ref(), payload.as_ref()) {
                         Err(e) => {
+							println!("解码请求失败，则立即返回错误原因: {:?}", e);
                             //解码请求失败，则立即返回错误原因
                             return Err(Error::new(ErrorKind::Other, format!("rpc request error, connect: {:?}, reason: {:?}", connect, e)));
                         }
                         Ok(bin) => {
+							println!("hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh");
                             //解码请求成功，则异步处理请求
                             let rpc_connect = h.as_ref();
                             if let Some(handler) = &self.request_handler {
+								println!("handler===============================");
                                 handler.handle(rpc_connect.clone(),
                                                Atom::from(topic),
                                                Args::ThreeArgs(0, rpc_connect.get_remote_addr(), Arc::new(bin)));
