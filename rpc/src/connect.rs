@@ -24,7 +24,7 @@ pub fn decode(connect: &RpcConnect, bin: &[u8]) -> Result<Vec<u8>> {
     let compress_level = bin[0] >> 5;
     connect.compress_level.store(compress_level, Ordering::Relaxed);
     connect.version.store(bin[0] & 0x1f, Ordering::Relaxed);
-    connect.rid.store((bin[1] as u32) << 24 & 0xffffffff | (bin[2] as u32) << 16 & 0xffffff | (bin[3] as u32) << 8 & 0xffff | (bin[4] & 0xff) as u32, Ordering::Relaxed);
+    connect.rid.store((bin[4] as u32) << 24 & 0xffffffff | (bin[3] as u32) << 16 & 0xffffff | (bin[2] as u32) << 8 & 0xffff | (bin[1] & 0xff) as u32, Ordering::Relaxed);
     connect.timeout.store(bin[5], Ordering::Relaxed);
 
     match compress_level {
