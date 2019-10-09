@@ -18,17 +18,22 @@ lazy_static! {
 }
 
 /*
-* Mqtt代理服务
+* Mqtt代理监听器
 */
-pub trait MqttBrokerService {
+pub trait MqttBrokerListener {
     //处理Mqtt客户端连接事件
     fn connected(&self, connect: Arc<dyn MqttConnect>) -> Result<()>;
 
-    //指定Mqtt客户端请求的指定主题的服务
-    fn request(&self, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()>;
-
     //处理Mqtt客户端关闭事件
     fn closed(&self, connect: Arc<dyn MqttConnect>, context: BrokerSession, reason: Result<()>);
+}
+
+/*
+* Mqtt代理服务
+*/
+pub trait MqttBrokerService {
+    //指定Mqtt客户端请求的指定主题的服务
+    fn request(&self, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()>;
 }
 
 /*
@@ -64,7 +69,7 @@ impl<S: Socket> SubCache<S> {
 */
 #[derive(Clone)]
 pub struct MqttBroker<S: Socket> {
-    listener:   Arc<RwLock<Option<Arc<dyn MqttBrokerService>>>>,            //监听器，用于监听Mqtt连接和关闭事件
+    listener:   Arc<RwLock<Option<Arc<dyn MqttBrokerListener>>>>,           //监听器，用于监听Mqtt连接和关闭事件
     services:   Arc<RwLock<XHashMap<String, Arc<dyn MqttBrokerService>>>>,  //服务表，保存指定主题的服务
     sessions:   Arc<RwLock<XHashMap<String, Arc<QosZeroSession<S>>>>>,      //会话表
     sub_tab:    Arc<RwLock<XHashMap<String, Arc<RwLock<SubCache<S>>>>>>,    //会话订阅表
@@ -91,12 +96,12 @@ impl<S: Socket> MqttBroker<S> {
     }
 
     //获取代理监听器
-    pub fn get_listener(&self) -> Option<Arc<dyn MqttBrokerService>> {
+    pub fn get_listener(&self) -> Option<Arc<dyn MqttBrokerListener>> {
         self.listener.read().as_ref().cloned()
     }
 
     //注册代理监听器
-    pub fn register_listener(&self, listener: Arc<dyn MqttBrokerService>) {
+    pub fn register_listener(&self, listener: Arc<dyn MqttBrokerListener>) {
         *self.listener.write() = Some(listener);
     }
 

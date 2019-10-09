@@ -14,7 +14,7 @@ use ws::{server::WebsocketListenerFactory,
          frame::WsHead,
          util::{ChildProtocol, ChildProtocolFactory, WsSession}};
 use mqtt::{v311::{WS_MQTT3_BROKER, WsMqtt311, WsMqtt311Factory},
-           broker::MqttBrokerService,
+           broker::{MqttBrokerListener, MqttBrokerService},
            session::MqttConnect,
            util::{PathTree, BrokerSession}};
 
@@ -51,14 +51,10 @@ fn test_topic_tree() {
 
 struct TestBrokerService;
 
-impl MqttBrokerService for TestBrokerService {
+impl MqttBrokerListener for TestBrokerService {
     fn connected(&self, connect: Arc<dyn MqttConnect>) -> Result<()> {
         println!("mqtt connected, connect: {:?}", connect);
         Ok(())
-    }
-
-    fn request(&self, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()> {
-        connect.send(&topic, payload)
     }
 
     fn closed(&self, connect: Arc<dyn MqttConnect>, context: BrokerSession, reason: Result<()>) {
@@ -67,6 +63,12 @@ impl MqttBrokerService for TestBrokerService {
         }
 
         println!("mqtt closed, connect: {:?}", connect);
+    }
+}
+
+impl MqttBrokerService for TestBrokerService {
+    fn request(&self, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()> {
+        connect.send(&topic, payload)
     }
 }
 
