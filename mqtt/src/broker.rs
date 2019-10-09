@@ -11,24 +11,10 @@ use tcp::driver::Socket;
 use crate::{session::{MqttSession, MqttConnect, QosZeroSession}, util::{PathTree, BrokerSession}};
 
 /*
-* Mqtt连接接受的系统主题
-*/
-lazy_static! {
-    pub static ref MQTT_CONNECT_SYS_TOPIC: String = "$connect".to_string();
-}
-
-/*
 * Mqtt连接回应的系统主题
 */
 lazy_static! {
     pub static ref MQTT_RESPONSE_SYS_TOPIC: String = "$r".to_string();
-}
-
-/*
-* Mqtt连接关闭的系统主题
-*/
-lazy_static! {
-    pub static ref MQTT_CLOSE_SYS_TOPIC: String = "$close".to_string();
 }
 
 /*
@@ -78,6 +64,7 @@ impl<S: Socket> SubCache<S> {
 */
 #[derive(Clone)]
 pub struct MqttBroker<S: Socket> {
+    listener:   Arc<RwLock<Option<Arc<dyn MqttBrokerService>>>>,            //监听器，用于监听Mqtt连接和关闭事件
     services:   Arc<RwLock<XHashMap<String, Arc<dyn MqttBrokerService>>>>,  //服务表，保存指定主题的服务
     sessions:   Arc<RwLock<XHashMap<String, Arc<QosZeroSession<S>>>>>,      //会话表
     sub_tab:    Arc<RwLock<XHashMap<String, Arc<RwLock<SubCache<S>>>>>>,    //会话订阅表
@@ -93,6 +80,7 @@ impl<S: Socket> MqttBroker<S> {
     //构建Mqtt代理
     pub fn new() -> Self {
         MqttBroker {
+            listener: Arc::new(RwLock::new(None)),
             services: Arc::new(RwLock::new(XHashMap::default())),
             sessions: Arc::new(RwLock::new(XHashMap::default())),
             sub_tab: Arc::new(RwLock::new(XHashMap::default())),
@@ -102,14 +90,24 @@ impl<S: Socket> MqttBroker<S> {
         }
     }
 
+    //获取代理监听器
+    pub fn get_listener(&self) -> Option<Arc<dyn MqttBrokerService>> {
+        self.listener.read().as_ref().cloned()
+    }
+
+    //注册代理监听器
+    pub fn register_listener(&self, listener: Arc<dyn MqttBrokerService>) {
+        *self.listener.write() = Some(listener);
+    }
+
     //获取指定主题的服务
     pub fn get_service(&self, topic: &String) -> Option<Arc<dyn MqttBrokerService>> {
         self.services.read().get(topic).cloned()
     }
 
     //注册指定主题的服务
-    pub fn register_service(&self, topic: String, server: Arc<dyn MqttBrokerService>) {
-        self.services.write().insert(topic, server);
+    pub fn register_service(&self, topic: String, service: Arc<dyn MqttBrokerService>) {
+        self.services.write().insert(topic, service);
     }
 
     //注销指定主题的服务

@@ -14,8 +14,7 @@ use tcp::server::{AsyncWaitsHandle, AsyncPortsFactory, SocketListener};
 use tcp::driver::{Socket, SocketConfig, AsyncIOWait, AsyncServiceFactory};
 use tcp::buffer_pool::WriteBufferPool;
 use ws::server::WebsocketListenerFactory;
-use mqtt::{v311::{WS_MQTT3_BROKER, WsMqtt311, WsMqtt311Factory},
-           broker::{MQTT_CONNECT_SYS_TOPIC, MQTT_CLOSE_SYS_TOPIC}};
+use mqtt::v311::{WS_MQTT3_BROKER, WsMqtt311, WsMqtt311Factory};
 
 use rpc::{service::RpcService, connect::RpcConnect};
 
@@ -73,9 +72,8 @@ fn test_rpc_service() {
     let event_handler = Arc::new(TestRpcEventHandler);
     let rpc_handler = Arc::new(TestRpcHandler);
     let service = Arc::new(RpcService::with_handler(event_handler.clone(),rpc_handler, event_handler.clone()));
-    WS_MQTT3_BROKER.register_service(MQTT_CONNECT_SYS_TOPIC.clone(), service.clone());
+    WS_MQTT3_BROKER.register_listener(service.clone());
     WS_MQTT3_BROKER.register_service("rpc/test".to_string(), service.clone());
-    WS_MQTT3_BROKER.register_service(MQTT_CLOSE_SYS_TOPIC.clone(), service);
 
     let mut factory = AsyncPortsFactory::<TcpSocket>::new();
     factory.bind(38080,

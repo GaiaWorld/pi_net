@@ -16,7 +16,7 @@ use tcp::{server::AsyncWaitsHandle, driver::Socket, connect::TcpSocket, util::So
 use ws::{connect::WsSocket,
          util::{ChildProtocol, ChildProtocolFactory, WsFrameType, WsSession}};
 
-use crate::{broker::{MQTT_CONNECT_SYS_TOPIC, MQTT_CLOSE_SYS_TOPIC, Retain, MqttBroker},
+use crate::{broker::{Retain, MqttBroker},
             session::{MqttSession, QosZeroSession},
             util::BrokerSession};
 
@@ -95,8 +95,8 @@ impl ChildProtocol<TcpSocket, AsyncWaitsHandle> for WsMqtt311 {
                         }
 
                         //处理Mqtt连接关闭
-                        if let Some(service) = WS_MQTT3_BROKER.get_service(&MQTT_CLOSE_SYS_TOPIC) {
-                            service.closed(session, context, reason);
+                        if let Some(listener) = WS_MQTT3_BROKER.get_listener() {
+                            listener.closed(session, context, reason);
                         }
                     }
                 }
@@ -235,9 +235,9 @@ fn accept(protocol: &WsMqtt311,
         mqtt_connect = reset_session(protocol, connect, client_id, packet);
     }
 
-    if let Some(service) = WS_MQTT3_BROKER.get_service(&MQTT_CONNECT_SYS_TOPIC) {
+    if let Some(listener) = WS_MQTT3_BROKER.get_listener() {
         //指定主题的服务存在，则执行服务
-        service.connected(mqtt_connect);
+        listener.connected(mqtt_connect);
     }
 
     Ok(())

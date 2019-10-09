@@ -14,7 +14,7 @@ use ws::{server::WebsocketListenerFactory,
          frame::WsHead,
          util::{ChildProtocol, ChildProtocolFactory, WsSession}};
 use mqtt::{v311::{WS_MQTT3_BROKER, WsMqtt311, WsMqtt311Factory},
-           broker::{MQTT_CONNECT_SYS_TOPIC, MQTT_CLOSE_SYS_TOPIC, MqttBrokerService},
+           broker::MqttBrokerService,
            session::MqttConnect,
            util::{PathTree, BrokerSession}};
 
@@ -73,9 +73,8 @@ impl MqttBrokerService for TestBrokerService {
 #[test]
 fn test_mqtt_311() {
     let service = Arc::new(TestBrokerService);
-    WS_MQTT3_BROKER.register_service(MQTT_CONNECT_SYS_TOPIC.clone(), service.clone());
+    WS_MQTT3_BROKER.register_listener(service.clone());
     WS_MQTT3_BROKER.register_service("rpc/test".to_string(), service.clone());
-    WS_MQTT3_BROKER.register_service(MQTT_CLOSE_SYS_TOPIC.clone(), service);
 
     let mut factory = AsyncPortsFactory::<TcpSocket>::new();
     factory.bind(38080,
