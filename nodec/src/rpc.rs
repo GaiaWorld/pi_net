@@ -220,10 +220,10 @@ impl RPCClient {
 //将rpc请求序列化为binary
 fn rpc_to_binary(compress_level: u8, version: u8, uid: u32, timeout: u8, body: Vec<u8>) -> Vec<u8> {
     let head = vec![(compress_level << 5) | (version & 0x1f),
-                    ((uid >> 24) & 0xff) as u8,
-                    ((uid >> 16) & 0xff) as u8,
-                    ((uid >> 8) & 0xff) as u8,
                     (uid & 0xff) as u8,
+                    ((uid >> 8) & 0xff) as u8,
+                    ((uid >> 16) & 0xff) as u8,
+                    ((uid >> 24) & 0xff) as u8,
                     timeout];
 
     match compress_level {
@@ -244,7 +244,7 @@ fn binary_to_rpc(bin: &[u8]) -> Option<(u32, Option<Vec<u8>>)> {
 
     let compress_level = bin[0] >> 5;
     let version = bin[0] & 0x1f;
-    let uid = (bin[1] as u32) << 24 & 0xffffffff | (bin[2] as u32) << 16 & 0xffffff | (bin[3] as u32) << 8 & 0xffff | (bin[4] & 0xff) as u32;
+    let uid = (bin[4] as u32) << 24 & 0xffffffff | (bin[3] as u32) << 16 & 0xffffff | (bin[2] as u32) << 8 & 0xffff | (bin[1] & 0xff) as u32;
 
     match compress_level {
         0 => Some((uid, Some(Vec::from(&bin[6..])))),
