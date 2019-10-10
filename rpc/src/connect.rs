@@ -15,7 +15,7 @@ use mqtt::session::MqttConnect;
 * 解码Rpc请求
 */
 #[inline(always)]
-pub fn decode(connect: &RpcConnect, bin: &[u8]) -> Result<Vec<u8>> {
+pub fn decode(connect: &RpcConnect, bin: &[u8]) -> Result<(u32, Vec<u8>)> {
     if bin.len() < 7 {
         return Err(Error::new(ErrorKind::Other, "rpc decode failed, reason: invalid len"));
     }
@@ -24,11 +24,11 @@ pub fn decode(connect: &RpcConnect, bin: &[u8]) -> Result<Vec<u8>> {
     let compress_level = bin[0] >> 5;
     connect.compress_level.store(compress_level, Ordering::Relaxed);
     connect.version.store(bin[0] & 0x1f, Ordering::Relaxed);
-    connect.rid.store((bin[4] as u32) << 24 & 0xffffffff | (bin[3] as u32) << 16 & 0xffffff | (bin[2] as u32) << 8 & 0xffff | (bin[1] & 0xff) as u32, Ordering::Relaxed);
     connect.timeout.store(bin[5], Ordering::Relaxed);
 
+    let rid = (bin[4] as u32) << 24 & 0xffffffff | (bin[3] as u32) << 16 & 0xffffff | (bin[2] as u32) << 8 & 0xffff | (bin[1] & 0xff) as u32;
     match compress_level {
-        0 => Ok(Vec::from(&bin[6..])),
+        0 => Ok((rid, Vec::from(&bin[6..]))),
         _ => {
             let mut buf = Vec::new();
             if let Err(e) = uncompress(&bin[6..], &mut buf) {
@@ -36,7 +36,7 @@ pub fn decode(connect: &RpcConnect, bin: &[u8]) -> Result<Vec<u8>> {
                 return Err(Error::new(ErrorKind::Other, format!("uncompress failed by rpc decode, reason: {:?}", e)));
             }
 
-            Ok(buf)
+            Ok((rid, buf))
         }
     }
 }
@@ -45,10 +45,9 @@ pub fn decode(connect: &RpcConnect, bin: &[u8]) -> Result<Vec<u8>> {
 * 编码Rpc请求
 */
 #[inline(always)]
-pub fn encode(connect: &RpcConnect, bin: &[u8]) -> Result<Vec<u8>> {
+pub fn encode(connect: &RpcConnect, rid: u32, bin: &[u8]) -> Result<Vec<u8>> {
     let compress_level = connect.get_compress_level();
     let version = connect.get_version();
-    let rid = connect.get_rid();
     let timeout = connect.get_timeout();
 
     //编码头
@@ -84,7 +83,6 @@ pub struct RpcConnect {
     connect:            Arc<dyn MqttConnect>,   //请求的Mqtt连接
     compress_level:     AtomicU8,               //压缩级别
     version:            AtomicU8,               //版本号
-    rid:                AtomicU32,              //请求id
     timeout:            AtomicU8,               //超时时长，单位秒
 }
 
@@ -126,7 +124,6 @@ impl RpcConnect {
             connect,
             compress_level: AtomicU8::new(0),
             version: AtomicU8::new(0),
-            rid: AtomicU32::new(0),
             timeout: AtomicU8::new(0),
         }
     }
@@ -139,11 +136,6 @@ impl RpcConnect {
     //获取当前版本号
     pub fn get_version(&self) -> u8 {
         self.version.load(Ordering::Relaxed)
-    }
-
-    //获取当前请求id
-    pub fn get_rid(&self) -> u32 {
-        self.rid.load(Ordering::Relaxed)
     }
 
     //获取超时时长
@@ -203,15 +195,15 @@ impl RpcConnect {
     }
 
     //发送指定主题的数据
-    pub fn send(&self, topic: String, data: Vec<u8>) {
-        if let Ok(bin) = encode(self, &data[..]) {
+    pub fn send(&self, topic: String, rid: u32, data: Vec<u8>) {
+        if let Ok(bin) = encode(self, rid, &data[..]) {
             self.connect.send(&topic, Arc::new(bin));
         }
     }
 
     //回应指定请求
-    pub fn reply(&self, data: Vec<u8>) {
-        self.send(MQTT_RESPONSE_SYS_TOPIC.clone(), data);
+    pub fn reply(&self, rid: u32, data: Vec<u8>) {
+        self.send(MQTT_RESPONSE_SYS_TOPIC.clone(), rid, data);
     }
 
     //关闭当前连接
