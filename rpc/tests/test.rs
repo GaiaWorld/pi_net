@@ -46,8 +46,8 @@ struct TestRpcHandler;
 impl Handler for TestRpcHandler {
     type A = u8;
     type B = Option<SocketAddr>;
-    type C = Arc<Vec<u8>>;
-    type D = ();
+    type C = u32;
+    type D = Arc<Vec<u8>>;
     type E = ();
     type F = ();
     type G = ();
@@ -56,11 +56,11 @@ impl Handler for TestRpcHandler {
 
     fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> Self::HandleResult {
         let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const RpcConnect) };
-        if let Args::ThreeArgs(_, address, shared) = args {
+        if let Args::FourArgs(_, address, rid, shared) = args {
             thread::spawn(move || {
-                connect.send("rpc/send".to_string(), address.unwrap().to_string().into_bytes());
+                connect.send("rpc/send".to_string(), rid, address.unwrap().to_string().into_bytes());
                 if let Ok(bin) = Arc::try_unwrap(shared) {
-                    connect.reply(bin);
+                    connect.reply(rid, bin);
                 }
             });
         }

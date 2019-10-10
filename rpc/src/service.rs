@@ -166,8 +166,8 @@ pub struct RpcService {
     request_handler:    Option<Arc<dyn Handler<
         A = u8,
         B = Option<SocketAddr>,
-        C = Arc<Vec<u8>>,
-        D = (),
+        C = u32,
+        D = Arc<Vec<u8>>,
         E = (),
         F = (),
         G = (),
@@ -188,13 +188,13 @@ impl MqttBrokerService for RpcService {
                             //解码请求失败，则立即返回错误原因
                             return Err(Error::new(ErrorKind::Other, format!("rpc request error, connect: {:?}, reason: {:?}", connect, e)));
                         }
-                        Ok(bin) => {
+                        Ok((rid, bin)) => {
                             //解码请求成功，则异步处理请求
                             let rpc_connect = h.as_ref();
                             if let Some(handler) = &self.request_handler {
                                 handler.handle(rpc_connect.clone(),
                                                Atom::from(topic),
-                                               Args::ThreeArgs(0, rpc_connect.get_remote_addr(), Arc::new(bin)));
+                                               Args::FourArgs(0, rpc_connect.get_remote_addr(), rid, Arc::new(bin)));
                                 return Ok(());
                             }
                         },
@@ -219,8 +219,8 @@ impl RpcService {
     pub fn with_handler(request_handler: Arc<dyn Handler<
                    A = u8,
                    B = Option<SocketAddr>,
-                   C = Arc<Vec<u8>>,
-                   D = (),
+                   C = u32,
+                   D = Arc<Vec<u8>>,
                    E = (),
                    F = (),
                    G = (),
@@ -236,8 +236,8 @@ impl RpcService {
     pub fn set_request_handler(&mut self, handler: Arc<dyn Handler<
         A = u8,
         B = Option<SocketAddr>,
-        C = Arc<Vec<u8>>,
-        D = (),
+        C = u32,
+        D = Arc<Vec<u8>>,
         E = (),
         F = (),
         G = (),
