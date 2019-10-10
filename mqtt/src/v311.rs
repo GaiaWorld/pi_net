@@ -94,6 +94,9 @@ impl ChildProtocol<TcpSocket, AsyncWaitsHandle> for WsMqtt311 {
                             WS_MQTT3_BROKER.remove_session(client_id); //从会话表中移除会话
                         }
 
+                        //设置会话为已关闭
+                        session.set_accept(false);
+
                         //处理Mqtt连接关闭
                         if let Some(listener) = WS_MQTT3_BROKER.get_listener() {
                             listener.closed(session, context, reason);
@@ -220,20 +223,8 @@ fn accept(protocol: &WsMqtt311,
         }
     }
 
-    //清理当前客户端会话
-    let mqtt_connect;
-    if is_exist_session {
-        if clean_session {
-            //需要清理会话，则创建新会话，并重置当前客户端会话
-            mqtt_connect = reset_session(protocol, connect, client_id, packet);
-        } else {
-            //不需要清理，则获取已存在的会话
-            mqtt_connect = WS_MQTT3_BROKER.get_session(&client_id).unwrap();
-        }
-    } else {
-        //当前客户端会话不存在，则创建新会话，并设置当前客户端会话
-        mqtt_connect = reset_session(protocol, connect, client_id, packet);
-    }
+    //重置当前客户端会话
+    let mqtt_connect = reset_session(protocol, connect, client_id, packet);;
 
     if let Some(listener) = WS_MQTT3_BROKER.get_listener() {
         //指定主题的服务存在，则执行服务

@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use std::net::SocketAddr;
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::io::{Cursor, Result, Error, ErrorKind};
 
 use mqtt311::{MqttWrite, QoS, LastWill, Packet, Publish};
@@ -34,13 +35,13 @@ pub trait MqttSession: Debug + Send + Sync + 'static {
     fn is_accepted(&self) -> bool;
 
     //设置是否已连接
-    fn set_accept(&mut self, connect: bool);
+    fn set_accept(&self, connect: bool);
 
     //是否清理会话
     fn is_clean(&self) -> bool;
 
     //设置是否清理会话
-    fn set_clean(&mut self, clean: bool);
+    fn set_clean(&self, clean: bool);
 
     //获取Will
     fn get_will(&self) -> Option<(&str, &str, u8, bool)>;
@@ -114,8 +115,8 @@ pub trait MqttConnect: Debug + Send + Sync + 'static {
 pub struct QosZeroSession<S: Socket> {
     connect:        Option<WsSocket<S, AsyncWaitsHandle>>,  //Websocket连接
     client_id:      String,                                 //客户端id
-    is_accepted:    bool,                                   //是否已连接
-    is_clean:       bool,                                   //是否清理会话
+    is_accepted:    Arc<AtomicBool>,                        //是否已连接
+    is_clean:       Arc<AtomicBool>,                        //是否清理会话
     will:           Option<LastWill>,                       //Will
     user:           Option<String>,                         //会话用户
     pwd:            Option<String>,                         //会话用户密码
@@ -155,7 +156,7 @@ impl<S: Socket> Hash for QosZeroSession<S> {
 
 impl<S: Socket> Debug for QosZeroSession<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "QosZeroSession {{ client_id: {:?}, is_accepted: {}, is_clean: {}, keep_alive: {} }}", self.client_id, self.is_accepted, self.is_clean, self.keep_alive)
+        write!(f, "QosZeroSession {{ client_id: {:?}, is_accepted: {}, is_clean: {}, keep_alive: {} }}", self.client_id, self.is_accepted.load(AtomicOrdering::Relaxed), self.is_clean.load(AtomicOrdering::Relaxed), self.keep_alive)
     }
 }
 
@@ -164,8 +165,8 @@ impl<S: Socket> Clone for QosZeroSession<S> {
         QosZeroSession {
             connect: self.connect.clone(),
             client_id: self.client_id.clone(),
-            is_accepted: self.is_accepted,
-            is_clean: self.is_clean,
+            is_accepted: self.is_accepted.clone(),
+            is_clean: self.is_clean.clone(),
             will: self.will.clone(),
             user: self.user.clone(),
             pwd: self.pwd.clone(),
@@ -196,19 +197,19 @@ impl<S: Socket> MqttSession for QosZeroSession<S> {
     }
 
     fn is_accepted(&self) -> bool {
-        self.is_accepted
+        self.is_accepted.load(AtomicOrdering::Relaxed)
     }
 
-    fn set_accept(&mut self, accept: bool) {
-        self.is_accepted = accept;
+    fn set_accept(&self, accept: bool) {
+        self.is_accepted.store(accept, AtomicOrdering::SeqCst);
     }
 
     fn is_clean(&self) -> bool {
-        self.is_clean
+        self.is_clean.load(AtomicOrdering::Relaxed)
     }
 
-    fn set_clean(&mut self, clean: bool) {
-        self.is_clean = clean;
+    fn set_clean(&self, clean: bool) {
+        self.is_clean.store(clean, AtomicOrdering::SeqCst);
     }
 
     fn get_will(&self) -> Option<(&str, &str, u8, bool)> {
@@ -303,7 +304,9 @@ impl<S: Socket> MqttConnect for QosZeroSession<S> {
 
     fn get_session(&self) -> Option<ContextHandle<BrokerSession>> {
         if let Some(connect) = &self.connect {
-            return connect.get_session().unwrap().as_ref().get_context().get::<BrokerSession>();
+            if let Some(session) = connect.get_session() {
+                return session.as_ref().get_context().get::<BrokerSession>();
+            }
         }
 
         None
@@ -352,8 +355,8 @@ impl<S: Socket> QosZeroSession<S> {
         QosZeroSession {
             connect: None,
             client_id,
-            is_accepted: false,
-            is_clean: false,
+            is_accepted: Arc::new(AtomicBool::new(false)),
+            is_clean: Arc::new(AtomicBool::new(false)),
             will: None,
             user: None,
             pwd: None,
