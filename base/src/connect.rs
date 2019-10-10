@@ -61,12 +61,9 @@ pub fn decode(connect: &BaseConnect, bin: &[u8]) -> Result<Vec<u8>> {
 * 编码基础协议请求
 */
 #[inline(always)]
-pub fn encode(connect: &BaseConnectHandle, bin: &[u8]) -> Result<Vec<u8>> {
-    let compress_level = connect.get_compress_level();
-    let version = connect.get_version();
-
+pub fn encode(compress_level: u8, compare: bool, version: u8, bin: &[u8]) -> Result<Vec<u8>> {
     //编码头
-    let mut head = match connect.is_compare() {
+    let mut head = match compare {
         false => {
             vec![
                 (compress_level << 6) | (version & 0x1f),
@@ -194,7 +191,7 @@ impl BaseConnectHandle {
 
     //发送指定主题的数据
     pub fn send(&self, topic: String, data: Vec<u8>) {
-        if let Ok(bin) = encode(self, &data[..]) {
+        if let Ok(bin) = handle_encode(self, &data[..]) {
             self.connect.send(&topic, Arc::new(bin));
         }
     }
@@ -212,4 +209,39 @@ impl BaseConnectHandle {
             self.connect.close(Ok(()));
         }
     }
+}
+
+//编码基础协议请求
+#[inline(always)]
+fn handle_encode(connect: &BaseConnectHandle, bin: &[u8]) -> Result<Vec<u8>> {
+    let compress_level = connect.get_compress_level();
+    let version = connect.get_version();
+
+    //编码头
+    let mut head = match connect.is_compare() {
+        false => {
+            vec![
+                (compress_level << 6) | (version & 0x1f),
+            ]
+        },
+        true => {
+            vec![
+                (compress_level << 6) | 0x20 | (version & 0x1f),
+            ]
+        },
+    };
+
+    //编码体
+    match compress_level {
+        0 => head.put(bin),
+        _ => {
+            let mut buf = Vec::new();
+            if let Err(e) = compress(&bin[..], &mut buf, CompressLevel::Low) {
+                return Err(Error::new(ErrorKind::Other, format!("compress failed by rpc decode, reason: {:?}", e)));
+            }
+            head.put(bin)
+        },
+    }
+
+    Ok(head)
 }
