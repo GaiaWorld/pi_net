@@ -53,10 +53,10 @@ pub fn encode(connect: &RpcConnect, rid: u32, bin: &[u8]) -> Result<Vec<u8>> {
     //编码头
     let mut head = vec![
         (compress_level << 5) | (version & 0x1f),
-        ((rid >> 24) & 0xff) as u8,
-        ((rid >> 16) & 0xff) as u8,
-        ((rid >> 8) & 0xff) as u8,
         (rid & 0xff) as u8,
+        ((rid >> 8) & 0xff) as u8,
+        ((rid >> 16) & 0xff) as u8,
+        ((rid >> 24) & 0xff) as u8,
         timeout
     ];
 
