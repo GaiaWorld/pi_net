@@ -105,7 +105,11 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
     //获取连接会话的句柄
     pub fn get_session(&self) -> Option<ContextHandle<WsSession>> {
-        self.socket.as_handle().unwrap().as_ref().borrow_mut().get_context().get::<WsSession>()
+        if let Some(handle) = self.socket.as_handle() {
+            return handle.as_ref().borrow_mut().get_context().get::<WsSession>()
+        }
+
+        None
     }
 
     //线程安全的获取Tcp连接的唯一id

@@ -74,6 +74,10 @@ impl MqttBrokerListener for RpcListener {
     }
 
     fn closed(&self, connect: Arc<dyn MqttConnect>, mut context: BrokerSession, reason: Result<()>) {
+        if let Err(e) = reason {
+            println!("!!!> Rpc Connect Close by Error, reason: {:?}", e);
+        }
+
         //连接已关闭，则立即释放Mqtt会话的上下文
         match context.get_context_mut().remove::<Arc<RpcConnect>>() {
             Err(e) => {
