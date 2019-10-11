@@ -1,5 +1,5 @@
 [package]
-name = "rpc"
+name = "base"
 version = "0.1.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2018"
@@ -7,10 +7,7 @@ edition = "2018"
 [dependencies]
 bytes = "0.4"
 handler = { path = "../../pi_lib/handler" }
-gray = { path = "../../pi_lib/gray" }
-atom = { path = "../../pi_lib/atom" }
 compress = { path = "../../pi_lib/compress" }
 tcp = { path = "../tcp" }
 ws = { path = "../ws" }
 mqtt = { path = "../mqtt" }
-base = { path = "../base" }

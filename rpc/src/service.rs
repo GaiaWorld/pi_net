@@ -7,11 +7,11 @@ use atom::Atom;
 use gray::GrayVersion;
 use handler::{Args, Handler};
 
-use mqtt::broker::{MqttBrokerListener, MqttBrokerService};
 use mqtt::session::MqttConnect;
 use mqtt::util::BrokerSession;
+use base::connect::{BaseInnerListener, BaseInnerService, BaseConnect};
 
-use crate::connect::{decode, encode, RpcConnect};
+use crate::connect::{decode, RpcConnect};
 
 /*
 * 已连接事件名
@@ -53,33 +53,30 @@ pub struct RpcListener {
 
 unsafe impl Send for RpcListener {}
 
-impl MqttBrokerListener for RpcListener {
-    fn connected(&self, connect: Arc<dyn MqttConnect>) -> Result<()> {
-        //Mqtt已连接，则初始化Rpc服务的连接，并保存在Mqtt连接的上下文
-        if let Some(mut handle) = connect.get_session() {
-            if let Some(session) = handle.as_mut() {
-                let rpc_connect = Arc::new(RpcConnect::new(connect.clone()));
-                if session.get_context_mut().set::<Arc<RpcConnect>>(rpc_connect.clone()) {
-                    //异步处理Rpc已连接
-                    if let Some(handler) = &self.connected_handler {
-                        let connect_uid = rpc_connect.get_id();
-                        handler.handle(rpc_connect, Atom::from(CONNECTED_EVENT_NAME), Args::OneArgs(connect_uid));
-                        return Ok(());
-                    }
-                }
+impl BaseInnerListener for RpcListener {
+    fn connected(&self, connect: &mut BaseConnect) -> Result<()> {
+        //基础协议已连接，则初始化Rpc的连接，并保存在基础协议连接的上下文
+        let rpc_connect = Arc::new(RpcConnect::new(connect.get_handle()));
+        if connect.get_context_mut().set::<Arc<RpcConnect>>(rpc_connect.clone()) {
+            //异步处理Rpc已连接
+            if let Some(handler) = &self.connected_handler {
+                let connect_uid = rpc_connect.get_id();
+                handler.handle(rpc_connect, Atom::from(CONNECTED_EVENT_NAME), Args::OneArgs(connect_uid));
+                return Ok(());
             }
         }
 
-        Err(Error::new(ErrorKind::Other, format!("rpc connect error, connect: {:?}, reason: init rpc service context failed", connect)))
+        Err(Error::new(ErrorKind::Other, format!("rpc connect error, connect: {:?}, reason: init rpc service context failed", connect.get_connect())))
     }
 
-    fn closed(&self, connect: Arc<dyn MqttConnect>, mut context: BrokerSession, reason: Result<()>) {
+    fn closed(&self, connect: &mut BaseConnect, reason: Result<()>) {
+        //连接已关闭
         if let Err(e) = reason {
             println!("!!!> Rpc Connect Close by Error, reason: {:?}", e);
         }
 
-        //连接已关闭，则立即释放Mqtt会话的上下文
-        match context.get_context_mut().remove::<Arc<RpcConnect>>() {
+        //立即释放基础协议连接的上下文
+        match connect.get_context_mut().remove::<Arc<RpcConnect>>() {
             Err(e) => {
                 println!("!!!> Free Context Failed of Rpc Close, reason: {:?}", e);
             },
@@ -182,32 +179,28 @@ pub struct RpcService {
 
 unsafe impl Send for RpcService {}
 
-impl MqttBrokerService for RpcService {
-    fn request(&self, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()> {
-        if let Some(mut handle) = connect.get_session() {
-            if let Some(session) = handle.as_mut() {
-                if let Some(mut h) = session.get_context().get::<Arc<RpcConnect>>() {
-                    match decode(h.as_ref().as_ref(), payload.as_ref()) {
-                        Err(e) => {
-                            //解码请求失败，则立即返回错误原因
-                            return Err(Error::new(ErrorKind::Other, format!("rpc request error, connect: {:?}, reason: {:?}", connect, e)));
-                        }
-                        Ok((rid, bin)) => {
-                            //解码请求成功，则异步处理请求
-                            let rpc_connect = h.as_ref();
-                            if let Some(handler) = &self.request_handler {
-                                handler.handle(rpc_connect.clone(),
-                                               Atom::from(topic),
-                                               Args::FourArgs(0, rpc_connect.get_remote_addr(), rid, Arc::new(bin)));
-                                return Ok(());
-                            }
-                        },
-                    }
+impl BaseInnerService for RpcService {
+    fn request(&self, connect: &BaseConnect, topic: String, payload: Arc<Vec<u8>>) -> Result<()> {
+        if let Some(h) = connect.get_context().get::<Arc<RpcConnect>>() {
+            match decode(h.as_ref().as_ref(), payload.as_ref()) {
+                Err(e) => {
+                    //解码请求失败，则立即返回错误原因
+                    return Err(Error::new(ErrorKind::Other, format!("rpc request error, connect: {:?}, reason: {:?}", connect.get_connect(), e)));
                 }
+                Ok((rid, bin)) => {
+                    //解码请求成功，则异步处理请求
+                    let rpc_connect = h.as_ref();
+                    if let Some(handler) = &self.request_handler {
+                        handler.handle(rpc_connect.clone(),
+                                       Atom::from(topic),
+                                       Args::FourArgs(0, rpc_connect.get_remote_addr(), rid, Arc::new(bin)));
+                        return Ok(());
+                    }
+                },
             }
         }
 
-        Err(Error::new(ErrorKind::Other, format!("rpc connect error, connect: {:?}, reason: invalid rpc request", connect)))
+        Err(Error::new(ErrorKind::Other, format!("rpc connect error, connect: {:?}, reason: invalid rpc request", connect.get_connect())))
     }
 }
 

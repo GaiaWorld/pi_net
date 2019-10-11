@@ -15,6 +15,7 @@ use tcp::driver::{Socket, SocketConfig, AsyncIOWait, AsyncServiceFactory};
 use tcp::buffer_pool::WriteBufferPool;
 use ws::server::WebsocketListenerFactory;
 use mqtt::v311::{WS_MQTT3_BROKER, WsMqtt311, WsMqtt311Factory};
+use base::service::{BaseListener, BaseService};
 
 use rpc::{service::{RpcListener, RpcService}, connect::RpcConnect};
 
@@ -71,8 +72,10 @@ impl Handler for TestRpcHandler {
 fn test_rpc_service() {
     let event_handler = Arc::new(TestRpcEventHandler);
     let rpc_handler = Arc::new(TestRpcHandler);
-    let listener = Arc::new(RpcListener::with_handler(event_handler.clone(), event_handler.clone()));
-    let service = Arc::new(RpcService::with_handler(rpc_handler));
+    let rpc_listener = Arc::new(RpcListener::with_handler(event_handler.clone(), event_handler.clone()));
+    let rpc_service = Arc::new(RpcService::with_handler(rpc_handler));
+    let listener = Arc::new(BaseListener::with_listener(rpc_listener));
+    let service = Arc::new(BaseService::with_service(rpc_service));
     WS_MQTT3_BROKER.register_listener(listener);
     WS_MQTT3_BROKER.register_service("rpc/test".to_string(), service.clone());
 

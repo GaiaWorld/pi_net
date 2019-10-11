@@ -10,35 +10,22 @@ use compress::{CompressLevel, compress, uncompress};
 
 use mqtt::broker::MQTT_RESPONSE_SYS_TOPIC;
 use mqtt::session::MqttConnect;
+use base::connect::BaseConnectHandle;
 
 /*
 * 解码Rpc请求
 */
 #[inline(always)]
 pub fn decode(connect: &RpcConnect, bin: &[u8]) -> Result<(u32, Vec<u8>)> {
-    if bin.len() < 7 {
+    if bin.len() < 6 {
         return Err(Error::new(ErrorKind::Other, "rpc decode failed, reason: invalid len"));
     }
 
     //解码头，并更新当前连接的头信息
-    let compress_level = bin[0] >> 5;
-    connect.compress_level.store(compress_level, Ordering::Relaxed);
-    connect.version.store(bin[0] & 0x1f, Ordering::Relaxed);
-    connect.timeout.store(bin[5], Ordering::Relaxed);
+    connect.timeout.store(bin[4], Ordering::Relaxed);
 
-    let rid = (bin[4] as u32) << 24 & 0xffffffff | (bin[3] as u32) << 16 & 0xffffff | (bin[2] as u32) << 8 & 0xffff | (bin[1] & 0xff) as u32;
-    match compress_level {
-        0 => Ok((rid, Vec::from(&bin[6..]))),
-        _ => {
-            let mut buf = Vec::new();
-            if let Err(e) = uncompress(&bin[6..], &mut buf) {
-                //解压缩失败
-                return Err(Error::new(ErrorKind::Other, format!("uncompress failed by rpc decode, reason: {:?}", e)));
-            }
-
-            Ok((rid, buf))
-        }
-    }
+    let rid = (bin[3] as u32) << 24 & 0xffffffff | (bin[2] as u32) << 16 & 0xffffff | (bin[1] as u32) << 8 & 0xffff | (bin[0] & 0xff) as u32;
+    Ok((rid, Vec::from(&bin[5..])))
 }
 
 /*
@@ -46,13 +33,10 @@ pub fn decode(connect: &RpcConnect, bin: &[u8]) -> Result<(u32, Vec<u8>)> {
 */
 #[inline(always)]
 pub fn encode(connect: &RpcConnect, rid: u32, bin: &[u8]) -> Result<Vec<u8>> {
-    let compress_level = connect.get_compress_level();
-    let version = connect.get_version();
     let timeout = connect.get_timeout();
 
     //编码头
     let mut head = vec![
-        (compress_level << 5) | (version & 0x1f),
         (rid & 0xff) as u8,
         ((rid >> 8) & 0xff) as u8,
         ((rid >> 16) & 0xff) as u8,
@@ -61,16 +45,7 @@ pub fn encode(connect: &RpcConnect, rid: u32, bin: &[u8]) -> Result<Vec<u8>> {
     ];
 
     //编码体
-    match compress_level {
-        0 => head.put(bin),
-        _ => {
-            let mut buf = Vec::new();
-            if let Err(e) = compress(&bin[..], &mut buf, CompressLevel::Low) {
-                return Err(Error::new(ErrorKind::Other, format!("compress failed by rpc decode, reason: {:?}", e)));
-            }
-            head.put(bin)
-        },
-    }
+    head.put(bin);
 
     Ok(head)
 }
@@ -80,9 +55,7 @@ pub fn encode(connect: &RpcConnect, rid: u32, bin: &[u8]) -> Result<Vec<u8>> {
 */
 pub struct RpcConnect {
     gray:               AtomicIsize,            //灰度，负数代表无灰度
-    connect:            Arc<dyn MqttConnect>,   //请求的Mqtt连接
-    compress_level:     AtomicU8,               //压缩级别
-    version:            AtomicU8,               //版本号
+    handle:             BaseConnectHandle,      //请求的基础协议连接句柄
     timeout:            AtomicU8,               //超时时长，单位秒
 }
 
@@ -108,7 +81,7 @@ impl GrayVersion for RpcConnect {
     }
 
     fn get_id(&self) -> usize {
-        if let Some(uid) = self.connect.get_uid() {
+        if let Some(uid) = self.handle.get_connect().get_uid() {
             return uid;
         }
 
@@ -118,24 +91,12 @@ impl GrayVersion for RpcConnect {
 
 impl RpcConnect {
     //构建Rpc连接
-    pub fn new(connect: Arc<dyn MqttConnect>) -> Self {
+    pub fn new(handle: BaseConnectHandle) -> Self {
         RpcConnect {
             gray: AtomicIsize::new(-1),
-            connect,
-            compress_level: AtomicU8::new(0),
-            version: AtomicU8::new(0),
+            handle,
             timeout: AtomicU8::new(0),
         }
-    }
-
-    //获取当前压缩级别
-    pub fn get_compress_level(&self) -> u8 {
-        self.compress_level.load(Ordering::Relaxed)
-    }
-
-    //获取当前版本号
-    pub fn get_version(&self) -> u8 {
-        self.version.load(Ordering::Relaxed)
     }
 
     //获取超时时长
@@ -145,12 +106,12 @@ impl RpcConnect {
 
     //获取连接的连接令牌
     pub fn get_token(&self) -> Option<usize> {
-        self.connect.get_token()
+        self.handle.get_connect().get_token()
     }
 
     //获取连接的本地地址
     pub fn get_local_addr(&self) -> Option<SocketAddr> {
-        self.connect.get_local_addr()
+        self.handle.get_connect().get_local_addr()
     }
 
     //获取连接的本地ip
@@ -173,7 +134,7 @@ impl RpcConnect {
 
     //获取连接的对端地址
     pub fn get_remote_addr(&self) -> Option<SocketAddr> {
-        self.connect.get_remote_addr()
+        self.handle.get_connect().get_remote_addr()
     }
 
     //获取连接的对端ip
@@ -197,7 +158,7 @@ impl RpcConnect {
     //发送指定主题的数据
     pub fn send(&self, topic: String, rid: u32, data: Vec<u8>) {
         if let Ok(bin) = encode(self, rid, &data[..]) {
-            self.connect.send(&topic, Arc::new(bin));
+            self.handle.send(topic, bin);
         }
     }
 
@@ -208,10 +169,6 @@ impl RpcConnect {
 
     //关闭当前连接
     pub fn close(&self, reason: Option<String>) {
-        if let Some(e) = reason {
-            self.connect.close(Err(Error::new(ErrorKind::Other, e)));
-        } else {
-            self.connect.close(Ok(()));
-        }
+        self.handle.close(reason);
     }
 }
