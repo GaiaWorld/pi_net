@@ -213,6 +213,9 @@ pub struct HttpClient {
     headers: Headers,   //请求头
 }
 
+unsafe impl Send for HttpClient {}
+unsafe impl Sync for HttpClient {}
+
 impl Drop for HttpClient {
     fn drop(&mut self) {
         HTTPC_REMOVE_COUNT.sum(1);
