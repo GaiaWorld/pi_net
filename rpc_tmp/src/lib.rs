@@ -2,7 +2,7 @@
 //!
 
 extern crate net;
-extern crate mqtt_tmp as mqtt;
+extern crate mqtt_tmp;
 extern crate mqtt3;
 extern crate fnv;
 extern crate atom;

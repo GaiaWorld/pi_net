@@ -30,6 +30,19 @@ use now_millis;
 #[derive(Clone)]
 pub struct ServerNode(Arc<Mutex<ServerNodeImpl>>);
 
+impl ServerNode {
+    pub fn new() -> ServerNode {
+        ServerNode(Arc::new(Mutex::new(ServerNodeImpl {
+            clients: HashMap::new(),
+            client_map: FnvHashMap::default(),
+            sub_topics: FnvHashMap::default(),
+            retain_topics: FnvHashMap::default(),
+            metas: FnvHashMap::default(),
+            set_attr: None,
+        })))
+    }
+}
+
 /// 主题元信息
 pub struct TopicMeta {
     //
@@ -149,17 +162,7 @@ impl ClientStub {
     }
 }
 
-impl ServerNode {
-    pub fn new() -> ServerNode {
-        ServerNode(Arc::new(Mutex::new(ServerNodeImpl {
-            clients: HashMap::new(),
-            client_map: FnvHashMap::default(),
-            sub_topics: FnvHashMap::default(),
-            retain_topics: FnvHashMap::default(),
-            metas: FnvHashMap::default(),
-            set_attr: None,
-        })))
-    }
+impl ServerNode{
     //设置连接关闭回调(遗言发布)
     pub fn handle_close(&self, socket_id: usize) {
         let mut iter = vec!["a"].into_iter().map(|x| { x.to_string() });
