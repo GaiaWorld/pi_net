@@ -25,6 +25,8 @@ use api::WSControlType;
 use data::{CloseFn, Config, ListenerFn, NetData, NetCounter, NetHandler, Protocol, RecvFn, SendClosureFn,
            RawSocket, State, RawStream, Websocket};
 
+use now_millis;
+
 const MAX_RECV_SIZE: usize = 16 * 1024;
 
 //绑定tcp连接
@@ -516,7 +518,7 @@ pub fn handle_net(sender: Sender<SendClosureFn>, receiver: Receiver<SendClosureF
                                     }
                                 }
                             } else {
-                                //println!("stream_recv: return None!");
+                                println!("{}, net trace, stream recv wouldblock, token: {:?}, peer: {:?}", now_millis(), s.read().unwrap().token, mio.peer_addr());
                             }
 
                             if is_close {

@@ -22,6 +22,8 @@ use net::api::{Socket, Stream};
 use session;
 use util;
 
+use now_millis;
+
 /**
 * Mqtt服务器
 */
@@ -607,6 +609,9 @@ fn recv_publish(node: Arc<Mutex<ServerNodeImpl>>, publish: mqtt3::Publish, socke
     }
     //println!("!!!recv_publish.topic_name = {:?}", &publish.topic_name);
     let topic = mqtt3::TopicPath::from_str(&publish.topic_name);
+    if let Socket::Raw(s) = socket {
+        println!("{}, net trace, mqtt recv, token: {:?}, peer: {:?}, topic: {:?}", now_millis(), s.socket, s.peer, topic);
+    }
     if topic.is_err() {
         return;
     }
