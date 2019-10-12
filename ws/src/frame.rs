@@ -212,7 +212,7 @@ impl From<WsHead> for Vec<u8> {
                 vec.push(((len >> 16) & 0xff) as u8);
                 vec.push(((len >> 8) & 0xff) as u8);
                 vec.push((len & 0xff) as u8);
-            } else if len > 0x7e {
+            } else if len >= 0x7e {
                 //需要2个字节负载长度
                 b1 = b1 | 0x7e;
                 vec.push(b1);
