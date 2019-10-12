@@ -78,7 +78,7 @@ impl MqttBrokerService for BaseService {
                         Ok(bin) => {
                             //解码请求成功，则继续上层协议的请求处理
                             let base_connect = h.as_ref();
-                            return self.inner.request(base_connect, topic, payload);
+                            return self.inner.request(base_connect, topic, bin);
                         },
                     }
                 }

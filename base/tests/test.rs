@@ -31,7 +31,7 @@ impl BaseInnerListener for TestExtProtocol {
 }
 
 impl BaseInnerService for TestExtProtocol {
-    fn request(&self, connect: &BaseConnect, topic: String, payload: Arc<Vec<u8>>) -> Result<()> {
+    fn request(&self, connect: &BaseConnect, topic: String, payload: Vec<u8>) -> Result<()> {
         println!("!!!!!!request, compress level: {}, compare: {}, version: {}", connect.get_compress_level(), connect.is_compare(), connect.get_version());
         Ok(())
     }

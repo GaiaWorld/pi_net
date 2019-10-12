@@ -29,7 +29,7 @@ pub trait BaseInnerListener {
 */
 pub trait BaseInnerService {
     //指定基础协议的指定主题的服务
-    fn request(&self, connect: &BaseConnect, topic: String, payload: Arc<Vec<u8>>) -> Result<()>;
+    fn request(&self, connect: &BaseConnect, topic: String, payload: Vec<u8>) -> Result<()>;
 }
 
 /*
