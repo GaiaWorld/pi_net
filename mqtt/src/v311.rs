@@ -156,9 +156,17 @@ fn broadcast_packet(connects: &[WsSocket<TcpSocket, AsyncWaitsHandle>],
     }
 
     //通过Ws连接列表广播指定报文
-    let mut payload = connects[0].alloc();
-    payload.get_iolist_mut().push_back(buf.into_inner().into());
-    WsSocket::<TcpSocket, AsyncWaitsHandle>::broadcast(connects, WsMqtt311::WS_MSG_TYPE, payload)
+    for connect in connects {
+        if connect.is_closed() {
+            continue;
+        }
+
+        let mut payload = connect.alloc();
+        payload.get_iolist_mut().push_back(buf.into_inner().into());
+        return WsSocket::<TcpSocket, AsyncWaitsHandle>::broadcast(connects, WsMqtt311::WS_MSG_TYPE, payload);
+    }
+
+    Ok(())
 }
 
 //接受Mqtt连接请求
