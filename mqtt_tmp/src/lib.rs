@@ -22,3 +22,11 @@ pub mod session;
 // pub use data::{Client, Server};
 pub use mqtt3::{LastWill, QoS};
 // pub use server::{ServerNode, ClientStub};
+
+use std::time::SystemTime;
+fn now_millis() -> isize {
+    match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+        Err(e) => -1,
+        Ok(n) => n.as_millis() as isize,
+    }
+}

@@ -22,6 +22,8 @@ use net::CloseFn;
 
 use net::api::{Socket, Stream};
 
+use now_millis;
+
 /**
 * RPC服务器
 */
@@ -107,6 +109,9 @@ impl RPCServerTraits for RPCServer {
                 let session = session.clone();
                 let handle = handle.clone();
                 handle_func = Box::new(move || {
+                    if let Socket::Raw(s) = &client.get_socket() {
+                        println!("{}, net trace, rpc handle, token: {:?}, peer: {:?}, topic: {:?}", now_millis(), s.socket, s.peer, topic2);
+                    }
                     handle.clone().handle(
                         session.clone(),
                         topic2.clone(),

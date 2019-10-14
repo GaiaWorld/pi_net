@@ -56,6 +56,7 @@ extern crate tempdir;
 extern crate void;
 extern crate twoway;
 extern crate path_absolutize;
+extern crate bytes;
 
 #[macro_use]
 extern crate lazy_static;
@@ -77,6 +78,7 @@ pub mod mount;
 pub mod https;
 pub mod file_path;
 pub mod file;
+pub mod batch;
 pub mod files;
 pub mod upload;
 pub mod url_encode;

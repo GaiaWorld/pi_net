@@ -180,9 +180,9 @@ pub struct RpcService {
 unsafe impl Send for RpcService {}
 
 impl BaseInnerService for RpcService {
-    fn request(&self, connect: &BaseConnect, topic: String, payload: Arc<Vec<u8>>) -> Result<()> {
+    fn request(&self, connect: &BaseConnect, topic: String, payload: Vec<u8>) -> Result<()> {
         if let Some(h) = connect.get_context().get::<Arc<RpcConnect>>() {
-            match decode(h.as_ref().as_ref(), payload.as_ref()) {
+            match decode(h.as_ref().as_ref(), &payload[..]) {
                 Err(e) => {
                     //解码请求失败，则立即返回错误原因
                     return Err(Error::new(ErrorKind::Other, format!("rpc request error, connect: {:?}, reason: {:?}", connect.get_connect(), e)));

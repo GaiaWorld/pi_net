@@ -41,3 +41,11 @@ pub mod ws;
 
 pub use api::NetManager;
 pub use data::{Config, RawSocket, RawStream, Protocol, CloseFn};
+
+use std::time::SystemTime;
+fn now_millis() -> isize {
+    match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+        Err(e) => -1,
+        Ok(n) => n.as_millis() as isize,
+    }
+}
