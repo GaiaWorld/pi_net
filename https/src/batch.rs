@@ -129,7 +129,7 @@ impl Handler for FileBatch {
         //合并解析的所有文件，并异步加载所有文件
         dir_vec.append(&mut file_vec);
         // println!("!!!!!!files: {:?}", dir_vec.to_vec().iter_mut().map(|(_, x)| x).collect::<Vec<&mut PathBuf>>());
-        async_load_files(req, self.fill_gen_resp_headers(res), dir_vec, 0, Vec::new(), 0, start);
+        async_load_files(req, self.fill_gen_resp_headers(res), dir_vec, self.root.to_str().unwrap().as_bytes().len(), 0, Vec::new(), 0, start);
         None
     }
 }
@@ -472,13 +472,13 @@ fn filter_file(suffix: Option<&OsStr>, entry: DirEntry, result: &mut Vec<(u64, P
 }
 
 //异步加载批量文件，并设置回应
-fn async_load_files(req: Request, res: Response, files: Vec<(u64, PathBuf)>, index: usize, mut data: Vec<u8>, mut size: u64, time: Instant) {
+fn async_load_files(req: Request, res: Response, files: Vec<(u64, PathBuf)>, root_len: usize, index: usize, mut data: Vec<u8>, mut size: u64, time: Instant) {
     let file_len: u64;
     let file_path: PathBuf;
     if let Some((len, file)) = files.get(index) {
         if len == &0 {
             //无效文件，则忽略，并继续加载下一个文件
-            return async_load_files(req, res, files, index + 1, data, size, time);
+            return async_load_files(req, res, files, root_len, index + 1, data, size, time);
         }
 
         file_len = len.clone();
@@ -487,8 +487,9 @@ fn async_load_files(req: Request, res: Response, files: Vec<(u64, PathBuf)>, ind
         //加载完成，则回应
         return async_load_files_ok(req, res, size, data, time);
     }
-    data.put_u16_le(file_path.len());
-    data.put_slice(file_path.as_str());
+	let s = file_path.to_str().unwrap().as_bytes();
+    data.put_u16_le((s.len() - root_len) as u16);
+    data.put_slice(&s[root_len..]);
     data.put_u32_le(file_len as u32);
     let open = Box::new(move |f: IOResult<AsyncFile>| {
         match f {
@@ -509,7 +510,7 @@ fn async_load_files(req: Request, res: Response, files: Vec<(u64, PathBuf)>, ind
                             //读成功，则继续异步加载下一个文件
                             size += file_len;
                             data.append(&mut bin);
-                            async_load_files(req, res, files, index + 1, data, size, time);
+                            async_load_files(req, res, files, root_len, index + 1, data, size, time);
                         },
                     }
                 });
