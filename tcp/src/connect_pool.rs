@@ -98,7 +98,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
         let mut pool = self;
         pool.driver = Some(driver);
         if let Err(e) = thread::Builder::new()
-            .name("Tcp Socket Pool ".to_string() + &pool.name)
+            .name("Tcp Socket Pool #".to_string() + &pool.uid.to_string() + " " + &pool.name)
             .stack_size(stack_size)
             .spawn(move || {
                 event_loop(pool, event_size, timeout);
