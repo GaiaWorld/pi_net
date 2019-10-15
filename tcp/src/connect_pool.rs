@@ -349,9 +349,10 @@ fn handle_poll_events<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &
 
 //批量处理Tcp连接的关闭事件
 fn handle_close_event<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut TcpSocketPool<S, A>) {
-    for i in pool.wait_close.len()..0 {
+    let i = pool.wait_close.len() - 1;
+    for n in 0..pool.wait_close.len() {
         //关闭正在等待的连接
-        let (token, reason) = pool.wait_close.remove(i);
+        let (token, reason) = pool.wait_close.remove(i - n);
         close_socket(pool, token, Shutdown::Both, reason);
     }
 

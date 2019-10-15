@@ -416,18 +416,25 @@ fn disk_files(suffix: Option<&OsStr>, path: &PathBuf, result: &mut Vec<(u64, Pat
         return;
     }
 
-    for e in path.read_dir().unwrap() {
-        if let Ok(entry) = e {
-            if let Ok(file_type) = entry.file_type() {
-                if file_type.is_dir() {
-                    //是目录
-                    disk_files(suffix, &entry.path(), result);
-                } else {
-                    //是链接或文件
-                    filter_file(suffix, entry, result);
+    match path.read_dir() {
+        Err(e) => {
+            panic!("select disk files error, path: {:?}, reason: {:?}", path, e);
+        },
+        Ok(dirs) => {
+            for dir in dirs {
+                if let Ok(entry) = dir {
+                    if let Ok(file_type) = entry.file_type() {
+                        if file_type.is_dir() {
+                            //是目录
+                            disk_files(suffix, &entry.path(), result);
+                        } else {
+                            //是链接或文件
+                            filter_file(suffix, entry, result);
+                        }
+                    }
                 }
             }
-        }
+        },
     }
 }
 
