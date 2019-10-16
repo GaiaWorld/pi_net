@@ -382,6 +382,7 @@ fn decode_dir(parse_files: fn(Option<&OsStr>, path: &PathBuf, result: &mut Vec<(
         let mut len: usize;
         for dir in dirs {
             let path = root.join(dir);
+            //同path下有同名目录和文件，则会解析异常
             if !path.is_file() && !path.is_dir() {
                 //解析目录下指定后缀的文件，形如*/.*和*/*.*
                 if let Some(s) = path.file_name() {
