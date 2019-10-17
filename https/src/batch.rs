@@ -64,21 +64,17 @@ impl Set for FileBatch {}
 impl Handler for FileBatch {
     fn handle(&self, mut req: Request, res: Response) -> Option<(Request, Response, HttpsResult<()>)> {
         let start = HTTPS_BATCH_LOAD_FILE_OK_TIME.start();
-
-        if req.url.path().len() > 1 || req.url.path()[0] != "" {
-            //无效的url路径，则忽略
-            HTTPS_BATCH_LOAD_FILE_ERROR_TIME.timing(start);
-            HTTPS_BATCH_LOAD_FILE_ERROR_COUNT.sum(1);
-
-            return Some((req, res, 
-                        Err(HttpsError::new(IOError::new(ErrorKind::NotFound, "load batch file error, invalid path")))));
-        }
-
         let mut ds = "";
         let mut fs = "";
+        let mut rpath = PathBuf::new();
         let mut size = 0;
         {
             let map = req.get_ref::<Params>().unwrap();
+            if let Some(Value::String(r)) = map.find(&["r"]) {
+                rpath.push(&self.root);
+                rpath.push("/");
+                rpath.push(r.as_str());
+            }
             if let Some(Value::String(d)) = map.find(&["d"]) {
                 ds = d.as_str();
             }
@@ -103,7 +99,7 @@ impl Handler for FileBatch {
                 return Some((req, res, Err(HttpsError::new(IOError::new(ErrorKind::NotFound, desc)))));
             },
             Ok(_) => {
-                decode_dir(self.parse_files, &mut dirs, &self.root, &mut dir_vec);
+                decode_dir(self.parse_files, &mut dirs, if rpath.as_path().to_str().unwrap().as_bytes().len() > 0 {&rpath}else{&self.root}, &mut dir_vec);
             },
         }
         match decode(&mut fs.chars(), &mut vec![], &mut vec![], &mut files, 0) {

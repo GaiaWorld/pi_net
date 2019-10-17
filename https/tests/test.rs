@@ -61,6 +61,7 @@ fn test_http_server() {
     // options.add_route(Atom::from("/"), Atom::from("/app/"));
     let mut mount = Mount::new();
     mount.mount("/fs", StaticFileBatch::new("./app/"));
+    mount.mount("/batch", FileBatch::new("./app/"));
     mount.mount("/test", Test); //只支持前缀匹配，/表示匹配所有
     mount.mount("/upload", FileUpload::new("./upload/"));
     mount.mount("/", StaticFile::new("./htdocs/"));
