@@ -64,6 +64,8 @@ impl Set for FileBatch {}
 impl Handler for FileBatch {
     fn handle(&self, mut req: Request, res: Response) -> Option<(Request, Response, HttpsResult<()>)> {
         let start = HTTPS_BATCH_LOAD_FILE_OK_TIME.start();
+
+
         let mut ds = "";
         let mut fs = "";
         let mut rpath = PathBuf::new();
@@ -379,6 +381,7 @@ fn decode_dir(parse_files: fn(Option<&OsStr>, path: &PathBuf, result: &mut Vec<(
         let mut len: usize;
         for dir in dirs {
             let path = root.join(dir);
+            //同path下有同名目录和文件，则会解析异常
             if !path.is_file() && !path.is_dir() {
                 //解析目录下指定后缀的文件，形如*/.*和*/*.*
                 if let Some(s) = path.file_name() {
@@ -413,18 +416,25 @@ fn disk_files(suffix: Option<&OsStr>, path: &PathBuf, result: &mut Vec<(u64, Pat
         return;
     }
 
-    for e in path.read_dir().unwrap() {
-        if let Ok(entry) = e {
-            if let Ok(file_type) = entry.file_type() {
-                if file_type.is_dir() {
-                    //是目录
-                    disk_files(suffix, &entry.path(), result);
-                } else {
-                    //是链接或文件
-                    filter_file(suffix, entry, result);
+    match path.read_dir() {
+        Err(e) => {
+            panic!("select disk files error, path: {:?}, reason: {:?}", path, e);
+        },
+        Ok(dirs) => {
+            for dir in dirs {
+                if let Ok(entry) = dir {
+                    if let Ok(file_type) = entry.file_type() {
+                        if file_type.is_dir() {
+                            //是目录
+                            disk_files(suffix, &entry.path(), result);
+                        } else {
+                            //是链接或文件
+                            filter_file(suffix, entry, result);
+                        }
+                    }
                 }
             }
-        }
+        },
     }
 }
 
@@ -483,7 +493,7 @@ fn async_load_files(req: Request, res: Response, files: Vec<(u64, PathBuf)>, roo
         //加载完成，则回应
         return async_load_files_ok(req, res, size, data, time);
     }
-	let s = file_path.to_str().unwrap().as_bytes();
+    let s = file_path.to_str().unwrap().as_bytes();
     data.put_u16_le((s.len() - root_len) as u16);
     data.put_slice(&s[root_len..]);
     data.put_u32_le(file_len as u32);

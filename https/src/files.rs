@@ -63,8 +63,8 @@ impl Set for StaticFileBatch {}
 impl Handler for StaticFileBatch {
     fn handle(&self, mut req: Request, res: Response) -> Option<(Request, Response, HttpsResult<()>)> {
         let start = HTTPS_BATCH_LOAD_FILE_OK_TIME.start();
-
-        if req.url.path().len() > 1 || req.url.path()[0] != "" {
+	let pvec = req.url.path();
+        if pvec.len() > 0 || pvec[0] != "" {
             //无效的url路径，则忽略
             HTTPS_BATCH_LOAD_FILE_ERROR_TIME.timing(start);
             HTTPS_BATCH_LOAD_FILE_ERROR_COUNT.sum(1);
