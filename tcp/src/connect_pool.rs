@@ -98,7 +98,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
         let mut pool = self;
         pool.driver = Some(driver);
         if let Err(e) = thread::Builder::new()
-            .name("Tcp Socket Pool ".to_string() + &pool.name)
+            .name("Tcp Socket Pool #".to_string() + &pool.uid.to_string() + " " + &pool.name)
             .stack_size(stack_size)
             .spawn(move || {
                 event_loop(pool, event_size, timeout);
@@ -349,9 +349,10 @@ fn handle_poll_events<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &
 
 //批量处理Tcp连接的关闭事件
 fn handle_close_event<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut TcpSocketPool<S, A>) {
-    for i in 0..pool.wait_close.len() {
+    let i = pool.wait_close.len() - 1;
+    for n in 0..pool.wait_close.len() {
         //关闭正在等待的连接
-        let (token, reason) = pool.wait_close.remove(i);
+        let (token, reason) = pool.wait_close.remove(i - n);
         close_socket(pool, token, Shutdown::Both, reason);
     }
 
