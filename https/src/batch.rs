@@ -87,7 +87,11 @@ impl Handler for FileBatch {
                 size = s.parse().or::<usize>(Ok(0)).unwrap();
             }
         }
-        
+        let root = if rpath.as_path().to_str().unwrap().as_bytes().len() > 0 {
+            &rpath
+        }else{
+            &self.root
+        };
         let mut dir_vec: Vec<(u64, PathBuf)> = Vec::new();
         let mut dirs: Vec<String> = Vec::new();
         let mut file_vec: Vec<(u64, PathBuf)>;
@@ -101,7 +105,7 @@ impl Handler for FileBatch {
                 return Some((req, res, Err(HttpsError::new(IOError::new(ErrorKind::NotFound, desc)))));
             },
             Ok(_) => {
-                decode_dir(self.parse_files, &mut dirs, if rpath.as_path().to_str().unwrap().as_bytes().len() > 0 {&rpath}else{&self.root}, &mut dir_vec);
+                decode_dir(self.parse_files, &mut dirs, root, &mut dir_vec);
             },
         }
         match decode(&mut fs.chars(), &mut vec![], &mut vec![], &mut files, 0) {
@@ -114,7 +118,7 @@ impl Handler for FileBatch {
             },
             Ok(_) => {
                 file_vec = files.into_iter().map(|file| {
-                        let path = self.root.join(file);
+                        let path = root.join(file);
                         if let Ok(meta) = path.metadata() {
                             (meta.len(), path)
                         } else {
@@ -127,7 +131,7 @@ impl Handler for FileBatch {
         //合并解析的所有文件，并异步加载所有文件
         dir_vec.append(&mut file_vec);
         // println!("!!!!!!files: {:?}", dir_vec.to_vec().iter_mut().map(|(_, x)| x).collect::<Vec<&mut PathBuf>>());
-        async_load_files(req, self.fill_gen_resp_headers(res), dir_vec, self.root.to_str().unwrap().as_bytes().len(), 0, Vec::new(), 0, start);
+        async_load_files(req, self.fill_gen_resp_headers(res), dir_vec, root.to_str().unwrap().as_bytes().len(), 0, Vec::new(), 0, start);
         None
     }
 }
