@@ -239,7 +239,7 @@ fn async_reply_error(req: Request, mut res: Response, err: IOError, size: usize,
                         HTTPS_UPLOAD_FILE_ERROR_COUNT.sum(1);
                     }
 
-                    println!("!!!> Upload File Error, task wakeup failed, task id: {}, err: {:?}", req.uid, err)
+                    warn!("!!!> Upload File Error, task wakeup failed, task id: {}, err: {:?}", req.uid, err)
                 },
             }
         },
@@ -283,7 +283,7 @@ fn async_reply_ok(req: Request, mut res: Response, size: usize, time: Instant) {
                         HTTPS_UPLOAD_FILE_ERROR_COUNT.sum(1);
                     }
 
-                    println!("!!!> Upload File Ok, task wakeup failed, task id: {}, e: {:?}", req.uid, e)
+                    warn!("!!!> Upload File Ok, task wakeup failed, task id: {}, e: {:?}", req.uid, e)
                 },
             }
         },

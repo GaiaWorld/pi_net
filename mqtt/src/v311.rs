@@ -8,6 +8,7 @@ use fnv::FnvBuildHasher;
 use mqtt311::{MqttWrite, MqttRead, Protocol, ConnectReturnCode, Packet, Connect,
               Connack, QoS, Publish, PacketIdentifier, SubscribeTopic, SubscribeReturnCodes,
               Subscribe, Suback, Unsubscribe, TopicPath};
+use log::warn;
 
 use atom::Atom;
 use hash::XHashMap;
@@ -82,7 +83,7 @@ impl ChildProtocol<TcpSocket, AsyncWaitsHandle> for WsMqtt311 {
         //连接已关闭，则立即释放Ws会话的上下文
         match context.get_context_mut().remove::<BrokerSession>() {
             Err(e) => {
-                println!("!!!> Free Context Failed of Mqtt Close, reason: {:?}", e);
+                warn!("!!!> Free Context Failed of Mqtt Close, reason: {:?}", e);
             },
             Ok(opt) => {
                 if let Some(context) = opt {
@@ -113,7 +114,7 @@ impl ChildProtocol<TcpSocket, AsyncWaitsHandle> for WsMqtt311 {
             return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt send failed by disconnect, reason: {:?}", e)));
         }
 
-        println!("!!!> Mqtt Session Timeout, uid: {:?}, local: {:?}, remote: {:?}", connect.get_uid(), connect.get_local(), connect.get_remote());
+        warn!("!!!> Mqtt Session Timeout, uid: {:?}, local: {:?}, remote: {:?}", connect.get_uid(), connect.get_local(), connect.get_remote());
         Ok(())
     }
 }

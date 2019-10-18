@@ -9,6 +9,7 @@ extern crate base64;
 extern crate bytes;
 extern crate fnv;
 extern crate mio;
+extern crate log;
 
 extern crate atom;
 extern crate pi_crypto;

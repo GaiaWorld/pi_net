@@ -61,6 +61,9 @@ extern crate bytes;
 #[macro_use]
 extern crate lazy_static;
 
+#[macro_use]
+extern crate log;
+
 extern crate worker;
 extern crate file as lib_file;
 extern crate future;

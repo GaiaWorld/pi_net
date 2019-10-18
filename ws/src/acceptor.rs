@@ -18,6 +18,7 @@ use http::{Result as HttpResult,
                     SEC_WEBSOCKET_VERSION, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_EXTENSIONS,
                     SEC_WEBSOCKET_PROTOCOL, SEC_WEBSOCKET_ACCEPT}};
 use base64;
+use log::warn;
 
 use atom::Atom;
 use pi_crypto::digest::{DigestAlgorithm, digest};
@@ -122,7 +123,7 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
         match check_handshake_request(&mut req, self.window_bits) {
             Err(e) => {
                 //握手请求失败
-                println!("!!!> Ws Check Handshake Failed, reason: {:?}", e);
+                warn!("!!!> Ws Check Handshake Failed, reason: {:?}", e);
                 let resp = reply_handshake(Err(StatusCode::BAD_REQUEST));
                 (resp.is_ok(), resp)
             },
@@ -150,13 +151,13 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
                         }
 
                         //客户端指定了需要的子协议，且服务器端不支持客户端需要的任何子协议，则握手失败
-                        println!("!!!> Ws Handshake Failed, reason: may not support client protocol, protocols: {:?}", protocols);
+                        warn!("!!!> Ws Handshake Failed, reason: may not support client protocol, protocols: {:?}", protocols);
                         let resp = reply_handshake(Err(StatusCode::BAD_REQUEST));
                         (resp.is_ok(), resp)
                     },
                     _ => {
                         //握手请求冲突
-                        println!("!!!> Ws Handshake Failed, reason: invalid status");
+                        warn!("!!!> Ws Handshake Failed, reason: invalid status");
                         let resp = reply_handshake(Err(StatusCode::BAD_REQUEST));
                         (resp.is_ok(), resp)
                     },

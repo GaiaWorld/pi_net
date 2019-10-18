@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use iovec::IoVec;
 use crossbeam_channel::{Sender, Receiver, bounded};
+use log::warn;
 
 use crate::util::{pause, IoBytes, IoList};
 
@@ -32,7 +33,7 @@ impl Drop for ReadableView {
             let mut list = IoList::from(vec);
             list.clear();
             if let Err(e) = self.recover.send(list) {
-                println!("!!!> Drop Read View Error, reason: {:?}", e);
+                warn!("!!!> Drop Read View Error, reason: {:?}", e);
             }
         }
     }
@@ -110,7 +111,7 @@ impl Drop for WriteBuffer {
         if let Ok(mut list) = Arc::try_unwrap(shared) {
             list.clear();
             if let Err(e) = self.recover.send(list) {
-                println!("!!!> Drop Writable Buffer Error, reason: {:?}", e);
+                warn!("!!!> Drop Writable Buffer Error, reason: {:?}", e);
             }
         }
     }
@@ -139,7 +140,7 @@ impl WriteBuffer {
         let weak = Arc::downgrade(&shared);
         if let Err(e) = sender.send(shared) {
             //发送失败，则忽略
-            println!("!!!> Finish Writable Buffer Error, reason: {:?}", e);
+            warn!("!!!> Finish Writable Buffer Error, reason: {:?}", e);
             return None;
         }
 

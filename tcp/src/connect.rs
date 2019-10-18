@@ -11,6 +11,7 @@ use mio::{
     PollOpt, Token, Ready,
     net::TcpStream
 };
+use log::warn;
 
 use crate::{driver::{Socket, Stream, SocketHandle, SocketWakeup},
             buffer_pool::{ReadableView, WriteBufferHandle, WriteBufferPool},
@@ -497,7 +498,7 @@ impl Stream for TcpSocket {
                     if self.is_flush() {
                         //刷新流缓冲区，保证数据被立即发送
                         if let Err(e) = self.stream.flush() {
-                            println!("!!!> Tcp Stream Flush Failed, reason: {:?}", e);
+                            warn!("!!!> Tcp Stream Flush Failed, reason: {:?}", e);
                         }
                     }
 

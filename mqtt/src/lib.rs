@@ -6,6 +6,8 @@ extern crate parking_lot;
 #[macro_use]
 extern crate lazy_static;
 
+extern crate log;
+
 extern crate hash;
 extern crate atom;
 

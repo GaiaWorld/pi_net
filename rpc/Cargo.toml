@@ -14,3 +14,4 @@ tcp = { path = "../tcp" }
 ws = { path = "../ws" }
 mqtt = { path = "../mqtt" }
 base = { path = "../base" }
+log = "0.4"

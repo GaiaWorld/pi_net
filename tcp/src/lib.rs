@@ -14,6 +14,7 @@ extern crate lazy_static;
 extern crate iovec;
 extern crate fnv;
 extern crate futures;
+extern crate log;
 
 extern crate local_timer;
 extern crate apm;

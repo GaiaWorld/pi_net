@@ -12,6 +12,7 @@ use slab::Slab;
 use fnv::FnvBuildHasher;
 use mio::{Events, Poll, Token, Ready};
 use crossbeam_channel::{Sender, Receiver, unbounded};
+use log::warn;
 
 use local_timer::LocalTimer;
 
@@ -126,7 +127,7 @@ fn event_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(mut pool: TcpSo
         handle_wakeup(&mut pool);
 
         if let Err(e) = pool.poll.poll(&mut events, poll_timeout) {
-            println!("!!!> Tcp Socket Pool Poll Failed, timeout: {:?}, ports: {:?}, reason: {:?}", poll_timeout, &pool_name, e);
+            warn!("!!!> Tcp Socket Pool Poll Failed, timeout: {:?}, ports: {:?}, reason: {:?}", poll_timeout, &pool_name, e);
             break;
         }
 
@@ -153,11 +154,11 @@ fn handle_accepted<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut
         pool.map.insert(socket.get_remote().clone(), token);
         if let Err(e) = pool.poll.register(socket.get_stream(), token, socket.get_ready(), socket.get_poll_opt().clone()) {
             //连接注册失败
-            println!("!!!> Tcp Socket Poll Register Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, socket.get_remote(), socket.get_local(), e);
+            warn!("!!!> Tcp Socket Poll Register Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, socket.get_remote(), socket.get_local(), e);
 
             //立即关闭未注册的连接
             if let Err(e) = socket.close(Err(Error::new(ErrorKind::Other, "register socket failed"))) {
-                println!("!!!> Tcp Socket Close Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, socket.get_remote(), socket.get_local(), e);
+                warn!("!!!> Tcp Socket Close Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, socket.get_remote(), socket.get_local(), e);
             }
         } else {
             //连接注册成功

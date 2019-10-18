@@ -543,7 +543,7 @@ fn async_load_files_error(req: Request, mut res: Response, err: IOError, err_no:
                     HTTPS_BATCH_LOAD_FILE_ERROR_TIME.timing(time);
                     HTTPS_BATCH_LOAD_FILE_ERROR_COUNT.sum(1);
 
-                    println!("!!!> Https Async Load Files Error, task wakeup failed, task id: {}, err: {:?}, e: {:?}", req.uid, err, e)
+                    warn!("!!!> Https Async Load Files Error, task wakeup failed, task id: {}, err: {:?}, e: {:?}", req.uid, err, e)
                 },
             }
         },
@@ -577,7 +577,7 @@ fn async_load_files_ok(req: Request, mut res: Response, size: u64, data: Vec<u8>
                     HTTPS_BATCH_LOAD_FILE_ERROR_TIME.timing(time);
                     HTTPS_BATCH_LOAD_FILE_ERROR_COUNT.sum(1);
 
-                    println!("!!!> Https Async Load Files Ok, task wakeup failed, task id: {}, e: {:?}", req.uid, e)
+                    warn!("!!!> Https Async Load Files Ok, task wakeup failed, task id: {}, e: {:?}", req.uid, e)
                 },
             }
         },

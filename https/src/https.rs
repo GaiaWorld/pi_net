@@ -105,7 +105,7 @@ impl<H: Handler> Https<H> {
         let server = Server::bind(&addr)
                             .tcp_keepalive(self.keep_alive)
                             .serve(self)
-                            .map_err(|e| eprintln!("!!!> Http server error: {}", e));
+                            .map_err(|e| warn!("!!!> Http server error: {:?}", e));
         hyper::rt::run(server);
     }
 
@@ -129,7 +129,7 @@ impl<H: Handler> Https<H> {
             .then(|r| match r {
                 Ok(x) => Ok::<_, IoError>(Some(x)),
                 Err(e) => {
-                    println!("!!!> Voluntary server halt due to client-connection error, e: {:?}", e);
+                    warn!("!!!> Voluntary server halt due to client-connection error, e: {:?}", e);
                     Ok::<_, IoError>(None)
                 }
             })
@@ -139,7 +139,7 @@ impl<H: Handler> Https<H> {
 
         let server = Server::builder(tls)
             .serve(self)
-            .map_err(|e| eprintln!("!!!> Https server error: {}", e));
+            .map_err(|e| warn!("!!!> Https server error: {:?}", e));
         hyper::rt::run(server);
     }
 }
@@ -210,7 +210,7 @@ impl<H: Handler> Service for HttpsHandler<H> {
                                                             receiver: Arc<Consumer<task::Task>>, uid: usize| {
             let func = Box::new(move |_lock| {
                 match Request::from_http(executor, request, addr, &proto, uid) {
-                    Err(e) => println!("Https Service Task Parse Request Failed, e: {}", e),
+                    Err(e) => warn!("!!!> Https Service Task Parse Request Failed, e: {}", e),
                     Ok(req) => {
                         {
                             //测试
@@ -234,9 +234,9 @@ impl<H: Handler> Service for HttpsHandler<H> {
                                 //同步处理请求
                                 match reply {
                                     Err(e) => {
-                                        println!("!!!> Https Service Task Handle Failed, e: {:?}", e);
+                                        warn!("!!!> Https Service Task Handle Failed, e: {:?}", e);
                                         match q.receiver.as_ref().unwrap().consume() {
-                                            Err(_) => println!("!!!> Https Service Task Wakeup Failed, task id: {}", r.uid),
+                                            Err(_) => warn!("!!!> Https Service Task Wakeup Failed, task id: {}", r.uid),
                                             Ok(waker) => {
                                                 let sender_ = q.sender.as_ref().unwrap().clone();
                                                 let mut http_res = HttpResponse::<Body>::new(Body::empty());
@@ -249,7 +249,7 @@ impl<H: Handler> Service for HttpsHandler<H> {
                                     },
                                     Ok(_) => {
                                         match q.receiver.as_ref().unwrap().consume() {
-                                            Err(_) => println!("!!!> Https Service Task Wakeup Failed, task id: {}", r.uid),
+                                            Err(_) => warn!("!!!> Https Service Task Wakeup Failed, task id: {}", r.uid),
                                             Ok(waker) => {
                                                 let sender_ = q.sender.as_ref().unwrap().clone();
                                                 let mut http_res = HttpResponse::<Body>::new(Body::empty());

@@ -5,6 +5,7 @@ use std::net::{SocketAddr, Shutdown};
 use std::io::{ErrorKind, Result, Error};
 
 use mio::Token;
+use log::warn;
 
 use tcp::{driver::{Socket, AsyncIOWait, SocketHandle, AsyncWriteTask},
           buffer_pool::WriteBuffer,
@@ -398,7 +399,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         //连接已关闭，则立即释放Tcp连接的上下文
         match handle.as_handle().unwrap().as_ref().borrow_mut().get_context_mut().remove::<WsSession>() {
             Err(e) => {
-                println!("!!!> Free Context Failed by Websocket Close, uid: {:?}, local: {:?}, remote: {:?}, reason: {:?}", handle.get_uid(), handle.get_local(), handle.get_remote(), e);
+                warn!("!!!> Free Context Failed by Websocket Close, uid: {:?}, local: {:?}, remote: {:?}, reason: {:?}", handle.get_uid(), handle.get_local(), handle.get_remote(), e);
             },
             Ok(opt) => {
                 if let Some(context) = opt {

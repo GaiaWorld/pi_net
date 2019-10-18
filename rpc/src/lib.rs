@@ -7,6 +7,7 @@ extern crate tcp;
 extern crate ws;
 extern crate mqtt;
 extern crate base;
+extern crate log;
 
 pub mod service;
 pub mod connect;

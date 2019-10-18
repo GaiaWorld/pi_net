@@ -11,3 +11,4 @@ compress = { path = "../../pi_lib/compress" }
 tcp = { path = "../tcp" }
 ws = { path = "../ws" }
 mqtt = { path = "../mqtt" }
+log = "0.4"

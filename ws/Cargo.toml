@@ -12,6 +12,7 @@ base64 = "0.10"
 bytes = "0.4"
 fnv = "1.0"
 mio = "0.6"
+log = "0.4"
 atom = { path = "../../pi_lib/atom" }
 tcp = { path = "../tcp" }
 pi_crypto = { path = "../../pi_crypto" }

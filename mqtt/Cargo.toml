@@ -13,6 +13,7 @@ lazy_static = "1.4"
 hash = { path = "../../pi_lib/hash", features = ["xxhash"] }
 tcp = { path = "../tcp" }
 ws = { path = "../ws" }
+log = "0.4"
 atom = { path = "../../pi_lib/atom" }
 
 [dev-dependencies]

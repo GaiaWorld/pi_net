@@ -3,6 +3,8 @@ use std::net::SocketAddr;
 use std::result::Result as GenResult;
 use std::io::{Error, ErrorKind, Result};
 
+use log::warn;
+
 use atom::Atom;
 use gray::GrayVersion;
 use handler::{Args, Handler};
@@ -72,13 +74,13 @@ impl BaseInnerListener for RpcListener {
     fn closed(&self, connect: &mut BaseConnect, reason: Result<()>) {
         //连接已关闭
         if let Err(e) = reason {
-            println!("!!!> Rpc Connect Close by Error, reason: {:?}", e);
+            warn!("!!!> Rpc Connect Close by Error, reason: {:?}", e);
         }
 
         //立即释放基础协议连接的上下文
         match connect.get_context_mut().remove::<Arc<RpcConnect>>() {
             Err(e) => {
-                println!("!!!> Free Context Failed of Rpc Close, reason: {:?}", e);
+                warn!("!!!> Free Context Failed of Rpc Close, reason: {:?}", e);
             },
             Ok(opt) => {
                 if let Some(rpc_connect) = opt {

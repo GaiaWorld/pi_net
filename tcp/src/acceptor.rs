@@ -12,6 +12,7 @@ use mio::{
 use slab::Slab;
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use fnv::FnvBuildHasher;
+use log::{info, warn};
 
 use crate::driver::{DEFAULT_TCP_IP_V6, Socket, Stream, SocketAdapter, AcceptorCmd, SocketDriver};
 use crate::util::pause;
@@ -62,7 +63,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
             match TcpListener::bind(addr) {
                 Err(e) => {
                     //绑定指定地址失败，则继续绑定其它地址
-                    println!("!!!> Tcp Acceptor Bind Address Error, addr: {:?}, reason: {:?}", addr, e);
+                    warn!("!!!> Tcp Acceptor Bind Address Error, addr: {:?}, reason: {:?}", addr, e);
                     len -= 1;
                 },
                 Ok(listener) => {
@@ -79,7 +80,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
 
                     //注册绑定地址的监听器
                     if let Err(e) = poll.register(&listener, token, Ready::readable(), PollOpt::level()) {
-                        println!("!!!> Tcp Acceptor Poll Register Error, addr: {:?}, reason: {:?}", addr, e);
+                        warn!("!!!> Tcp Acceptor Poll Register Error, addr: {:?}, reason: {:?}", addr, e);
                         len -= 1;
                         continue;
                     }
@@ -162,7 +163,7 @@ fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(mut acceptor: 
     let mut events = Events::with_capacity(event_size);
     loop {
         if let Err(e) = acceptor.poll.poll(&mut events, poll_timeout) {
-            println!("!!!> Tcp Acceptor Poll Failed, timeout: {:?}, ports: {:?}, reason: {:?}", poll_timeout, &acceptor_name, e);
+            warn!("!!!> Tcp Acceptor Poll Failed, timeout: {:?}, ports: {:?}, reason: {:?}", poll_timeout, &acceptor_name, e);
             break;
         }
 
@@ -173,12 +174,12 @@ fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(mut acceptor: 
                     AcceptorCmd::Continue => (), //继续监听连接事件
                     AcceptorCmd::Pause(time) => {
                         let now = Instant::now();
-                        println!("===> Pause Tcp Acceptor Start, ports: {:?}", &acceptor_name);
+                        info!("===> Pause Tcp Acceptor Start, ports: {:?}", &acceptor_name);
                         thread::sleep(Duration::from_millis(time as u64));
-                        println!("===> Pause Tcp Acceptor Finish, time: {:?}, ports: {:?}", Instant::now() - now, &acceptor_name);
+                        info!("===> Pause Tcp Acceptor Finish, time: {:?}, ports: {:?}", Instant::now() - now, &acceptor_name);
                     },
                     AcceptorCmd::Close(reason) => {
-                        println!("===> Close Tcp Acceptor Ok, ports: {:?}, reason: {:?}", &acceptor_name, reason);
+                        info!("===> Close Tcp Acceptor Ok, ports: {:?}, reason: {:?}", &acceptor_name, reason);
                         break;
                     }
                 }
@@ -195,22 +196,22 @@ fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(mut acceptor: 
                         Ok(socket) => {
                             //连接成功，则路由连接到连接池
                             if let Err(e) = context.driver.route(socket) {
-                                println!("!!!> Tcp Acceptor Listen Failed, port: {:?}, token: {:?}, reason: {:?}", context.listener.local_addr(), token, e);
+                                warn!("!!!> Tcp Acceptor Listen Failed, port: {:?}, token: {:?}, reason: {:?}", context.listener.local_addr(), token, e);
                             }
                         },
                         Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                             //连接将阻塞，则等待下次事件轮询时，完成连接，并继续处理下一个连接事件
-                            println!("!!!> Tcp Acceptor Listen Would Block, port: {:?}, token: {:?}", context.listener.local_addr(), token);
+                            warn!("!!!> Tcp Acceptor Listen Would Block, port: {:?}, token: {:?}", context.listener.local_addr(), token);
                         },
                         Err(e) => {
                             //连接失败
                             is_error = true; //标记当前Tcp连接监听器出错
-                            println!("!!!> Tcp Acceptor Listen Failed, port: {:?}, token: {:?}, reason: {:?}", context.listener.local_addr(), token, e);
+                            warn!("!!!> Tcp Acceptor Listen Failed, port: {:?}, token: {:?}, reason: {:?}", context.listener.local_addr(), token, e);
                         },
                     }
                 } else {
                     //无效的事件准备状态，则继续处理下一个连接事件
-                    println!("!!!> Tcp Acceptor Listen Failed, port: {:?}, token: {:?}, reason: invalid ready", context.listener.local_addr(), token);
+                    warn!("!!!> Tcp Acceptor Listen Failed, port: {:?}, token: {:?}, reason: invalid ready", context.listener.local_addr(), token);
                 }
             }
 
@@ -221,7 +222,7 @@ fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(mut acceptor: 
                 if let Ok(addr) = &error_context.listener.local_addr() {
                     if let Err(e) = acceptor.poll.deregister(&error_context.listener) {
                         //从轮询器中注销出错的Tcp连接监听器失败
-                        println!("!!!> Tcp Acceptor Unregister Listen Failed, port: {:?}, token: {:?}, reason: {:?}", addr, token, e);
+                        warn!("!!!> Tcp Acceptor Unregister Listen Failed, port: {:?}, token: {:?}, reason: {:?}", addr, token, e);
                     }
 
                     (&mut acceptor.listeners).remove(addr);

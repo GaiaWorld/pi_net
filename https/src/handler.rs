@@ -435,7 +435,7 @@ impl ChainProcess for SharedChain {
         let chain = self.clone();
         let func = Box::new(move |_lock| {
             match res.receiver.as_ref().unwrap().consume() {
-                Err(ConsumeError::Disconnected) => println!("https service reply task wakeup failed, task id: {}", req.uid),
+                Err(ConsumeError::Disconnected) => warn!("!!!> https service reply task wakeup failed, task id: {}", req.uid),
                 Err(ConsumeError::Empty) => {
                     //外部执行器未准备好，则继续等待
                     chain.reply(req, res);

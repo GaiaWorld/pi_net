@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::result::Result as GenResult;
 use std::io::{Error, ErrorKind, Result};
 
+use log::warn;
+
 use mqtt::broker::{MqttBrokerListener, MqttBrokerService};
 use mqtt::session::MqttConnect;
 use mqtt::util::BrokerSession;
@@ -36,7 +38,7 @@ impl MqttBrokerListener for BaseListener {
         //连接已关闭，立即释放Mqtt会话的上下文，并继续通知上层协议
         match context.get_context_mut().remove::<BaseConnect>() {
             Err(e) => {
-                println!("!!!> Free Context Failed of Base Connect Close, reason: {:?}", e);
+                warn!("!!!> Free Context Failed of Base Connect Close, reason: {:?}", e);
             },
             Ok(opt) => {
                 if let Some(mut base_connect) = opt {
