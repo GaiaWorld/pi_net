@@ -92,6 +92,7 @@ impl Handler for FileBatch {
         }else{
             &self.root
         };
+        warn!("---------------------batch, {:?}", root);
         let mut dir_vec: Vec<(u64, PathBuf)> = Vec::new();
         let mut dirs: Vec<String> = Vec::new();
         let mut file_vec: Vec<(u64, PathBuf)>;
