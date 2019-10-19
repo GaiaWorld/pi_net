@@ -74,7 +74,6 @@ impl Handler for FileBatch {
             let map = req.get_ref::<Params>().unwrap();
             if let Some(Value::String(r)) = map.find(&["r"]) {
                 rpath.push(&self.root);
-                rpath.push("/");
                 rpath.push(r.as_str());
             }
             if let Some(Value::String(d)) = map.find(&["d"]) {
