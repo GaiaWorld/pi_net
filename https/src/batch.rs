@@ -74,7 +74,6 @@ impl Handler for FileBatch {
             let map = req.get_ref::<Params>().unwrap();
             if let Some(Value::String(r)) = map.find(&["r"]) {
                 rpath.push(&self.root);
-                rpath.push("/");
                 rpath.push(r.as_str());
             }
             if let Some(Value::String(d)) = map.find(&["d"]) {
@@ -92,6 +91,7 @@ impl Handler for FileBatch {
         }else{
             &self.root
         };
+        warn!("---------------------batch, {:?}", root);
         let mut dir_vec: Vec<(u64, PathBuf)> = Vec::new();
         let mut dirs: Vec<String> = Vec::new();
         let mut file_vec: Vec<(u64, PathBuf)>;
@@ -131,7 +131,7 @@ impl Handler for FileBatch {
         //合并解析的所有文件，并异步加载所有文件
         dir_vec.append(&mut file_vec);
         // println!("!!!!!!files: {:?}", dir_vec.to_vec().iter_mut().map(|(_, x)| x).collect::<Vec<&mut PathBuf>>());
-        async_load_files(req, self.fill_gen_resp_headers(res), dir_vec, root.to_str().unwrap().as_bytes().len(), 0, Vec::new(), 0, start);
+        async_load_files(req, self.fill_gen_resp_headers(res), dir_vec, root.to_str().unwrap().as_bytes().len() + 1, 0, Vec::new(), 0, start);
         None
     }
 }
