@@ -18,12 +18,12 @@ use crate::connect::{decode, RpcConnect};
 /*
 * 已连接事件名
 */
-pub const CONNECTED_EVENT_NAME: &'static str = "net_connect";
+pub const CONNECTED_EVENT_NAME: &'static str = "rpc_net_connect";
 
 /*
 * 已关闭事件名
 */
-pub const CLOSED_EVENT_NAME: &'static str = "net_connect_close";
+pub const CLOSED_EVENT_NAME: &'static str = "rpc_net_connect_close";
 
 /*
 * Rpc监听器
