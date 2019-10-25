@@ -4,10 +4,11 @@ use std::time::Duration;
 use std::io::{ErrorKind, Result, Error};
 
 use tcp::connect::TcpSocket;
+use tcp::tls_connect::TlsSocket;
 use tcp::server::{AsyncWaitsHandle, AsyncPortsFactory, SocketListener};
 use tcp::driver::{Socket, SocketConfig, AsyncIOWait, AsyncServiceFactory};
 use tcp::buffer_pool::WriteBufferPool;
-use tcp::util::SocketEvent;
+use tcp::util::{SocketEvent, TlsConfig};
 
 use ws::{server::WebsocketListenerFactory,
          connect::WsSocket,
@@ -69,7 +70,51 @@ fn test_websocket_listener() {
     config.set_option(16384, 16384, 16384, 16);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
-    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(factory, buffer, config, TlsConfig::empty(), 1024, 1024 * 1024, 1024, Some(10)) {
+        Err(e) => {
+            println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
+        },
+        Ok(driver) => {
+            println!("===> Websocket Listener Bind Ok");
+        }
+    }
+
+    thread::sleep(Duration::from_millis(10000000));
+}
+
+struct TestTlsChildProtocolFactory;
+
+impl ChildProtocolFactory for TestTlsChildProtocolFactory {
+    type Connect = TlsSocket;
+    type Waits = AsyncWaitsHandle;
+
+    fn new_protocol(&self) -> Arc<dyn ChildProtocol<Self::Connect, Self::Waits>> {
+        Arc::new(TestChildProtocol)
+    }
+}
+
+#[test]
+fn test_tls_websocket_listener() {
+    let mut factory = AsyncPortsFactory::<TlsSocket>::new();
+    factory.bind(38080,
+                 Box::new(WebsocketListenerFactory::<TlsSocket>::with_protocol_factory(
+                     Arc::new(TestTlsChildProtocolFactory))));
+    let mut config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
+    config.set_option(16384, 16384, 16384, 16);
+    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
+
+    let tls_config = TlsConfig::new_server("",
+                                           false,
+                                           "./1595835_herominer.net.pem",
+                                           "./1595835_herominer.net.key",
+                                           "",
+                                           "",
+                                           "",
+                                           512,
+                                           false,
+                                           "").unwrap();
+
+    match SocketListener::bind(factory, buffer, config, tls_config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
         },

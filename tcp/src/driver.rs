@@ -21,7 +21,7 @@ use mio::{
 use atom::Atom;
 
 use crate::{buffer_pool::{WriteBufferHandle, WriteBuffer, WriteBufferPool},
-            util::{SocketContext, SocketEvent}};
+            util::{SocketContext, SocketEvent, TlsConfig}};
 
 /*
 * 默认的ipv4地址
@@ -48,7 +48,7 @@ pub const DEFAULT_BUFFER_SIZE: usize = 16384;
 */
 pub trait Stream: Sized + Send + 'static {
     //构建Tcp流
-    fn new(local: &SocketAddr, remote: &SocketAddr, token: Option<Token>, stream: TcpStream) -> Self;
+    fn new(local: &SocketAddr, remote: &SocketAddr, token: Option<Token>, stream: TcpStream, tls_cfg: TlsConfig) -> Self;
 
     //设置Tcp流上下文集合
     fn set_handle(&mut self, shared: &Arc<RefCell<Self>>);

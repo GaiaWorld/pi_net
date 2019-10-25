@@ -17,10 +17,11 @@ use iovec::{MAX_LENGTH, IoVec};
 use futures::future::{FutureExt, BoxFuture};
 
 use tcp::connect::TcpSocket;
+use tcp::tls_connect::TlsSocket;
 use tcp::server::{AsyncWaitsHandle, AsyncAdapter, PortsAdapter, AsyncPortsFactory, SocketListener};
 use tcp::driver::{SocketConfig, Socket, AsyncIOWait, SocketAdapterFactory, AsyncService, AsyncServiceFactory, SocketStatus, SocketHandle, AsyncReadTask, AsyncWriteTask};
 use tcp::buffer_pool::WriteBufferPool;
-use tcp::util::{IoBytes, IoList};
+use tcp::util::{IoBytes, IoList, TlsConfig};
 
 struct TestService;
 
@@ -184,7 +185,7 @@ fn test_socket_server() {
     config.set_option(16384, 16384, 16384, 16);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
-    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(factory, buffer, config, TlsConfig::empty(), 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Error, reason: {:?}", e);
         },
@@ -204,7 +205,7 @@ fn test_socket_server_ipv6() {
     config.set_option(16384, 16384, 16384, 16);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
-    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(factory, buffer, config, TlsConfig::empty(), 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv6 Address Error, reason: {:?}", e);
         },
@@ -224,7 +225,38 @@ fn test_socket_server_shared() {
     config.set_option(16384, 16384, 16384, 16);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
-    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(factory, buffer, config, TlsConfig::empty(), 1024, 1024 * 1024, 1024, Some(10)) {
+        Err(e) => {
+            println!("!!!> Socket Listener Bind Ipv4 & Ipv6 Address Error, reason: {:?}", e);
+        },
+        Ok(driver) => {
+            println!("===> Socket Listener Bind Ipv4 & Ipv6 Address Ok");
+        }
+    }
+
+    thread::sleep(Duration::from_millis(10000000));
+}
+
+#[test]
+fn test_tls_socket_server_shared() {
+    let mut factory = AsyncPortsFactory::<TlsSocket>::new();
+    factory.bind(38080, Box::new(TestServiceFactory::<TlsSocket>(PhantomData)));
+    let mut config = SocketConfig::new("::", factory.bind_ports().as_slice());
+    config.set_option(16384, 16384, 16384, 16);
+    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
+
+    let tls_config = TlsConfig::new_server("",
+                                           false,
+                                           "./1595835_herominer.net.pem",
+                                           "./1595835_herominer.net.key",
+                                           "",
+                                           "",
+                                           "",
+                                           512,
+                                           false,
+                                           "").unwrap();
+
+    match SocketListener::bind(factory, buffer, config, tls_config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 & Ipv6 Address Error, reason: {:?}", e);
         },
