@@ -650,6 +650,10 @@ impl Socket for TlsSocket {
         self.buffer_pool.as_ref().unwrap().as_ref()
     }
 
+    fn is_security(&self) -> bool {
+        true
+    }
+
     fn read_ready(&mut self, size: usize) -> Result<()> {
         if self.is_closed() {
             //连接已关闭，则返回错误
