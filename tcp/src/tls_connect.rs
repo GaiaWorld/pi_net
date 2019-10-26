@@ -943,23 +943,27 @@ impl TlsSocket {
                 #[cfg(any(unix))]
                 {
                     //发送Tls数据帧
-                    match session.writev_tls(&mut WriteVAdapter::new(&mut self.stream)) {
-                        Ok(len) => {
-                            if self.is_flush() {
-                                //刷新流缓冲区，保证数据被立即发送
-                                if let Err(e) = session.flush() {
-                                    warn!("!!!> Tls Stream Flush Failed, reason: {:?}", e);
+                    let mut total_len = 0;
+                    loop {
+                        match session.writev_tls(&mut WriteVAdapter::new(&mut self.stream)) {
+                            Ok(0) => {
+                                //发送完成，则返回
+                                return Ok(total_len);
+                            },
+                            Ok(len) => {
+                                if self.is_flush() {
+                                    //刷新流缓冲区，保证数据被立即发送
+                                    if let Err(e) = session.flush() {
+                                        warn!("!!!> Tls Stream Flush Failed, reason: {:?}", e);
+                                    }
                                 }
-                            }
 
-                            if !session.wants_write() {
-                                //还没有发送完成，则立即返回发送被阻塞
-                                return Err(Error::new(ErrorKind::WouldBlock, format!("tls send would block, len: {}", len)));
-                            }
-
-                            Ok(len)
-                        },
-                        reason => reason,
+                                total_len += len;
+                            },
+                            reason => {
+                                return reason;
+                            },
+                        }
                     }
                 }
             },
