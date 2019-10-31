@@ -951,7 +951,7 @@ impl TlsSocket {
                                 return Ok(total_len);
                             },
                             Ok(len) => {
-                                if self.is_flush() {
+                                if self.flush.load(Ordering::Relaxed) {
                                     //刷新流缓冲区，保证数据被立即发送
                                     if let Err(e) = session.flush() {
                                         warn!("!!!> Tls Stream Flush Failed, reason: {:?}", e);
