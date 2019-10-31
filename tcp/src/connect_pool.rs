@@ -352,7 +352,9 @@ fn handle_poll_events<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &
 
         //关闭轮询时出错的Tcp连接
         if let Some(reason) = close_reason.take() {
-            close_socket(pool, token, Shutdown::Both, reason);
+            if let Some(socket) = pool.sockets.get(token.0) {
+                socket.borrow().close(reason);
+            }
         }
     }
 }
