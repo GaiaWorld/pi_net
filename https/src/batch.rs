@@ -501,6 +501,7 @@ fn async_load_files(req: Request, res: Response, files: Vec<(u64, PathBuf)>, roo
     data.put_u16_le((s.len() - root_len) as u16);
     data.put_slice(&s[root_len..]);
     data.put_u32_le(file_len as u32);
+	size += (s.len() - root_len) as u64 + 6;
     let open = Box::new(move |f: IOResult<AsyncFile>| {
         match f {
             Err(e) => {
