@@ -48,12 +48,21 @@ unsafe impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Sync for TcpSocke
 
 impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
     //构建一个Tcp连接池
-    pub fn new(uid: u8, name: String, receiver: Receiver<S>, config: SocketConfig, buffer: WriteBufferPool) -> Result<Self> {
+    pub fn new(uid: u8,
+               name: String,
+               receiver: Receiver<S>,
+               config: SocketConfig,
+               buffer: WriteBufferPool) -> Result<Self> {
         Self::with_capacity(uid, name, receiver, config, buffer, 10)
     }
 
     //构建一个指定初始大小的Tcp连接池
-    pub fn with_capacity(uid: u8, name: String, receiver: Receiver<S>, config: SocketConfig, buffer: WriteBufferPool, size: usize) -> Result<Self> {
+    pub fn with_capacity(uid: u8,
+                         name: String,
+                         receiver: Receiver<S>,
+                         config: SocketConfig,
+                         buffer: WriteBufferPool,
+                         size: usize) -> Result<Self> {
         let contexts = Slab::with_capacity(size);
         let map = HashMap::with_capacity_and_hasher(size, FnvBuildHasher::default());
 
@@ -285,7 +294,7 @@ fn handle_poll_events<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &
                             close_reason = Some(Err(e));
                         }
                     },
-                    Ok(len) => {
+                    Ok(_len) => {
                         //按需接收完成，则重新注册当前Tcp连接关注的事件，并执行已读回调
                         if let Err(e) = pool.poll.reregister(s.get_stream(), token, s.get_ready(), s.get_poll_opt().clone()) {
                             //重新注册关注的事件失败
@@ -350,11 +359,15 @@ fn handle_poll_events<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &
 
 //批量处理Tcp连接的关闭事件
 fn handle_close_event<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut TcpSocketPool<S, A>) {
-    let i = pool.wait_close.len() - 1;
-    for n in 0..pool.wait_close.len() {
-        //关闭正在等待的连接
-        let (token, reason) = pool.wait_close.remove(i - n);
-        close_socket(pool, token, Shutdown::Both, reason);
+    let len = pool.wait_close.len();
+    if len > 0 {
+        //有正在等待关闭的连接
+        let i = len - 1;
+        for n in 0..len {
+            //关闭正在等待的连接
+            let (token, reason) = pool.wait_close.remove(i - n);
+            close_socket(pool, token, Shutdown::Both, reason);
+        }
     }
 
     for wait in pool.close_recv.try_iter().collect::<Vec<(Token, Result<()>)>>() {

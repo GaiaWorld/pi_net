@@ -128,6 +128,11 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         self.socket.unset_timeout();
     }
 
+    //线程安全的判断是否是安全的Tcp连接
+    pub fn is_security(&self) -> bool {
+        self.socket.is_security()
+    }
+
     //线程安全的分配一个用于发送的写缓冲区
     pub fn alloc(&self) -> WriteBuffer {
         self.socket.alloc().ok().unwrap().unwrap()

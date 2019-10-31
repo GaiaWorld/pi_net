@@ -23,7 +23,7 @@ use crate::acceptor::Acceptor;
 use crate::connect_pool::TcpSocketPool;
 use crate::buffer_pool::WriteBufferPool;
 use crate::driver::{Socket, Stream, SocketAdapter, SocketAdapterFactory, AsyncIOWait, AsyncService, SocketStatus, SocketHandle, SocketConfig, SocketDriver, AsyncServiceFactory};
-use crate::util::SocketEvent;
+use crate::util::{SocketEvent, TlsConfig};
 
 /*
 * Tcp异步任务等待表
@@ -401,6 +401,7 @@ impl<S, F> SocketListener<S, F>
     pub fn bind(factory: F,                 //Tcp端口适配器工厂
                 buffer: WriteBufferPool,    //写缓冲池
                 config: SocketConfig,       //连接配置
+                tls_cfg: TlsConfig,         //传输层安全协议配置
                 init_cap: usize,            //连接池初始容量
                 stack_size: usize,          //线程堆栈大小
                 event_size: usize,          //同时处理的事件数
@@ -417,7 +418,7 @@ impl<S, F> SocketListener<S, F>
         let processor = sys.processor_count();
         let mut pools = Vec::with_capacity(processor);
         let mut driver = SocketDriver::new(&binds[..]);
-        match Acceptor::bind(&addrs[..], &driver) {
+        match Acceptor::bind(&addrs[..], &driver, tls_cfg) {
             Err(e) => {
                 return Err(e);
             },

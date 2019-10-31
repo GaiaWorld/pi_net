@@ -11,14 +11,17 @@ use mio::{
     PollOpt, Token, Ready,
     net::TcpStream
 };
+use rustls::{WriteV, Session, ClientSession, ServerSession};
 use log::warn;
 
 use crate::{driver::{Socket, Stream, SocketHandle, SocketWakeup},
             buffer_pool::{ReadableView, WriteBufferHandle, WriteBufferPool},
-            util::{pause, SocketReady, SocketContext, SocketEvent, TlsConfig}};
+            util::{pause, SocketReady, SocketContext, SocketEvent, TlsConfig, TlsSession}};
+use iovec::IoVec;
+use crate::driver::SocketStatus::Readed;
 
 /*
-* Tcp连接读缓冲
+* Tls连接读缓冲
 */
 struct ReadBuffer {
     buf:            Vec<u8>,            //缓冲区
@@ -211,7 +214,7 @@ impl ReadBuffer {
 }
 
 /*
-* Tcp连接写缓冲
+* Tls连接写缓冲
 */
 struct WriteBuffer {
     queue:      VecDeque<WriteBufferHandle>,    //缓冲区队列
@@ -275,40 +278,76 @@ impl WriteBuffer {
 }
 
 /*
-* Tcp连接
+* Tls连接批量写适配器
 */
-pub struct TcpSocket {
-    local:          SocketAddr,                                             //TCP连接本地地址
-    remote:         SocketAddr,                                             //TCP连接远端地址
+struct WriteVAdapter<'a>(&'a mut TcpStream);
+
+impl<'a> WriteV for WriteVAdapter<'a> {
+    fn writev(&mut self, bytes: &[&[u8]]) -> Result<usize> {
+        let mut bufs = Vec::with_capacity(bytes.len());
+        for byte in bytes {
+            if let Some(iovec) = IoVec::from_bytes(byte) {
+                bufs.push(iovec);
+            }
+        }
+
+        self.0.write_bufs(bufs.as_slice())
+    }
+}
+
+impl<'a> WriteVAdapter<'a> {
+    //构建指定Tcp流的Tls连接批量写适配器
+    pub fn new(stream: &'a mut TcpStream) -> Self {
+        WriteVAdapter(stream)
+    }
+}
+
+/*
+* Tls连接
+*/
+pub struct TlsSocket {
+    local:          SocketAddr,                                             //Tls连接本地地址
+    remote:         SocketAddr,                                             //Tls连接远端地址
     token:          Option<Token>,                                          //连接令牌
     uid:            Option<usize>,                                          //连接唯一id
     stream:         TcpStream,                                              //TCP流
-    ready:          SocketReady,                                            //Tcp事件准备状态
-    poll_opt:       PollOpt,                                                //Tcp事件轮询选项
+    ready:          SocketReady,                                            //Tls事件准备状态
+    poll_opt:       PollOpt,                                                //Tls事件轮询选项
     rouser:         Option<Sender<(Token, SocketWakeup)>>,                  //事件唤醒器
     close_listener: Option<Sender<(Token, Result<()>)>>,                    //关闭事件监听器
     timer_listener: Option<Sender<(Token, Option<(usize, SocketEvent)>)>>,  //定时事件监听器
     readable_size:  usize,                                                  //本次可读字节数
     read_buf:       Option<ReadBuffer>,                                     //读缓冲
     write_buf:      Option<WriteBuffer>,                                    //写缓冲
-    flush:          Arc<AtomicBool>,                                        //Tcp连接写刷新状态
-    closed:         Arc<AtomicBool>,                                        //Tcp连接关闭状态
-    buffer_pool:    Option<Arc<WriteBufferPool>>,                           //Tcp连接写缓冲池
-    handle:         Option<SocketHandle<TcpSocket>>,                        //Tcp连接句柄
-    context:        SocketContext,                                          //Tcp连接上下文
+    flush:          Arc<AtomicBool>,                                        //Tls连接写刷新状态
+    closed:         Arc<AtomicBool>,                                        //Tls连接关闭状态
+    buffer_pool:    Option<Arc<WriteBufferPool>>,                           //Tls连接写缓冲池
+    handle:         Option<SocketHandle<TlsSocket>>,                        //Tls连接句柄
+    context:        SocketContext,                                          //Tls连接上下文
     timer:          Option<usize>,                                          //定时器句柄
+    tls_session:    TlsSession,                                             //传输层安全会话
 }
 
-unsafe impl Send for TcpSocket {}
-unsafe impl Sync for TcpSocket {}
+unsafe impl Send for TlsSocket {}
+unsafe impl Sync for TlsSocket {}
 
-impl Stream for TcpSocket {
+impl Stream for TlsSocket {
     fn new(local: &SocketAddr,
            remote: &SocketAddr,
            token: Option<Token>,
            stream: TcpStream,
-           _tls_cfg: TlsConfig) -> Self {
-        TcpSocket {
+           tls_cfg: TlsConfig) -> Self {
+        let tls_session = match tls_cfg {
+            TlsConfig::Client(cfg) => {
+                unimplemented!();
+            },
+            TlsConfig::Server(cfg) => {
+                TlsSession::Server(ServerSession::new(&cfg))
+            },
+            TlsConfig::Empty => panic!("create tls socket failed, invalid tls config"),
+        };
+
+        TlsSocket {
             local: local.clone(),
             remote: remote.clone(),
             token,
@@ -328,6 +367,7 @@ impl Stream for TcpSocket {
             handle: None,
             context: SocketContext::empty(),
             timer: None,
+            tls_session,
         }
     }
 
@@ -416,20 +456,15 @@ impl Stream for TcpSocket {
         let need_recv_pos = recv_pos + self.read_buf.as_mut().unwrap().need_size; //本次读缓冲区的已接收需要达到的位置
 
         loop{
-            let result;
-            if used_temp_buf {
-                if let Some(buf) = &mut self.read_buf.as_mut().unwrap().buf_once {
-                    result = self.stream.read(&mut buf[recv_pos..]);
-                } else {
-                    result = Err(Error::new(ErrorKind::Other, "invalid temp buffer"));
-                }
-            } else {
-                result = self.stream.read(&mut self.read_buf.as_mut().unwrap().buf[recv_pos..]);
-            }
-
-            match result {
+            match self.tls_recv(used_temp_buf, recv_pos) {
+                Ok(0) => {
+                    //从Tls会话读缓冲区内未读取到数据，表示当前Tls会话正在握手中，则设置Tls会话的就绪状态，并立即返回，以保证继续握手
+                    self.ready.remove(Ready::readable());
+                    self.tls_set_ready();
+                    return Ok(0);
+                },
                 Ok(len) => {
-                    //在流内接收到数据
+                    //当前Tls会话已握手，在流内接收到数据
                     recv_pos += len; //临时接收位置
                     if used_temp_buf {
                         //移动临时缓冲区的已接收位置
@@ -463,7 +498,7 @@ impl Stream for TcpSocket {
                     continue;
                 },
                 Err(e) => {
-                    //在流内接收时错误，则中断本次接收，等待下次完成接收
+                    //在流内接收时错误，则中断本次接收
                     return Err(e);
                 }
             }
@@ -496,57 +531,55 @@ impl Stream for TcpSocket {
                     bufs.push(buf); //加入缓冲列表
                     pos = 0; //将位置设置为0，保证将后续缓冲区全部加入缓冲列表
                 }
-            } else {
-                //当前连接写缓冲区内没有待发送数据，则立即停止本次发送，取消当前流的可写事件的关注，并返回最近一次发送数据大小
-                self.ready.remove(Ready::writable());
-                return Ok(send_pos);
-            }
 
-            if bufs.len() == 0 {
-                //写缓冲区为空，则立即停止本次发送，并取消当前流的可写事件的关注
-                self.ready.remove(Ready::writable());
-                return Ok(0);
-            }
+                //将数据写入Tls会话缓冲区
+                match self.tls_write(&bufs[..]) {
+                    Ok(len) => {
+                        //在Tls会话内写入数据
+                        send_pos += len; //临时发送位置
+                        self.write_buf.as_mut().unwrap().send_pos = send_pos; //移动写缓冲区的已发送位置
+                        if send_pos < write_pos {
+                            //写缓冲区数据还未全部写入Tls会话缓冲区，则尝试继续写入数据
+                            pause();
+                            continue;
+                        }
 
-            match self.stream.write_bufs(&bufs[..]) {
-                Ok(len) => {
-                    //在流内发送数据
-                    send_pos += len; //临时发送位置
-                    self.write_buf.as_mut().unwrap().send_pos = send_pos; //移动写缓冲区的已发送位置
-                    if send_pos < write_pos {
-                        //写缓冲区数据还未发送完，则尝试继续发送数据
+                        //已发送完当前写缓冲区内的数据，则完成本次发送，清理当前写缓冲句柄，并继续写入当前连接写缓冲区内下一个写缓冲句柄
+                        self.write_buf.as_mut().unwrap().remove();
+                        continue;
+                    },
+                    Err(ref e) if e.kind() == ErrorKind::Interrupted => {
+                        //在Tls会话内写入中断，则继续尝试写入数据
                         pause();
                         continue;
-                    }
+                    },
+                    Err(e) => {
+                        //在在Tls会话内写入错误，则中断本次写入
+                        return Err(e);
+                    },
+                }
+            }
 
-                    if self.is_flush() {
-                        //刷新流缓冲区，保证数据被立即发送
-                        if let Err(e) = self.stream.flush() {
-                            warn!("!!!> Tcp Stream Flush Failed, reason: {:?}", e);
-                        }
-                    }
-
-                    //已发送完当前写缓冲区内的数据，则完成本次发送，清理当前写缓冲句柄，并取消当前流的可写事件的关注
-                    //继续发送当前连接写缓冲区内下一个写缓冲句柄
-                    self.write_buf.as_mut().unwrap().remove();
+            //发送Tls会话写缓冲区内的数据
+            match self.tls_send() {
+                Ok(len) => {
                     self.ready.remove(Ready::writable());
-                    continue;
+                    if send_pos == 0 {
+                        //当前Tls会话正在握手中，则设置Tls会话的就绪状态，并立即返回，以保证继续握手
+                        self.tls_set_ready();
+                    }
+
+                    return Ok(send_pos); //返回Tls会话写缓冲区的待写数据长度
                 },
-                Err(ref e) if e.kind() == ErrorKind::Interrupted => {
-                    //在流内发送时中断，则继续尝试发送数据
-                    pause();
-                    continue;
-                },
-                Err(e) => {
-                    //在流内发送时错误，则中断本次发送，等待下次完成发送
-                    return Err(e);
-                },
+                reason => {
+                    return reason;
+                }
             }
         }
     }
 }
 
-impl Socket for TcpSocket {
+impl Socket for TlsSocket {
     fn is_closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
     }
@@ -618,7 +651,7 @@ impl Socket for TcpSocket {
     }
 
     fn is_security(&self) -> bool {
-        false
+        true
     }
 
     fn read_ready(&mut self, size: usize) -> Result<()> {
@@ -648,7 +681,6 @@ impl Socket for TcpSocket {
                 }
 
                 buf.ready(self.readable_size); //为读就绪准备读缓冲区
-//                self.ready.insert(Ready::readable()); //设置当前连接需要关注可读事件
                 if let Some(rouser) = &self.rouser {
                     if let Some(token) = self.token {
                         //唤醒连接，并通知连接需要再接收指定长度的数据
@@ -676,7 +708,6 @@ impl Socket for TcpSocket {
         }
 
         //当前缓冲区没有未读的指定长度的可读数据，需要通知连接读就绪，可以异步接收剩余的指定长度的数据
-//        self.ready.insert(Ready::readable()); //设置当前连接需要关注可读事件
         if size == 0 {
             self.readable_size = 0;
         } else {
@@ -701,7 +732,6 @@ impl Socket for TcpSocket {
             return Err(Error::new(ErrorKind::BrokenPipe, "socket closed"));
         }
 
-//        self.ready.insert(Ready::writable()); //设置当前连接需要关注可写事件
         if let Some(rouser) = &self.rouser {
             if let Some(token) = self.token {
                 //唤醒连接，并通知连接需要发送数据
@@ -740,5 +770,203 @@ impl Socket for TcpSocket {
         }
 
         Ok(())
+    }
+}
+
+impl TlsSocket {
+    //根据Tls会话的就绪状态，设置Tcp流的就绪状态
+    fn tls_set_ready(&self) {
+        match &self.tls_session {
+            TlsSession::Client(session) => {
+                unimplemented!();
+            },
+            TlsSession::Server(session) => {
+                let r = session.wants_read();
+                let w = session.wants_write();
+                if r && w {
+                    self.ready.insert(Ready::readable() | Ready::writable());
+                } else if r {
+                    self.ready.insert(Ready::readable());
+                } else if w {
+                    self.ready.insert(Ready::writable());
+                }
+            },
+        }
+    }
+
+    //从Tls会话中接收数据
+    fn tls_recv(&mut self, used_temp_buf: bool, recv_pos: usize) -> Result<usize> {
+        match &mut self.tls_session {
+            TlsSession::Client(session) => {
+                unimplemented!();
+            },
+            TlsSession::Server(session) => {
+                match session.read_tls(&mut self.stream) {
+                    Ok(0) => {
+                        //从Tcp流中无法读取Tls数据，表示连接已关闭或EOF
+                        Err(Error::new(ErrorKind::Other, "tls session closed"))
+                    },
+                    Ok(_) => {
+                        //从Tcp流中读取到Tls数据，则处理Tls数据帧
+                        if let Err(e) = session.process_new_packets() {
+                            //处理Tls数据帧错误，则立即返回错误原因
+                            return Err(Error::new(ErrorKind::InvalidInput, e));
+                        }
+
+                        //从Tls会话的读缓冲区中读取已处理的数据
+                        if used_temp_buf {
+                            //当前使用临时读缓冲区
+                            if let Some(buf) = &mut self.read_buf.as_mut().unwrap().buf_once {
+                                //临时读缓冲区存在
+                                session.read(&mut buf[recv_pos..])
+                            } else {
+                                Err(Error::new(ErrorKind::Other, "invalid temp buffer"))
+                            }
+                        } else {
+                            //当前使用读缓冲区
+                            session.read(&mut self.read_buf.as_mut().unwrap().buf[recv_pos..])
+                        }
+                    },
+                    Err(e) if (&e).kind() == ErrorKind::WouldBlock => {
+                        //从Tcp流中读取Tls数据阻塞，则尝试从Tls会话的读缓冲区中读取已处理的数据
+                        if used_temp_buf {
+                            //当前使用临时读缓冲区
+                            if let Some(buf) = &mut self.read_buf.as_mut().unwrap().buf_once {
+                                //临时读缓冲区存在
+                                match session.read(&mut buf[recv_pos..]) {
+                                    Err(e_) => {
+                                        //从Tls会话的读缓冲区中读取已处理的数据错误，则立即返回错误原因
+                                        Err(e_)
+                                    },
+                                    Ok(0) => {
+                                        //Tls会话的读缓冲区没有数据，则返回从Tcp流中读取Tls数据阻塞
+                                        Err(e)
+                                    },
+                                    result => result, //返回从Tls会话的读缓冲区中读取已处理数据的长度
+                                }
+                            } else {
+                                Err(Error::new(ErrorKind::Other, "invalid temp buffer"))
+                            }
+                        } else {
+                            //当前使用读缓冲区
+                            match session.read(&mut self.read_buf.as_mut().unwrap().buf[recv_pos..]) {
+                                Err(e_) => {
+                                    //从Tls会话的读缓冲区中读取已处理的数据错误，则立即返回错误原因
+                                    Err(e_)
+                                },
+                                Ok(0) => {
+                                    //Tls会话的读缓冲区没有数据，则返回从Tcp流中读取Tls数据阻塞
+                                    Err(e)
+                                },
+                                result => result, //返回从Tls会话的读缓冲区中读取已处理数据的长度
+                            }
+                        }
+                    },
+                    reason => reason,
+                }
+            },
+        }
+    }
+
+    //向Tls会话写入数据
+    fn tls_write(&mut self, bufs: &[&IoVec]) -> Result<usize> {
+        match &mut self.tls_session {
+            TlsSession::Client(session) => {
+                unimplemented!();
+            },
+            TlsSession::Server(session) => {
+                let mut total_len = 0; //写入成功的明文数据长度
+
+                #[cfg(any(windows))]
+                {
+                    for buf in bufs {
+                        if let Err(e) = session.write_all(buf) {
+                            //写部分数据失败，则立即返回错误原因
+                            return Err(e);
+                        }
+
+                        //写部分数据成功，则继续写剩余数据
+                        total_len += buf.len();
+                    }
+                }
+                #[cfg(any(unix))]
+                {
+                    for buf in bufs {
+                        if let Err(e) = session.write_all(buf) {
+                            //写部分数据失败，则立即返回错误原因
+                            return Err(e);
+                        }
+
+                        //写部分数据成功，则继续写剩余数据
+                        total_len += buf.len();
+                    }
+                }
+
+                Ok(total_len)
+            },
+        }
+    }
+
+    //从Tls会话中发送数据
+    fn tls_send(&mut self) -> Result<usize> {
+        match &mut self.tls_session {
+            TlsSession::Client(session) => {
+                unimplemented!();
+            },
+            TlsSession::Server(session) => {
+                #[cfg(any(windows))]
+                {
+                    //发送Tls数据帧
+                    let mut total_len = 0;
+                    loop {
+                        match session.write_tls(&mut self.stream) {
+                            Ok(0) => {
+                                //发送完成，则返回
+                                return Ok(total_len);
+                            },
+                            Ok(len) => {
+                                if self.flush.load(Ordering::Relaxed) {
+                                    //刷新流缓冲区，保证数据被立即发送
+                                    if let Err(e) = session.flush() {
+                                        warn!("!!!> Tls Stream Flush Failed, reason: {:?}", e);
+                                    }
+                                }
+
+                                total_len += len;
+                            },
+                            reason => {
+                                return reason;
+                            },
+                        }
+                    }
+                }
+                #[cfg(any(unix))]
+                {
+                    //发送Tls数据帧
+                    let mut total_len = 0;
+                    loop {
+                        match session.writev_tls(&mut WriteVAdapter::new(&mut self.stream)) {
+                            Ok(0) => {
+                                //发送完成，则返回
+                                return Ok(total_len);
+                            },
+                            Ok(len) => {
+                                if self.flush.load(Ordering::Relaxed) {
+                                    //刷新流缓冲区，保证数据被立即发送
+                                    if let Err(e) = session.flush() {
+                                        warn!("!!!> Tls Stream Flush Failed, reason: {:?}", e);
+                                    }
+                                }
+
+                                total_len += len;
+                            },
+                            reason => {
+                                return reason;
+                            },
+                        }
+                    }
+                }
+            },
+        }
     }
 }

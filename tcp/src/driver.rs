@@ -21,7 +21,7 @@ use mio::{
 use atom::Atom;
 
 use crate::{buffer_pool::{WriteBufferHandle, WriteBuffer, WriteBufferPool},
-            util::{SocketContext, SocketEvent}};
+            util::{SocketContext, SocketEvent, TlsConfig}};
 
 /*
 * 默认的ipv4地址
@@ -48,7 +48,7 @@ pub const DEFAULT_BUFFER_SIZE: usize = 16384;
 */
 pub trait Stream: Sized + Send + 'static {
     //构建Tcp流
-    fn new(local: &SocketAddr, remote: &SocketAddr, token: Option<Token>, stream: TcpStream) -> Self;
+    fn new(local: &SocketAddr, remote: &SocketAddr, token: Option<Token>, stream: TcpStream, tls_cfg: TlsConfig) -> Self;
 
     //设置Tcp流上下文集合
     fn set_handle(&mut self, shared: &Arc<RefCell<Self>>);
@@ -150,6 +150,9 @@ pub trait Socket: Sized + Send + 'static {
 
     //获取连接写缓冲
     fn get_write_buffer(&self) -> &WriteBufferPool;
+
+    //是否是安全的连接
+    fn is_security(&self) -> bool;
 
     //通知连接读就绪，可以开始接收指定字节数的数据，如果为0则表示读取任意字节数，不会从当前读缓冲区中返回任何数据
     fn read_ready(&mut self, size: usize) -> Result<()>;
@@ -358,6 +361,13 @@ impl<S: Socket> SocketHandle<S> {
     pub fn unset_timeout(&self) {
         unsafe {
             (&*self.0).unset_timeout();
+        }
+    }
+
+    //线程安全的判断是否是安全连接
+    pub fn is_security(&self) -> bool {
+        unsafe {
+            (&*self.0).is_security()
         }
     }
 

@@ -14,7 +14,7 @@ use tcp::{server::AsyncWaitsHandle,
           util::ContextHandle};
 use ws::connect::WsSocket;
 
-use crate::{v311::WsMqtt311, util::{ValueEq, BrokerSession}};
+use crate::{v311::WsMqtt311, tls_v311::WssMqtt311, util::{ValueEq, BrokerSession}};
 
 /*
 * Mqtt会话
@@ -334,7 +334,11 @@ impl<S: Socket> MqttConnect for QosZeroSession<S> {
             //通过Ws连接发送指定报文
             let mut ws_payload = connect.alloc();
             ws_payload.get_iolist_mut().push_back(buf.into_inner().into());
-            connect.send(WsMqtt311::WS_MSG_TYPE, ws_payload);
+            if connect.is_security() {
+                connect.send(WssMqtt311::WS_MSG_TYPE, ws_payload);
+            } else {
+                connect.send(WsMqtt311::WS_MSG_TYPE, ws_payload);
+            }
         }
 
         Ok(())
