@@ -492,7 +492,7 @@ impl Stream for TlsSocket {
                     self.ready.remove(Ready::readable());
                     return Ok(len);
                 },
-                Err(ref e) if e.kind() == ErrorKind::Interrupted => {
+                Err(e) if (&e).kind() == ErrorKind::Interrupted => {
                     //在流内接收时中断，则中断本次接收，等待下次完成接收
                     return Err(Error::new(ErrorKind::WouldBlock, e));
                 },
