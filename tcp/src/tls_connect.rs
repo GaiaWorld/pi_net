@@ -493,12 +493,11 @@ impl Stream for TlsSocket {
                     return Ok(len);
                 },
                 Err(ref e) if e.kind() == ErrorKind::Interrupted => {
-                    //在流内接收时中断，则继续尝试接收数据
-                    pause();
-                    continue;
+                    //在流内接收时中断，则中断本次接收，等待下次完成接收
+                    return Err(Error::new(ErrorKind::WouldBlock, e));
                 },
                 Err(e) => {
-                    //在流内接收时错误，则中断本次接收
+                    //在流内接收时错误，则中断本次接收，等待下次完成接收
                     return Err(e);
                 }
             }

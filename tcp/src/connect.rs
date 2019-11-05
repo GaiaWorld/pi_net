@@ -428,6 +428,9 @@ impl Stream for TcpSocket {
             }
 
             match result {
+                Ok(0) => {
+                    return Ok(0);
+                },
                 Ok(len) => {
                     //在流内接收到数据
                     recv_pos += len; //临时接收位置
@@ -457,10 +460,9 @@ impl Stream for TcpSocket {
                     self.ready.remove(Ready::readable());
                     return Ok(len);
                 },
-                Err(ref e) if e.kind() == ErrorKind::Interrupted => {
-                    //在流内接收时中断，则继续尝试接收数据
-                    pause();
-                    continue;
+                Err(e) if (&e).kind() == ErrorKind::Interrupted => {
+                    //在流内接收时中断，则中断本次接收，等待下次完成接收
+                    return Err(Error::new(ErrorKind::WouldBlock, e));
                 },
                 Err(e) => {
                     //在流内接收时错误，则中断本次接收，等待下次完成接收
