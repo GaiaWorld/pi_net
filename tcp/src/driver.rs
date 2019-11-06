@@ -373,6 +373,11 @@ impl<S: Socket> SocketHandle<S> {
 
     //线程安全的分配写缓冲
     pub fn alloc(&self) -> Result<Option<WriteBuffer>> {
+        if self.1.upgrade().is_none() {
+            //如果当前连接已释放，则忽略
+            return Ok(None);
+        }
+
         unsafe {
             (&*self.0).get_write_buffer().alloc()
         }

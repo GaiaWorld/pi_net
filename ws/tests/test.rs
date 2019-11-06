@@ -24,10 +24,13 @@ impl<S: Socket, H: AsyncIOWait> ChildProtocol<S, H> for TestChildProtocol {
 
     fn decode_protocol(&self, connect: WsSocket<S, H>, context: &mut WsSession) -> Result<()> {
         for _ in 0..3 {
-            let mut buf = connect.alloc();
-            buf.get_iolist_mut().push_back(context.to_vec().into());
-            if let Err(e) = connect.send(context.get_type(), buf) {
-                return Err(e);
+            if let Some(mut buf) = connect.alloc() {
+                buf.get_iolist_mut().push_back(context.to_vec().into());
+                if let Err(e) = connect.send(context.get_type(), buf) {
+                    return Err(e);
+                }
+            } else {
+                return Err(Error::new(ErrorKind::Other, "test mqtt response failed, reason: alloc write buffer failed"));
             }
         }
 

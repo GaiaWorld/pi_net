@@ -332,13 +332,16 @@ impl<S: Socket> MqttConnect for QosZeroSession<S> {
             }
 
             //通过Ws连接发送指定报文
-            let mut ws_payload = connect.alloc();
-            ws_payload.get_iolist_mut().push_back(buf.into_inner().into());
-            if connect.is_security() {
-                connect.send(WssMqtt311::WS_MSG_TYPE, ws_payload);
-            } else {
-                connect.send(WsMqtt311::WS_MSG_TYPE, ws_payload);
+            if let Some(mut ws_payload) = connect.alloc() {
+                ws_payload.get_iolist_mut().push_back(buf.into_inner().into());
+                if connect.is_security() {
+                    return connect.send(WssMqtt311::WS_MSG_TYPE, ws_payload);
+                } else {
+                    return connect.send(WsMqtt311::WS_MSG_TYPE, ws_payload);
+                }
             }
+
+            return Err(Error::new(ErrorKind::Other, "mqtt session send failed, reason: alloc write buffer failed"));
         }
 
         Ok(())

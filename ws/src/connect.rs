@@ -134,8 +134,12 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
     }
 
     //线程安全的分配一个用于发送的写缓冲区
-    pub fn alloc(&self) -> WriteBuffer {
-        self.socket.alloc().ok().unwrap().unwrap()
+    pub fn alloc(&self) -> Option<WriteBuffer> {
+        match self.socket.alloc() {
+            Ok(None) => None,
+            Ok(buffer) => buffer,
+            _ => None,
+        }
     }
 
     //线程安全的异步发送指定负载

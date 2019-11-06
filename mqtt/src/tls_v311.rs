@@ -137,9 +137,12 @@ fn send_packet(connect: &WsSocket<TlsSocket, AsyncWaitsHandle>,
     }
 
     //通过Ws连接发送指定报文
-    let mut payload = connect.alloc();
-    payload.get_iolist_mut().push_back(buf.into_inner().into());
-    connect.send(WssMqtt311::WS_MSG_TYPE, payload)
+    if let Some(mut payload) = connect.alloc() {
+        payload.get_iolist_mut().push_back(buf.into_inner().into());
+        return connect.send(WssMqtt311::WS_MSG_TYPE, payload);
+    }
+
+    Err(Error::new(ErrorKind::Other, "send tls mqtt packet failed, reason: alloc write buffer failed"))
 }
 
 //广播指定的Mqtt报文，用于发布消息的发送
@@ -162,9 +165,12 @@ fn broadcast_packet(connects: &[WsSocket<TlsSocket, AsyncWaitsHandle>],
             continue;
         }
 
-        let mut payload = connect.alloc();
-        payload.get_iolist_mut().push_back(buf.into_inner().into());
-        return WsSocket::<TlsSocket, AsyncWaitsHandle>::broadcast(connects, WssMqtt311::WS_MSG_TYPE, payload);
+        if let Some(mut payload) = connect.alloc() {
+            payload.get_iolist_mut().push_back(buf.into_inner().into());
+            return WsSocket::<TlsSocket, AsyncWaitsHandle>::broadcast(connects, WssMqtt311::WS_MSG_TYPE, payload);
+        }
+
+        return Err(Error::new(ErrorKind::Other, "broadcast tls mqtt packet failed, reason: alloc write buffer failed"));
     }
 
     Ok(())
