@@ -429,7 +429,8 @@ impl Stream for TcpSocket {
 
             match result {
                 Ok(0) => {
-                    return Ok(0);
+                    //在流内接收时出现EOF，则中断本次接收，并立即返回错误
+                    return Err(Error::new(ErrorKind::UnexpectedEof, "recvive is EOF"));
                 },
                 Ok(len) => {
                     //在流内接收到数据
