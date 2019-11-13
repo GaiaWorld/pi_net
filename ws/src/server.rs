@@ -23,7 +23,6 @@ use crate::{acceptor::{MAX_HANDSHAKE_HTTP_HEADER_LIMIT, WsAcceptor},
             connect::WsSocket,
             frame::{WsHead, WsFrame},
             util::{ChildProtocol, ChildProtocolFactory, WsStatus, WsSession}};
-use futures::Future;
 
 /*
 * Websocket连接监听器
