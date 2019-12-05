@@ -166,7 +166,7 @@ impl<V: ValueEq + Ord + Debug + Clone> PathTree<V> {
                         if path.is_final(index) {
                             //路径已结束，则将值移除当前节点的待匹配列表中
                             if let Ok(index) = n.unmatch.binary_search_by(|s| {
-                                value.cmp(s)
+                                s.cmp(&value)
                             }) {
                                 //从待匹配列表中找到指定会话，则移除
                                 n.unmatch.remove(index);

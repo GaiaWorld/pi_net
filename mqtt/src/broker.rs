@@ -369,7 +369,7 @@ impl<S: Socket> MqttBroker<S> {
                     } else {
                         //当前主题也许有多个订阅会话
                         if let Ok(index) = w.sessions.binary_search_by(|s| {
-                            session.cmp(s)
+                            s.cmp(&session)
                         }) {
                             //从会话表中找到指定会话，则移除
                             w.sessions.remove(index);
@@ -408,7 +408,7 @@ impl<S: Socket> MqttBroker<S> {
                 } else {
                     //当前主题也许有多个订阅会话，则从会话表中移除指定的会话
                     if let Ok(index) = w.sessions.binary_search_by(|s| {
-                        session.cmp(s)
+                        s.cmp(&session)
                     }) {
                         //从会话表中找到指定会话，则移除
                         w.sessions.remove(index);

@@ -273,23 +273,23 @@ pub enum SocketWakeup {
 /*
 * Tcp连接句柄
 */
-pub struct SocketHandle<S: Socket>(*const S, Weak<RefCell<S>>);
+pub struct SocketHandle<S: Socket>(*const S, Weak<RefCell<S>>, Arc<WriteBufferPool>);
 
 unsafe impl<S: Socket> Send for SocketHandle<S> {}
 unsafe impl<S: Socket> Sync for SocketHandle<S> {}
 
 impl<S: Socket> Clone for SocketHandle<S> {
     fn clone(&self) -> Self {
-        SocketHandle(self.0, self.1.clone())
+        SocketHandle(self.0, self.1.clone(), self.2.clone())
     }
 }
 
 impl<S: Socket> SocketHandle<S> {
     //构建Tcp连接引用
-    pub fn new(shared: &Arc<RefCell<S>>) -> Self {
+    pub fn new(shared: &Arc<RefCell<S>>, buffer: Arc<WriteBufferPool>) -> Self {
         let raw = shared.as_ptr() as *const S;
         let weak = Arc::downgrade(shared);
-        SocketHandle(raw, weak)
+        SocketHandle(raw, weak, buffer)
     }
 
     //获取Tcp连接可写句柄
@@ -373,14 +373,7 @@ impl<S: Socket> SocketHandle<S> {
 
     //线程安全的分配写缓冲
     pub fn alloc(&self) -> Result<Option<WriteBuffer>> {
-        if self.1.upgrade().is_none() {
-            //如果当前连接已释放，则忽略
-            return Ok(None);
-        }
-
-        unsafe {
-            (&*self.0).get_write_buffer().alloc()
-        }
+        self.2.alloc()
     }
 
     //线程安全的写

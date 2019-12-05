@@ -332,7 +332,7 @@ impl Stream for TcpSocket {
     }
 
     fn set_handle(&mut self, shared: &Arc<RefCell<Self>>) {
-        self.handle = Some(SocketHandle::new(shared));
+        self.handle = Some(SocketHandle::new(shared, self.buffer_pool.as_ref().cloned().unwrap()));
     }
 
     fn get_stream(&self) -> &TcpStream {
