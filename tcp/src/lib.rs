@@ -15,10 +15,12 @@ extern crate iovec;
 extern crate fnv;
 extern crate futures;
 extern crate log;
+extern crate parking_lot;
 
 extern crate local_timer;
 extern crate apm;
 extern crate r#async;
+extern crate hash;
 extern crate atom;
 
 pub mod server;

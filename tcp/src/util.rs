@@ -5,17 +5,49 @@ use std::fs::File;
 use std::sync::Arc;
 use std::path::Path;
 use std::time::Duration;
-use std::io::{Read, BufReader};
+use std::io::{Result as IOResult, Read, BufReader};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 
 use iovec::MAX_LENGTH;
-use mio::Ready;
+use mio::{Token, Ready};
 use rustls::{ALL_CIPHERSUITES, ProtocolVersion, Session,
              RootCertStore, NoClientAuth, AllowAnyAuthenticatedClient, AllowAnyAnonymousOrAuthenticatedClient,
              ClientConfig, ClientSession, ServerConfig, ServerSession, ServerSessionMemoryCache};
 use rustls::internal::pemfile;
+use crossbeam_channel::Sender;
+use parking_lot::RwLock;
+
+use hash::XHashMap;
+
+/*
+* Tcp连接池发送器表
+*/
+lazy_static! {
+    pub static ref TCP_SOCKET_POOL_SENDER_TAB: Arc<RwLock<XHashMap<u8, Sender<(Token, IOResult<()>)>>>> = Arc::new(RwLock::new(XHashMap::default()));
+}
+
+/*
+* 线程安全的注册Tcp连接池的关闭事件发送器
+*/
+pub fn register_close_sender(uid: u8, sender: Sender<(Token, IOResult<()>)>) {
+    TCP_SOCKET_POOL_SENDER_TAB.write().insert(uid, sender);
+}
+
+/*
+* 线程安全的关闭指定唯一id的Tcp连接
+*/
+pub fn close_socket(uid: usize, reason: IOResult<()>) -> bool {
+    let pool_uid = (uid >> 24 & 0xff) as u8;
+    let token = Token::from(uid & 0xffffff);
+    if let Some(sender) = TCP_SOCKET_POOL_SENDER_TAB.read().get(&pool_uid) {
+        sender.send((token, reason));
+        return true;
+    }
+
+    false
+}
 
 #[cfg(all(feature="unstable", any(target_arch = "x86", target_arch = "x86_64")))]
 #[inline(always)]

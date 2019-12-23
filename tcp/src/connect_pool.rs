@@ -18,7 +18,7 @@ use local_timer::LocalTimer;
 
 use crate::{driver::{DEFAULT_TCP_IP_V6, Socket, Stream, SocketAdapter, SocketOption, SocketConfig, SocketDriver, SocketWakeup},
             buffer_pool::{WriteBufferHandle, WriteBufferPool},
-            util::SocketEvent};
+            util::{register_close_sender, SocketEvent}};
 
 /*
 * Tcp连接池
@@ -78,6 +78,8 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
         let (wakeup_sent, wakeup_recv) = unbounded();
         let (close_sent, close_recv) = unbounded();
         let (timer_sent, timer_recv) = unbounded();
+	register_close_sender(uid, close_sent.clone()); //注册全局关闭事件发送器
+
         Ok(TcpSocketPool {
             uid,
             name,

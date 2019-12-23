@@ -18,3 +18,5 @@ fnv = "1.0"
 async = { path = "../../pi_lib/async" }
 futures = "0.3"
 log = "0.4"
+hash = { path = "../../pi_lib/hash" }
+parking_lot = "0.9"
