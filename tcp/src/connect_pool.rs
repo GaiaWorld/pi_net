@@ -386,6 +386,10 @@ fn close_socket<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut Tc
                                                                    how: Shutdown,
                                                                    reason: Result<()>) {
     //从连接表中移除被关闭的Tcp连接
+    if !pool.sockets.contains(token.0) {
+        //如果指定令牌的Tcp连接不存在，则忽略
+        return;
+    }
     let socket = pool.sockets.remove(token.0);
 
     //从映射表中移除被关闭Tcp连接的信息
