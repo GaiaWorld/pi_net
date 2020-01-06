@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::{Result, Error, ErrorKind, Read, Write};
 
+use iovec::IoVec;
 use crossbeam_channel::Sender;
 use mio::{
     PollOpt, Token, Ready,
