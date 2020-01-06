@@ -548,6 +548,7 @@ impl Stream for TcpSocket {
                 },
                 Err(e) => {
 		    println!("!!!!!!ws frame, tcp send error, reason: {:?}", e);
+		    self.write_buf.as_mut().unwrap().send_pos = 0;
                     //在流内发送时错误，则中断本次发送，等待下次完成发送
                     return Err(e);
                 },
