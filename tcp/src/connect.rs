@@ -496,7 +496,9 @@ impl Stream for TcpSocket {
                         continue;
                     }
 
-                    bufs.push(buf); //加入缓冲列表
+                    if let Some(part) = IoVec::from_bytes(&buf[pos..]) {
+                        bufs.push(part); //加入缓冲列表
+                    }
                     pos = 0; //将位置设置为0，保证将后续缓冲区全部加入缓冲列表
                 }
             } else {
@@ -548,7 +550,6 @@ impl Stream for TcpSocket {
                 },
                 Err(e) => {
 		    println!("!!!!!!ws frame, tcp send error, reason: {:?}", e);
-		    self.write_buf.as_mut().unwrap().send_pos = 0;
                     //在流内发送时错误，则中断本次发送，等待下次完成发送
                     return Err(e);
                 },
