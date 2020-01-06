@@ -513,7 +513,7 @@ impl Stream for TcpSocket {
 
             match self.stream.write_bufs(&bufs[..]) {
                 Ok(len) => {
-		    println!("!!!!!!ws frame, tcp send ok, len: {:?}", len);
+		    println!("!!!!!!ws frame, tcp send ok, buf len: {:?}, send len: {:?}, last pos: {:?}, write pos: {:?}", bufs.len(), len, send_pos, write_pos);
                     //在流内发送数据
                     send_pos += len; //临时发送位置
                     self.write_buf.as_mut().unwrap().send_pos = send_pos; //移动写缓冲区的已发送位置
