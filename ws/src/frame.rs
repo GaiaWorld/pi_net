@@ -750,7 +750,9 @@ impl<S: Socket, H: AsyncIOWait> WsFrame<S, H> {
     //将帧序列化为写缓冲
     pub fn into_write_buf(self) -> Option<WriteBuffer> {
         if let WsPayload::Buffer(mut buf) = self.payload {
-            buf.get_iolist_mut().push_front(Vec::from(self.head).into());
+            let header = Vec::from(self.head);
+            println!("!!!!!!ws frame payload len: {:?}, ws frame header: {:?}", buf.size(), header);
+            buf.get_iolist_mut().push_front(header.into());
             return Some(buf);
         }
 

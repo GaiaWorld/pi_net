@@ -513,6 +513,7 @@ impl Stream for TcpSocket {
 
             match self.stream.write_bufs(&bufs[..]) {
                 Ok(len) => {
+		    println!("!!!!!!ws frame, tcp send ok, len: {:?}", len);
                     //在流内发送数据
                     send_pos += len; //临时发送位置
                     self.write_buf.as_mut().unwrap().send_pos = send_pos; //移动写缓冲区的已发送位置
@@ -541,6 +542,7 @@ impl Stream for TcpSocket {
                     continue;
                 },
                 Err(e) => {
+		    println!("!!!!!!ws frame, tcp send error, reason: {:?}", e);
                     //在流内发送时错误，则中断本次发送，等待下次完成发送
                     return Err(e);
                 },
