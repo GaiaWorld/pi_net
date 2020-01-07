@@ -497,6 +497,7 @@ impl Stream for TcpSocket {
                         continue;
                     }
 
+		    println!("!!!!!!pos: {:?}", pos);
                     if let Some(part) = IoVec::from_bytes(&buf[pos..]) {
                         bufs.push(part); //加入缓冲列表
                     }
