@@ -497,9 +497,11 @@ impl Stream for TcpSocket {
                         continue;
                     }
 
-		    println!("!!!!!!pos: {:?}", pos);
                     if let Some(part) = IoVec::from_bytes(&buf[pos..]) {
-                        bufs.push(part); //加入缓冲列表
+                        if part.len() > 0 {
+                            //剩余未发送部分，加入缓冲列表
+                            bufs.push(part);
+                        }
                     }
                     pos = 0; //将位置设置为0，保证将后续缓冲区全部加入缓冲列表
                 }
