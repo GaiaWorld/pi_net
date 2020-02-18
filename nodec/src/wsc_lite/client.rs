@@ -178,7 +178,7 @@ impl ClientBuilder {
     ///
     /// This method assumes that the TLS connection has already been established, if needed. It sends an HTTP
     /// `Connection: Upgrade` request and waits for an HTTP OK response before proceeding.
-    pub fn async_connect_on<S: AsyncRead + AsyncWrite>(
+    pub fn async_connect_on<S: AsyncRead + AsyncWrite + Sized>(
         self,
         stream: S,
     ) -> impl Future<Item = AsyncClient<S>, Error = Error> {
