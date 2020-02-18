@@ -117,8 +117,8 @@ fn test_tls_mqtt_311() {
 
     let tls_config = TlsConfig::new_server("",
                                            false,
-                                           "./1595835_herominer.net.pem",
-                                           "./1595835_herominer.net.key",
+                                           "./3376363_msg.highapp.com.pem",
+                                           "./3376363_msg.highapp.com.key",
                                            "",
                                            "",
                                            "",
