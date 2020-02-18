@@ -270,7 +270,7 @@ impl<S: Socket> MqttSession for QosZeroSession<S> {
 impl<S: Socket> MqttConnect for QosZeroSession<S> {
     fn get_uid(&self) -> Option<usize> {
         if let Some(connect) = &self.connect {
-            return connect.get_uid()
+            return Some(connect.get_uid())
         }
 
         None
@@ -278,9 +278,7 @@ impl<S: Socket> MqttConnect for QosZeroSession<S> {
 
     fn get_token(&self) -> Option<usize> {
         if let Some(connect) = &self.connect {
-            if let Some(token) = connect.get_token() {
-                return Some(token.0);
-            }
+            return Some(connect.get_token().0);
         }
 
         None

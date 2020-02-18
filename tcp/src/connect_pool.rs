@@ -17,8 +17,8 @@ use log::warn;
 use local_timer::LocalTimer;
 
 use crate::{driver::{DEFAULT_TCP_IP_V6, Socket, Stream, SocketAdapter, SocketOption, SocketConfig, SocketDriver, SocketWakeup},
-            buffer_pool::{WriteBufferHandle, WriteBufferPool},
-            util::SocketEvent};
+            buffer_pool::WriteBufferPool,
+            util::{register_close_sender, SocketEvent}};
 
 /*
 * Tcp连接池
@@ -78,6 +78,8 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
         let (wakeup_sent, wakeup_recv) = unbounded();
         let (close_sent, close_recv) = unbounded();
         let (timer_sent, timer_recv) = unbounded();
+        register_close_sender(uid, close_sent.clone()); //注册全局关闭事件发送器
+
         Ok(TcpSocketPool {
             uid,
             name,
@@ -120,7 +122,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
     }
 }
 
-//Tcp连接事件循环，当连接同时关注可读和可写事件时，轮询将不会返回任何事件
+//Tcp连接事件循环，当连接同时关注可读和可写事件时，轮询将不会返回任何事件，轮询超时时长会影响到最快响应时间，最快响应时间是实际处理时间加上轮询超时时长
 fn event_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(mut pool: TcpSocketPool<S, A>, event_size: usize, timeout: Option<usize>) {
     let poll_timeout = if let Some(t) = timeout {
         Some(Duration::from_millis(t as u64))
@@ -268,6 +270,15 @@ fn handle_wakeup<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut T
                     socket.borrow_mut().write(buf);
                 }
             },
+            (token, SocketWakeup::Wake) => {
+                //唤醒并执行已唤醒回调
+                if let Some(socket) = pool.sockets.get(token.0) {
+                    let handle = socket.borrow_mut().get_handle();
+                    mem::drop(socket); //因为后续操作在连接引用的作用域内，所以必须显示释放连接引用，以保证后续可以继续借用连接
+
+                    pool.driver.as_ref().unwrap().get_adapter().waked(handle);
+                }
+            },
         }
     }
 }
@@ -384,6 +395,10 @@ fn close_socket<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut Tc
                                                                    how: Shutdown,
                                                                    reason: Result<()>) {
     //从连接表中移除被关闭的Tcp连接
+    if !pool.sockets.contains(token.0) {
+        //如果指定令牌的Tcp连接不存在，则忽略
+        return;
+    }
     let socket = pool.sockets.remove(token.0);
 
     //从映射表中移除被关闭Tcp连接的信息

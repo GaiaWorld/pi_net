@@ -6,19 +6,18 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::{Result, Error, ErrorKind, Read, Write};
 
+use iovec::IoVec;
 use crossbeam_channel::Sender;
 use mio::{
     PollOpt, Token, Ready,
     net::TcpStream
 };
-use rustls::{WriteV, Session, ClientSession, ServerSession};
+use rustls::{WriteV, Session, ServerSession};
 use log::warn;
 
-use crate::{driver::{Socket, Stream, SocketHandle, SocketWakeup},
+use crate::{driver::{Socket, Stream, SocketHandle, SocketImage, SocketWakeup},
             buffer_pool::{ReadableView, WriteBufferHandle, WriteBufferPool},
             util::{pause, SocketReady, SocketContext, SocketEvent, TlsConfig, TlsSession}};
-use iovec::IoVec;
-use crate::driver::SocketStatus::Readed;
 
 /*
 * Tls连接读缓冲
@@ -372,7 +371,20 @@ impl Stream for TlsSocket {
     }
 
     fn set_handle(&mut self, shared: &Arc<RefCell<Self>>) {
-        self.handle = Some(SocketHandle::new(shared));
+        if let Some(uid) = self.uid {
+            if let Some(token) = self.token {
+                if let Some(pool) = &self.buffer_pool {
+                    if let Some(rouser) = &self.rouser {
+                        if let Some(close_listener) = &self.close_listener {
+                            if let Some(timer_listener) = &self.timer_listener {
+                                let image = SocketImage::new(shared, self.local, self.remote, uid, token, false, self.flush.clone(), self.closed.clone(), pool.clone(), rouser.clone(), close_listener.clone(), timer_listener.clone());
+                                self.handle = Some(SocketHandle::new(image));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn get_stream(&self) -> &TcpStream {
@@ -527,7 +539,12 @@ impl Stream for TlsSocket {
                         continue;
                     }
 
-                    bufs.push(buf); //加入缓冲列表
+                    if let Some(part) = IoVec::from_bytes(&buf[pos..]) {
+                        if part.len() > 0 {
+                            //剩余未发送部分，加入缓冲列表
+                            bufs.push(part);
+                        }
+                    }
                     pos = 0; //将位置设置为0，保证将后续缓冲区全部加入缓冲列表
                 }
 

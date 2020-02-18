@@ -64,7 +64,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         if let Some(mut buf) = WsFrame::<S, H>::single_with_window_bits_and_payload(msg_type, connects[0].window_bits, payload).into_write_buf() {
             if let Some(handle) = buf.finish() {
                 for connect in connects {
-                    connect.socket.write(handle.clone());
+                    connect.socket.write_ready(handle.clone());
                 }
             }
 
@@ -90,7 +90,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
     }
 
     //线程安全的获取Tcp连接令牌
-    pub fn get_token(&self) -> Option<&Token> {
+    pub fn get_token(&self) -> &Token {
         self.socket.get_token()
     }
 
@@ -106,15 +106,11 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
     //获取连接会话的句柄
     pub fn get_session(&self) -> Option<ContextHandle<WsSession>> {
-        if let Some(handle) = self.socket.as_handle() {
-            return handle.as_ref().borrow_mut().get_context().get::<WsSession>()
-        }
-
-        None
+        return self.socket.get_context().get::<WsSession>()
     }
 
     //线程安全的获取Tcp连接的唯一id
-    pub fn get_uid(&self) -> Option<usize> {
+    pub fn get_uid(&self) -> usize {
         self.socket.get_uid()
     }
 
@@ -146,7 +142,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
     pub fn send(&self, msg_type: WsFrameType, payload: WriteBuffer) -> Result<()> {
         if let Some(buf) = WsFrame::<S, H>::single_with_window_bits_and_payload(msg_type, self.window_bits, payload).into_write_buf() {
             if let Some(handle) = buf.finish() {
-                return self.socket.write(handle);
+                return self.socket.write_ready(handle);
             }
 
             return Ok(());
@@ -180,7 +176,7 @@ fn close<S: Socket, H: AsyncIOWait>(handle: &SocketHandle<S>, reason: Result<()>
         buf.get_iolist_mut().push_back(Vec::from(frame).into());
         if let Some(h) = buf.finish() {
             //向对端发送关闭帧，并关闭当前连接
-            handle.write(h);
+            handle.write_ready(h);
             return handle.close(reason);
         }
     }
@@ -197,7 +193,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                                waits: &H,
                                window_bits: u8,
                                protocol: Arc<dyn ChildProtocol<S, H>>) {
-        let mut h = handle.as_handle().unwrap().as_ref().borrow_mut().get_context().get::<WsSession>().unwrap();
+        let mut h = handle.get_context().get::<WsSession>().unwrap();
         if h.as_ref().is_closed() || h.as_ref().is_closing() {
             //当前连接已关闭或正在关闭中，则忽略所有读
             return;
@@ -225,7 +221,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
                 //重置当前连接的当前帧，并继续读后续帧
                 context.reset();
-                if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
+                if let Err(e) = handle.read_ready(WsHead::READ_HEAD_LEN) {
                     //继续读失败，则立即关闭Ws连接
                     close::<S, H>(handle, Err(Error::new(ErrorKind::Other, format!("websocket read next message failed, reason: {:?}", e))));
                 }
@@ -235,7 +231,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                 //数据帧，当前是首帧，则设置帧类型，并继续读后续帧
                 context.set_type(head.get_type());
 
-                if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
+                if let Err(e) = handle.read_ready(WsHead::READ_HEAD_LEN) {
                     //继续读失败，则立即关闭Ws连接
                     close::<S, H>(handle, Err(Error::new(ErrorKind::Other, format!("websocket read next frame failed, reason: {:?}", e))));
                 }
@@ -243,7 +239,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                 return;
             } else if head.is_next() {
                 //数据帧，当前是后续帧，则继续读后续帧
-                if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
+                if let Err(e) = handle.read_ready(WsHead::READ_HEAD_LEN) {
                     //继续读失败，则立即关闭Ws连接
                     close::<S, H>(handle, Err(Error::new(ErrorKind::Other, format!("websocket read next frame failed, reason: {:?}", e))));
                 }
@@ -258,7 +254,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
                 //重置当前连接的当前帧，并继续读后续帧
                 context.reset();
-                if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
+                if let Err(e) = handle.read_ready(WsHead::READ_HEAD_LEN) {
                     //继续读失败，则立即关闭Ws连接
                     close::<S, H>(handle, Err(Error::new(ErrorKind::Other, format!("websocket read next message failed, reason: {:?}", e))));
                 }
@@ -325,7 +321,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                     }
 
                     //继续读连接的数据
-                    if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
+                    if let Err(e) = handle.read_ready(WsHead::READ_HEAD_LEN) {
                         //继续读失败，则立即关闭Tcp连接
                         handle.close(Err(Error::new(ErrorKind::Other, format!("websocket read next frame failed after handle ping, reason: {:?}", e))));
                     }
@@ -353,7 +349,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                           window_bits: u8,
                           frame_type: WsFrameType,
                           payload: Option<Vec<u8>>) {
-        let mut buf = handle.as_handle().as_ref().unwrap().borrow().get_write_buffer().alloc().ok().unwrap().unwrap();
+        let mut buf = handle.alloc().ok().unwrap().unwrap();
 
         match frame_type {
             wft@WsFrameType::Close | wft@WsFrameType::Pong => {
@@ -372,7 +368,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
     //异步处理Tcp已写事件
     pub async fn handle_writed(handle: SocketHandle<S>, waits: H) {
-        if let Some(mut h) = handle.as_handle().unwrap().as_ref().borrow().get_context().get::<WsSession>() {
+        if let Some(mut h) = handle.get_context().get::<WsSession>() {
             if let Some(context) = h.as_mut() {
                 if context.is_closed() || context.is_handshaked() {
                     //当前连接已关闭或连接已握手，则忽略写成功事件
@@ -397,7 +393,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         }
 
         //握手完成，准备异步接收客户端发送的Websocket数据帧
-        if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(WsHead::READ_HEAD_LEN) {
+        if let Err(e) = handle.read_ready(WsHead::READ_HEAD_LEN) {
             //准备读失败，则立即关闭Tcp连接
             handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handshanke Ok, but read ready error, reason: {:?}", e))));
         }
@@ -406,7 +402,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
     //异步处理Tcp已关闭事件
     pub async fn handle_closed(handle: SocketHandle<S>, waits: H, window_bits: u8, protocol: Arc<dyn ChildProtocol<S, H>>, result: Result<()>) {
         //连接已关闭，则立即释放Tcp连接的上下文
-        match handle.as_handle().unwrap().as_ref().borrow_mut().get_context_mut().remove::<WsSession>() {
+        match handle.get_context_mut().remove::<WsSession>() {
             Err(e) => {
                 warn!("!!!> Free Context Failed by Websocket Close, uid: {:?}, local: {:?}, remote: {:?}, reason: {:?}", handle.get_uid(), handle.get_local(), handle.get_remote(), e);
             },
@@ -421,7 +417,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
 
     //异步处理Tcp已超时事件
     pub async fn handle_timeouted(handle: SocketHandle<S>, waits: H, window_bits: u8, protocol: Arc<dyn ChildProtocol<S, H>>, event: SocketEvent) {
-        let mut h = handle.as_handle().unwrap().as_ref().borrow_mut().get_context().get::<WsSession>().unwrap();
+        let mut h = handle.get_context().get::<WsSession>().unwrap();
         if let Some(context) = h.as_mut() {
             if let Err(e) = protocol.protocol_timeout(Self::new(handle.clone(), window_bits), context, event) {
                 //协议超时处理失败，则立即关闭当前Ws连接

@@ -5,17 +5,49 @@ use std::fs::File;
 use std::sync::Arc;
 use std::path::Path;
 use std::time::Duration;
-use std::io::{Read, BufReader};
+use std::io::{Result as IOResult, Read, BufReader};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 
 use iovec::MAX_LENGTH;
-use mio::Ready;
+use mio::{Token, Ready};
 use rustls::{ALL_CIPHERSUITES, ProtocolVersion, Session,
              RootCertStore, NoClientAuth, AllowAnyAuthenticatedClient, AllowAnyAnonymousOrAuthenticatedClient,
              ClientConfig, ClientSession, ServerConfig, ServerSession, ServerSessionMemoryCache};
 use rustls::internal::pemfile;
+use crossbeam_channel::Sender;
+use parking_lot::RwLock;
+
+use hash::XHashMap;
+
+/*
+* Tcp连接池发送器表
+*/
+lazy_static! {
+    pub static ref TCP_SOCKET_POOL_SENDER_TAB: Arc<RwLock<XHashMap<u8, Sender<(Token, IOResult<()>)>>>> = Arc::new(RwLock::new(XHashMap::default()));
+}
+
+/*
+* 线程安全的注册Tcp连接池的关闭事件发送器
+*/
+pub fn register_close_sender(uid: u8, sender: Sender<(Token, IOResult<()>)>) {
+    TCP_SOCKET_POOL_SENDER_TAB.write().insert(uid, sender);
+}
+
+/*
+* 线程安全的关闭指定唯一id的Tcp连接
+*/
+pub fn close_socket(uid: usize, reason: IOResult<()>) -> bool {
+    let pool_uid = (uid >> 24 & 0xff) as u8;
+    let token = Token::from(uid & 0xffffff);
+    if let Some(sender) = TCP_SOCKET_POOL_SENDER_TAB.read().get(&pool_uid) {
+        sender.send((token, reason));
+        return true;
+    }
+
+    false
+}
 
 #[cfg(all(feature="unstable", any(target_arch = "x86", target_arch = "x86_64")))]
 #[inline(always)]
@@ -152,7 +184,7 @@ impl SocketContext {
     }
 
     //获取上下文的句柄
-    pub fn get<T: 'static>(&self) -> Option<ContextHandle<T>> {
+    pub fn get<T>(&self) -> Option<ContextHandle<T>> {
         if self.is_empty() {
             return None;
         }
@@ -161,7 +193,7 @@ impl SocketContext {
     }
 
     //设置上下文，如果当前上下文不为空，则设置失败
-    pub fn set<T: 'static>(&mut self, context: T) -> bool {
+    pub fn set<T>(&mut self, context: T) -> bool {
         if !self.is_empty() {
             return false;
         }
@@ -171,7 +203,7 @@ impl SocketContext {
     }
 
     //移除上下文，如果当前还有未释放的上下文句柄，则返回移除错误，如果当前有上下文，则返回被移除的上下文，否则返回空
-    pub fn remove<T: 'static>(&mut self) -> Result<Option<T>, &str> {
+    pub fn remove<T>(&mut self) -> Result<Option<T>, &str> {
         if self.is_empty() {
             return Ok(None);
         }
@@ -410,6 +442,7 @@ impl IoList {
 /*
 * Tcp连接的事件
 */
+#[derive(Debug)]
 pub struct SocketEvent {
     inner: *mut (), //内部事件
 }

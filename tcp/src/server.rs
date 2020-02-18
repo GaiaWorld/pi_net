@@ -134,6 +134,10 @@ impl<S, O> SocketAdapter for AsyncAdapter<S, O>
     fn timeouted(&self, handle: SocketHandle<Self::Connect>, event: SocketEvent) {
         async_run::<S, O>(&self.waits, &self.tasks, &self.spawner, &self.service, handle, SocketStatus::Timeout(event));
     }
+
+    fn waked(&self, handle: SocketHandle<Self::Connect>) {
+        async_run::<S, O>(&self.waits, &self.tasks, &self.spawner, &self.service, handle, SocketStatus::Waked);
+    }
 }
 
 //运行异步任务
@@ -145,43 +149,43 @@ fn async_run<S, O>(waits: &Rc<RefCell<HashMap<usize, Waker, FnvBuildHasher>>>,
                    status: SocketStatus)
     where S: Socket,
           O: 'static, {
-    if let Some(socket) = handle.as_handle() {
-        let id = socket.borrow().get_token().unwrap().0;
-        //有效的Tcp连接
-        let mut w = waits.borrow_mut();
-        match w.entry(id) {
-            Entry::Vacant(_v) => {
-                //创建新的异步任务
-                let waits = AsyncWaitsHandle(Rc::downgrade(waits));
-                let future = match &status {
-                    SocketStatus::Connected(_) => service.handle_connected(handle, waits, status),
-                    SocketStatus::Readed(_) => service.handle_readed(handle, waits, status),
-                    SocketStatus::Writed(_) => service.handle_writed(handle, waits, status),
-                    SocketStatus::Closed(_) => service.handle_closed(handle, waits, status),
-                    SocketStatus::Timeout(_) => service.handle_timeouted(handle, waits, status),
-                };
-                mem::drop(w); //因为后续操作在异步等待队列引用的作用域内，所以必须显示释放异步等待队列引用，以保证后续可以继续借用异步等待队列
-                let task = LocalTask::new(spawner.clone(), async move {
-                    future.await;
-                });
-
-                if let Err(e) = spawner.spawn(task) {
-                    panic!("run async task failed, reason: {:?}", e);
+    let id = handle.get_token().0;
+    //有效的Tcp连接
+    let mut w = waits.borrow_mut();
+    match w.entry(id) {
+        Entry::Vacant(_v) => {
+            //创建新的异步任务
+            let waits = AsyncWaitsHandle(Rc::downgrade(waits));
+            let future = match &status {
+                SocketStatus::Connected(_) => service.handle_connected(handle, waits, status),
+                SocketStatus::Readed(_) => service.handle_readed(handle, waits, status),
+                SocketStatus::Writed(_) => service.handle_writed(handle, waits, status),
+                SocketStatus::Closed(_) => service.handle_closed(handle, waits, status),
+                SocketStatus::Timeout(_) => service.handle_timeouted(handle, waits, status),
+                _ => {
+                    //其它事件，不允许调用服务回调，则忽略
+                    return;
                 }
-            },
-            Entry::Occupied(o) => {
-                //唤醒待完成异步任务
-                let waker = o.remove();
-                mem::drop(w); //因为后续操作在异步等待队列引用的作用域内，所以必须显示释放异步等待队列引用，以保证后续可以继续借用异步等待队列
-                waker.wake();
-            },
-        }
+            };
+            mem::drop(w); //因为后续操作在异步等待队列引用的作用域内，所以必须显示释放异步等待队列引用，以保证后续可以继续借用异步等待队列
+            let task = LocalTask::new(spawner.clone(), async move {
+                future.await;
+            });
 
-        //执行异步任务
-        tasks.borrow_mut().run_once();
-    } else {
-        panic!("run async task failed, reason: invalid socket");
+            if let Err(e) = spawner.spawn(task) {
+                panic!("run async task failed, reason: {:?}", e);
+            }
+        },
+        Entry::Occupied(o) => {
+            //唤醒待完成异步任务
+            let waker = o.remove();
+            mem::drop(w); //因为后续操作在异步等待队列引用的作用域内，所以必须显示释放异步等待队列引用，以保证后续可以继续借用异步等待队列
+            waker.wake();
+        },
     }
+
+    //执行异步任务
+    tasks.borrow_mut().run_once();
 }
 
 impl<S, O> AsyncAdapter<S, O>
@@ -214,20 +218,16 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
 
     fn connected(&self, result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) {
         match result {
-            Err((socket_ref, e)) => {
-                if let Some(socket) = socket_ref.as_handle() {
-                    let port = socket.borrow().get_local().port();
-                    if let Some(adapter) = self.ports.get(&port) {
-                        adapter.connected(Err((socket_ref, e)));
-                    }
+            Err((handle, e)) => {
+                let port = handle.get_local().port();
+                if let Some(adapter) = self.ports.get(&port) {
+                    adapter.connected(Err((handle, e)));
                 }
             },
-            Ok(socket_ref) => {
-                if let Some(socket) = socket_ref.as_handle() {
-                    let port = socket.borrow().get_local().port();
-                    if let Some(adapter) = self.ports.get(&port) {
-                        adapter.connected(Ok(socket_ref));
-                    }
+            Ok(handle) => {
+                let port = handle.get_local().port();
+                if let Some(adapter) = self.ports.get(&port) {
+                    adapter.connected(Ok(handle));
                 }
             },
         }
@@ -235,20 +235,16 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
 
     fn readed(&self, result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) {
         match result {
-            Err((socket_ref, e)) => {
-                if let Some(socket) = socket_ref.as_handle() {
-                    let port = socket.borrow().get_local().port();
-                    if let Some(adapter) = self.ports.get(&port) {
-                        adapter.readed(Err((socket_ref, e)));
-                    }
+            Err((handle, e)) => {
+                let port = handle.get_local().port();
+                if let Some(adapter) = self.ports.get(&port) {
+                    adapter.readed(Err((handle, e)));
                 }
             },
-            Ok(socket_ref) => {
-                if let Some(socket) = socket_ref.as_handle() {
-                    let port = socket.borrow().get_local().port();
-                    if let Some(adapter) = self.ports.get(&port) {
-                        adapter.readed(Ok(socket_ref));
-                    }
+            Ok(handle) => {
+                let port = handle.get_local().port();
+                if let Some(adapter) = self.ports.get(&port) {
+                    adapter.readed(Ok(handle));
                 }
             },
         }
@@ -256,20 +252,16 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
 
     fn writed(&self, result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) {
         match result {
-            Err((socket_ref, e)) => {
-                if let Some(socket) = socket_ref.as_handle() {
-                    let port = socket.borrow().get_local().port();
-                    if let Some(adapter) = self.ports.get(&port) {
-                        adapter.writed(Err((socket_ref, e)));
-                    }
+            Err((handle, e)) => {
+                let port = handle.get_local().port();
+                if let Some(adapter) = self.ports.get(&port) {
+                    adapter.writed(Err((handle, e)));
                 }
             },
-            Ok(socket_ref) => {
-                if let Some(socket) = socket_ref.as_handle() {
-                    let port = socket.borrow().get_local().port();
-                    if let Some(adapter) = self.ports.get(&port) {
-                        adapter.writed(Ok(socket_ref));
-                    }
+            Ok(handle) => {
+                let port = handle.get_local().port();
+                if let Some(adapter) = self.ports.get(&port) {
+                    adapter.writed(Ok(handle));
                 }
             },
         }
@@ -277,31 +269,32 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
 
     fn closed(&self, result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) {
         match result {
-            Err((socket_ref, e)) => {
-                if let Some(socket) = socket_ref.as_handle() {
-                    let port = socket.borrow().get_local().port();
-                    if let Some(adapter) = self.ports.get(&port) {
-                        adapter.closed(Err((socket_ref, e)));
-                    }
+            Err((handle, e)) => {
+                let port = handle.get_local().port();
+                if let Some(adapter) = self.ports.get(&port) {
+                    adapter.closed(Err((handle, e)));
                 }
             },
-            Ok(socket_ref) => {
-                if let Some(socket) = socket_ref.as_handle() {
-                    let port = socket.borrow().get_local().port();
-                    if let Some(adapter) = self.ports.get(&port) {
-                        adapter.closed(Ok(socket_ref));
-                    }
+            Ok(handle) => {
+                let port = handle.get_local().port();
+                if let Some(adapter) = self.ports.get(&port) {
+                    adapter.closed(Ok(handle));
                 }
             },
         }
     }
 
     fn timeouted(&self, handle: SocketHandle<Self::Connect>, event: SocketEvent) {
-        if let Some(socket) = handle.as_handle() {
-            let port = socket.borrow().get_local().port();
-            if let Some(adapter) = self.ports.get(&port) {
-                adapter.timeouted(handle, event);
-            }
+        let port = handle.get_local().port();
+        if let Some(adapter) = self.ports.get(&port) {
+            adapter.timeouted(handle, event);
+        }
+    }
+
+    fn waked(&self, handle: SocketHandle<Self::Connect>) {
+        let port = handle.get_local().port();
+        if let Some(adapter) = self.ports.get(&port) {
+            adapter.waked(handle);
         }
     }
 }

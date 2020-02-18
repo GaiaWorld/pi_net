@@ -21,7 +21,7 @@ use tcp::tls_connect::TlsSocket;
 use tcp::server::{AsyncWaitsHandle, AsyncAdapter, PortsAdapter, AsyncPortsFactory, SocketListener};
 use tcp::driver::{SocketConfig, Socket, AsyncIOWait, SocketAdapterFactory, AsyncService, AsyncServiceFactory, SocketStatus, SocketHandle, AsyncReadTask, AsyncWriteTask};
 use tcp::buffer_pool::WriteBufferPool;
-use tcp::util::{IoBytes, IoList, TlsConfig};
+use tcp::util::{close_socket, IoBytes, IoList, TlsConfig};
 
 struct TestService;
 
@@ -32,21 +32,21 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
     fn handle_connected(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future {
         let future = async move {
             if let SocketStatus::Connected(result) = status {
-                let token = handle.as_handle().unwrap().as_ref().borrow().get_token().unwrap().clone();
+                let token = handle.get_token().clone();
                 if let Err(e) = result {
-                    println!("!!!> Connect Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.as_handle().unwrap().as_ref().borrow().get_remote(), handle.as_handle().unwrap().as_ref().borrow().get_local(), e);
+                    println!("!!!> Connect Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.get_remote(), handle.get_local(), e);
                 } else {
-                    println!("===> Connect Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.as_handle().unwrap().as_ref().borrow().get_remote(), handle.as_handle().unwrap().as_ref().borrow().get_local());
+                    println!("===> Connect Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.get_remote(), handle.get_local());
 
                     //连接成功，开始读
                     if token.0 % 2 == 0 {
                         //准备异步读
-                        if let Err(e) = handle.as_handle().unwrap().as_ref().borrow_mut().read_ready(0) {
-                            println!("!!!> Read Ready Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.as_handle().unwrap().as_ref().borrow().get_remote(), handle.as_handle().unwrap().as_ref().borrow().get_local(), e);
+                        if let Err(e) = handle.read_ready(0) {
+                            println!("!!!> Read Ready Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.get_remote(), handle.get_local(), e);
                         }
                     } else {
                         //直接异步读
-                        let mut buf = handle.as_handle().as_ref().unwrap().borrow().get_write_buffer().alloc().ok().unwrap().unwrap();
+                        let mut buf = handle.alloc().ok().unwrap().unwrap();
                         match AsyncReadTask::async_read(handle.clone(), waits.clone(), 0).await {
                             Err(e) => {
                                 println!("!!!> Socket Read Error, token: {:?}, reason: {:?}", token, e);
@@ -80,13 +80,13 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
     fn handle_readed(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future {
         let future = async move {
             if let SocketStatus::Readed(result) = status {
-                let token = handle.as_handle().unwrap().as_ref().borrow().get_token().unwrap().clone();
+                let token = handle.get_token().clone();
                 if let Err(e) = result {
-                    println!("!!!> Socket Receive Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.as_handle().unwrap().as_ref().borrow().get_remote(), handle.as_handle().unwrap().as_ref().borrow().get_local(), e);
+                    println!("!!!> Socket Receive Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.get_remote(), handle.get_local(), e);
                 } else {
-                    println!("===> Socket Receive Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.as_handle().unwrap().as_ref().borrow().get_remote(), handle.as_handle().unwrap().as_ref().borrow().get_local());
+                    println!("===> Socket Receive Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.get_remote(), handle.get_local());
 
-                    let mut buf = handle.as_handle().as_ref().unwrap().borrow().get_write_buffer().alloc().ok().unwrap().unwrap();
+                    let mut buf = handle.alloc().ok().unwrap().unwrap();
                     match AsyncReadTask::async_read(handle.clone(), waits.clone(), 0).await {
                         Err(e) => {
                             println!("!!!> Socket Read Error, token: {:?}, reason: {:?}", token, e);
@@ -119,17 +119,15 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
     fn handle_writed(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future {
         let future = async move {
             if let SocketStatus::Writed(result) = status {
-                if let Some(socket) = handle.as_handle() {
-                    let token = socket.as_ref().borrow_mut().get_token().unwrap().clone();
-                    if let Err(e) = result {
-                        println!("!!!> Socket Send Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local(), e);
-                    } else {
-                        println!("===> Socket Send Ok, token: {:?}, remote: {:?}, local: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local());
+                let token = handle.get_token().clone();
+                if let Err(e) = result {
+                    println!("!!!> Socket Send Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.get_remote(), handle.get_local(), e);
+                } else {
+                    println!("===> Socket Send Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.get_remote(), handle.get_local());
 
-                        //发送成功，则关闭
-                        if let Err(e) = socket.as_ref().borrow().close(Ok(())) {
-                            println!("!!!> Socket Close Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local(), e);
-                        }
+                    //发送成功，则关闭
+                    if let Err(e) = handle.close(Ok(())) {
+                        println!("!!!> Socket Close Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.get_remote(), handle.get_local(), e);
                     }
                 }
             }
@@ -140,13 +138,11 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
     fn handle_closed(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future {
         let future = async move {
             if let SocketStatus::Closed(result) = status {
-                if let Some(socket) = handle.as_handle() {
-                    let token = socket.as_ref().borrow_mut().get_token().unwrap().clone();
-                    if let Err(e) = result {
-                        println!("!!!> Socket Close Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local(), e);
-                    } else {
-                        println!("===> Socket Close Ok, token: {:?}, remote: {:?}, local: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local());
-                    }
+                let token = handle.get_token().clone();
+                if let Err(e) = result {
+                    println!("!!!> Socket Close Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.get_remote(), handle.get_local(), e);
+                } else {
+                    println!("===> Socket Close Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.get_remote(), handle.get_local());
                 }
             }
         };
@@ -155,10 +151,8 @@ impl<S: Socket, H: AsyncIOWait> AsyncService<S, H> for TestService {
 
     fn handle_timeouted(&self, handle: SocketHandle<S>, waits: H, status: SocketStatus) -> Self::Future {
         let future = async move {
-            if let Some(socket) = handle.as_handle() {
-                let token = socket.as_ref().borrow_mut().get_token().unwrap().clone();
-                println!("!!!> Socket Timeout, token: {:?}, remote: {:?}, local: {:?}", token, socket.as_ref().borrow().get_remote(), socket.as_ref().borrow().get_local());
-            }
+            let token = handle.get_token().clone();
+            println!("!!!> Socket Timeout, token: {:?}, remote: {:?}, local: {:?}", token, handle.get_remote(), handle.get_local());
         };
         future.boxed()
     }

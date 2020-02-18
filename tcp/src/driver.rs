@@ -1,14 +1,15 @@
 use std::rc::Rc;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::str::FromStr;
 use std::cell::RefCell;
 use std::future::Future;
-use std::sync::{Weak, Arc};
 use std::marker::PhantomData;
 use std::collections::HashMap;
 use std::result::Result as GenResult;
 use std::task::{Context, Poll, Waker};
 use std::io::{Error, Result, ErrorKind};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::{SocketAddr, IpAddr, Ipv6Addr, Ipv4Addr};
 
 use fnv::FnvBuildHasher;
@@ -192,6 +193,9 @@ pub trait SocketAdapter: 'static {
 
     //已超时
     fn timeouted(&self, handle: SocketHandle<Self::Connect>, event: SocketEvent);
+
+    //已唤醒
+    fn waked(&self, handle: SocketHandle<Self::Connect>);
 }
 
 /*
@@ -254,12 +258,14 @@ pub trait AsyncServiceFactory: 'static {
 /*
 * Tcp连接状态
 */
+#[derive(Debug)]
 pub enum SocketStatus {
     Connected(Result<()>),  //已连接
     Readed(Result<()>),     //已读
     Writed(Result<()>),     //已写
     Closed(Result<()>),     //已关闭
     Timeout(SocketEvent),   //已超时
+    Waked,                  //已唤醒
 }
 
 /*
@@ -268,135 +274,199 @@ pub enum SocketStatus {
 pub enum SocketWakeup {
     Write(WriteBufferHandle),   //写唤醒
     Read(bool),                 //读唤醒，表示唤醒后接收，还是唤醒后继续执行已读回调
+    Wake,                       //只唤醒
 }
 
 /*
 * Tcp连接句柄
 */
-pub struct SocketHandle<S: Socket>(*const S, Weak<RefCell<S>>);
+pub struct SocketHandle<S: Socket>(Arc<SocketImage<S>>);
 
 unsafe impl<S: Socket> Send for SocketHandle<S> {}
 unsafe impl<S: Socket> Sync for SocketHandle<S> {}
 
 impl<S: Socket> Clone for SocketHandle<S> {
     fn clone(&self) -> Self {
-        SocketHandle(self.0, self.1.clone())
+        SocketHandle(self.0.clone())
     }
 }
 
 impl<S: Socket> SocketHandle<S> {
-    //构建Tcp连接引用
-    pub fn new(shared: &Arc<RefCell<S>>) -> Self {
-        let raw = shared.as_ptr() as *const S;
-        let weak = Arc::downgrade(shared);
-        SocketHandle(raw, weak)
-    }
-
-    //获取Tcp连接可写句柄
-    pub fn as_handle(&self) -> Option<Arc<RefCell<S>>> {
-        self.1.upgrade()
+    //构建Tcp连接句柄
+    pub fn new(image: SocketImage<S>) -> Self {
+        SocketHandle(Arc::new(image))
     }
 
     //线程安全的判断连接是否关闭
     pub fn is_closed(&self) -> bool {
-        unsafe {
-            (&*self.0).is_closed()
-        }
+        self.0.closed.load(Ordering::SeqCst)
     }
 
     //线程安全的判断是否写后立即刷新连接
     pub fn is_flush(&self) -> bool {
-        unsafe {
-            (&*self.0).is_flush()
-        }
+        self.0.flush.load(Ordering::SeqCst)
     }
 
     //线程安全的设置是否写后立即刷新连接
     pub fn set_flush(&self, flush: bool) {
-        unsafe {
-            (&*self.0).set_flush(flush);
-        }
+        self.0.flush.store(flush, Ordering::SeqCst);
+    }
+
+    //线程安全的获取连接唯一id
+    pub fn get_uid(&self) -> usize {
+        self.0.uid
     }
 
     //线程安全的获取连接令牌
-    pub fn get_token(&self) -> Option<&Token> {
-        unsafe {
-            (&*self.0).get_token()
-        }
+    pub fn get_token(&self) -> &Token {
+        &self.0.token
     }
 
     //线程安全的获取连接本地地址
     pub fn get_local(&self) -> &SocketAddr {
-        unsafe {
-            (&*self.0).get_local()
-        }
+        &self.0.local
     }
 
     //线程安全的获取连接远端地址
     pub fn get_remote(&self) -> &SocketAddr {
-        unsafe {
-            (&*self.0).get_remote()
-        }
-    }
-
-    //线程安全的获取连接唯一id
-    pub fn get_uid(&self) -> Option<usize> {
-        unsafe {
-            if let Some(uid) = (&*self.0).get_uid() {
-                return Some(uid.clone());
-            }
-
-            None
-        }
+        &self.0.remote
     }
 
     //线程安全的设置超时定时器
     pub fn set_timeout(&self, timeout: usize, event: SocketEvent) {
-        unsafe {
-            (&*self.0).set_timeout(timeout, event);
-        }
+        self.0.timer_listener.send((self.0.token, Some((timeout, event))));
     }
 
     //线程安全的取消超时定时器
     pub fn unset_timeout(&self) {
-        unsafe {
-            (&*self.0).unset_timeout();
-        }
+        self.0.timer_listener.send((self.0.token, None));
     }
 
     //线程安全的判断是否是安全连接
     pub fn is_security(&self) -> bool {
+        self.0.security
+    }
+
+    //非线程安全的获取Tcp连接上下文的只读引用
+    pub fn get_context(&self) -> &SocketContext {
         unsafe {
-            (&*self.0).is_security()
+            (&*self.0.inner).get_context()
+        }
+    }
+
+    //非线程安全的获取Tcp连接上下文的可写引用
+    pub fn get_context_mut(&self) -> &mut SocketContext {
+        unsafe {
+            (&mut *(self.0.inner as *mut S)).get_context_mut()
+        }
+    }
+
+    //非线程安全的准备读
+    pub fn read_ready(&self, size: usize) -> Result<()> {
+        unsafe {
+            (&mut *(self.0.inner as *mut S)).read_ready(size)
         }
     }
 
     //线程安全的分配写缓冲
     pub fn alloc(&self) -> Result<Option<WriteBuffer>> {
-        if self.1.upgrade().is_none() {
-            //如果当前连接已释放，则忽略
-            return Ok(None);
-        }
-
-        unsafe {
-            (&*self.0).get_write_buffer().alloc()
-        }
+        self.0.buffer_pool.alloc()
     }
 
     //线程安全的写
-    pub fn write(&self, handle: WriteBufferHandle) -> Result<()> {
-        unsafe {
-            (&*self.0).write_ready(handle)
+    pub fn write_ready(&self, handle: WriteBufferHandle) -> Result<()> {
+        if self.is_closed() {
+            //连接已关闭，则返回错误
+            return Err(Error::new(ErrorKind::BrokenPipe, "socket closed"));
         }
+
+        if let Err(e) = self.0.rouser.send((self.0.token, SocketWakeup::Write(handle))) {
+            return Err(Error::new(ErrorKind::BrokenPipe, e));
+        }
+
+        Ok(())
+    }
+
+    //线程安全的唤醒连接
+    pub fn wake(&self) -> Result<()> {
+        if self.is_closed() {
+            //连接已关闭，则返回错误
+            return Err(Error::new(ErrorKind::BrokenPipe, "socket closed"));
+        }
+
+        if let Err(e) = self.0.rouser.send((self.0.token, SocketWakeup::Wake)) {
+            return Err(Error::new(ErrorKind::BrokenPipe, e));
+        }
+
+        Ok(())
     }
 
     //线程安全的关闭连接
     pub fn close(&self, reason: Result<()>) -> Result<()> {
-        unsafe {
-            (&*self.0).close(reason)
+        //更新连接的状态为已关闭
+        if self.0.closed.compare_and_swap(false, true, Ordering::SeqCst) {
+            //当前已关闭，则忽略
+            return Ok(());
+        }
+
+        if let Err(e) = self.0.close_listener.send((self.0.token, reason)) {
+            return Err(Error::new(ErrorKind::BrokenPipe, e));
+        }
+
+        Ok(())
+    }
+}
+
+/*
+* Tcp连接镜像
+*/
+pub struct SocketImage<S: Socket> {
+    inner:          *const S,                                       //Tcp连接指针
+    local:          SocketAddr,                                     //TCP连接本地地址
+    remote:         SocketAddr,                                     //TCP连接远端地址
+    uid:            usize,                                          //Tcp连接唯一id
+    token:          Token,                                          //Tcp连接令牌
+    security:       bool,                                           //Tcp连接是否安全
+    flush:          Arc<AtomicBool>,                                //Tcp连接写刷新状态
+    closed:         Arc<AtomicBool>,                                //Tcp连接关闭状态
+    buffer_pool:    Arc<WriteBufferPool>,                           //Tcp连接写缓冲池
+    rouser:         Sender<(Token, SocketWakeup)>,                  //事件唤醒器
+    close_listener: Sender<(Token, Result<()>)>,                    //关闭事件监听器
+    timer_listener: Sender<(Token, Option<(usize, SocketEvent)>)>,  //定时事件监听器
+}
+
+unsafe impl<S: Socket> Send for SocketImage<S> {}
+unsafe impl<S: Socket> Sync for SocketImage<S> {}
+
+impl<S: Socket> SocketImage<S> {
+    //构建Tcp连接镜像
+    pub fn new(shared: &Arc<RefCell<S>>,
+               local: SocketAddr,
+               remote: SocketAddr,
+               uid: usize,
+               token: Token,
+               security: bool,
+               flush: Arc<AtomicBool>,
+               closed: Arc<AtomicBool>,
+               pool: Arc<WriteBufferPool>,
+               rouser: Sender<(Token, SocketWakeup)>,
+               close_listener: Sender<(Token, Result<()>)>,
+               timer_listener: Sender<(Token, Option<(usize, SocketEvent)>)>) -> Self {
+        SocketImage {
+            inner: shared.as_ptr() as *const S,
+            local,
+            remote,
+            uid,
+            token,
+            security,
+            flush,
+            closed,
+            buffer_pool: pool,
+            rouser,
+            close_listener,
+            timer_listener,
         }
     }
-
 }
 
 /*
@@ -416,30 +486,19 @@ impl<'a, S: Socket, W: AsyncIOWait> Future for AsyncReadTask<'a, S, W> {
     type Output = Result<&'a [u8]>; //没有读复制
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.handle.as_handle() {
-            None => {
-                //从Tcp句柄获取Tcp失败
-                Poll::Ready(Err(Error::new(ErrorKind::Other, "async read failed, get socket error")))
+        match unsafe { (*self.inner).read(self.size) } {
+            Err(e) => {
+                //读数据错误
+                Poll::Ready(Err(e))
             },
-            Some(s) => {
-                let socket = s.borrow_mut(); //通过Tcp连接句柄，获取可写引用，以保证安全的使用可写指针
-                match unsafe { (*self.inner).read(self.size) } {
-                    Err(e) => {
-                        //读数据错误
-                        Poll::Ready(Err(e))
-                    },
-                    Ok(None) => {
-                        //读数据未准备好，则等待
-                        if let Some(token) = socket.get_token() {
-                            self.waits.io_wait(token, cx.waker().clone());
-                        }
+            Ok(None) => {
+                //读数据未准备好，则等待
+                self.waits.io_wait(self.handle.get_token(), cx.waker().clone());
 
-                        Poll::Pending
-                    },
-                    Ok(Some(bin)) => {
-                        Poll::Ready(Ok(bin))
-                    },
-                }
+                Poll::Pending
+            },
+            Ok(Some(bin)) => {
+                Poll::Ready(Ok(bin))
             },
         }
     }
@@ -448,7 +507,7 @@ impl<'a, S: Socket, W: AsyncIOWait> Future for AsyncReadTask<'a, S, W> {
 impl<'a, S: Socket, W: AsyncIOWait> AsyncReadTask<'a, S, W> {
     //异步读指定字节数的数据
     pub fn async_read(handle: SocketHandle<S>, waits: W, size: usize) -> Self {
-        let inner = handle.as_handle().unwrap().as_ptr();
+        let inner = handle.0.inner as *mut S;
         AsyncReadTask {
             inner,
             handle,
@@ -474,17 +533,8 @@ impl<S: Socket, W: AsyncIOWait> Future for AsyncWriteTask<S, W> {
     type Output = Result<()>;
 
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.handle.as_handle() {
-            None => {
-                //从Tcp句柄获取Tcp失败
-                Poll::Ready(Err(Error::new(ErrorKind::Other, "async write failed, get socket error")))
-            },
-            Some(s) => {
-                let socket = s.borrow();
-                socket.write_ready(self.buf.clone());
-                Poll::Ready(Ok(())) //写数据完成
-            },
-        }
+        self.handle.write_ready(self.buf.clone());
+        Poll::Ready(Ok(())) //写数据完成
     }
 }
 
@@ -495,6 +545,44 @@ impl<S: Socket, W: AsyncIOWait> AsyncWriteTask<S, W> {
             handle,
             waits,
             buf,
+        }
+    }
+}
+
+/*
+* 挂起Tcp连接
+*/
+pub struct PendSocket<W: AsyncIOWait> {
+    token:  Token,      //Tcp连接令牌
+    ready:  AtomicBool, //Tcp连接是否就绪
+    waits:  W,          //异步任务等待队列
+}
+
+unsafe impl<W: AsyncIOWait> Send for PendSocket<W> {}
+
+impl<W: AsyncIOWait> Future for PendSocket<W> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.ready.load(Ordering::Relaxed) {
+            //已唤醒当前连接
+            Poll::Ready(())
+        } else {
+            //挂起连接
+            self.ready.store(true, Ordering::Relaxed);
+            self.waits.io_wait(&self.token, cx.waker().clone());
+            Poll::Pending
+        }
+    }
+}
+
+impl<W: AsyncIOWait> PendSocket<W> {
+    //用当前Tcp连接令牌，挂起当前Tcp连接
+    pub fn pending(token: Token, waits: W) -> Self {
+        PendSocket {
+            token,
+            ready: AtomicBool::new(false),
+            waits,
         }
     }
 }

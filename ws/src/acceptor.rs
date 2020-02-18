@@ -182,7 +182,7 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
         loop {
             match AsyncReadTask::async_read(handle.clone(), waits.clone(), 0).await {
                 Err(e) => {
-                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handshake by read Failed, reason: {:?}", e))));
+                    handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handshake by read failed, reason: {:?}", e))));
                     return;
                 },
                 Ok(bin) => {
@@ -233,10 +233,10 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
                 //握手请求已完成，则返回
                 if is_ok {
                     //握手成功，则绑定Tcp连接上下文
-                    handle.as_handle().unwrap().as_ref().borrow_mut().get_context_mut().set(WsSession::default());
+                    handle.get_context_mut().set(WsSession::default());
                 }
 
-                let mut buf = handle.as_handle().as_ref().unwrap().borrow().get_write_buffer().alloc().ok().unwrap().unwrap();
+                let mut buf = handle.alloc().ok().unwrap().unwrap();
                 buf.get_iolist_mut().push_back(resp_to_vec(resp).into());
 
                 if let Some(buf_handle) = buf.finish() {

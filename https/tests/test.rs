@@ -28,6 +28,7 @@ use https::mount::Mount;
 use https::file::StaticFile;
 use https::files::StaticFileBatch;
 use https::upload::FileUpload;
+use https::batch::FileBatch;
 use https::params::{Params, Value};
 
 #[test]
@@ -66,7 +67,7 @@ fn test_http_server() {
     mount.mount("/upload", FileUpload::new("./upload/"));
     mount.mount("/", StaticFile::new("./htdocs/"));
     mount.mount("/app", StaticFile::new("./app/"));
-    start_http(mount, Atom::from("0.0.0.0"), 80, 5000, 10000);
+    start_http(mount, Atom::from("0.0.0.0"), 80, 5000, 100000);
     loop {
         thread::sleep_ms(30000);
     }
