@@ -386,7 +386,7 @@ fn test_http_hosts() {
 
     //构建中间件
     let cors_handler = CORSHandler::new("OPTIONS, GET, POST".to_string(), false);
-    cors_handler.allow_origin("http".to_string(), "herominer.net".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
+    cors_handler.allow_origin("http".to_string(), "msg.highapp.com".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     cors_handler.allow_origin("http".to_string(), "127.0.0.1".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     let cors_handler = Arc::new(cors_handler);
     let parser = Arc::new(DefaultParser::with(128, None));
@@ -457,8 +457,8 @@ fn test_http_hosts() {
         .at("/batch").get(batch_load_middleware.clone())
         .at("/batch").post(batch_load_middleware)
         .at("/upload").post(upload_middleware.clone())
-        .at("/login").get(port_middleware.clone())
-        .at("/login").post(port_middleware);
+        .at("/port/**").get(port_middleware.clone())
+        .at("/port/**").post(port_middleware);
 
     //构建虚拟主机
     let host = VirtualHost::with(route);
@@ -501,8 +501,8 @@ fn test_https_hosts() {
 
     //构建中间件
     let cors_handler = CORSHandler::new("OPTIONS, GET, POST".to_string(), false);
-    cors_handler.allow_origin("http".to_string(), "herominer.net".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
-    cors_handler.allow_origin("http".to_string(), "127.0.0.1".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
+    cors_handler.allow_origin("https".to_string(), "msg.highapp.com".to_string(), 443, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
+    cors_handler.allow_origin("https".to_string(), "127.0.0.1".to_string(), 443, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     let cors_handler = Arc::new(cors_handler);
     let parser = Arc::new(DefaultParser::with(128, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
@@ -572,8 +572,8 @@ fn test_https_hosts() {
         .at("/batch").get(batch_load_middleware.clone())
         .at("/batch").post(batch_load_middleware)
         .at("/upload").post(upload_middleware.clone())
-        .at("/login").get(port_middleware.clone())
-        .at("/login").post(port_middleware);
+        .at("/port/**").get(port_middleware.clone())
+        .at("/port/**").post(port_middleware);
 
     //构建虚拟主机
     let host = VirtualHost::with(route);
