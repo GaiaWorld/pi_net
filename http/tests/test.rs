@@ -465,7 +465,7 @@ fn test_http_hosts() {
 
     //设置虚拟主机
     let mut hosts = VirtualHostTab::new();
-    hosts.add("herominer.net", host.clone());
+    hosts.add("msg.highapp.com", host.clone());
     hosts.add("127.0.0.1", host);
 
     let mut factory = AsyncPortsFactory::<TcpSocket>::new();
@@ -481,6 +481,132 @@ fn test_http_hosts() {
         },
         Ok(driver) => {
             println!("===> Http Listener Bind Ok");
+        }
+    }
+
+    thread::sleep(Duration::from_millis(10000000));
+}
+
+#[test]
+fn test_https_hosts() {
+    let worker_pool = Box::new(WorkerPool::new("test https hosts".to_string(), WorkerType::Store, 8, 1024 * 1024, 10000, STORE_WORKER_WALKER.clone()));
+    worker_pool.run(STORE_TASK_POOL.clone());
+
+    //构建请求处理器
+    let handler = Arc::new(TestHttpGatewayHandler(PhantomData));
+
+    //构建全局静态资源缓存，并启动缓存的整理
+    let cache = Arc::new(StaticCache::new(1024 * 1024 * 1024, 99999));
+    StaticCache::run_collect(cache.clone(), "test https cache".to_string(), 10000);
+
+    //构建中间件
+    let cors_handler = CORSHandler::new("OPTIONS, GET, POST".to_string(), false);
+    cors_handler.allow_origin("http".to_string(), "herominer.net".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
+    cors_handler.allow_origin("http".to_string(), "127.0.0.1".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
+    let cors_handler = Arc::new(cors_handler);
+    let parser = Arc::new(DefaultParser::with(128, None));
+    let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
+    let file_load = Arc::new(FileLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let files_load = Arc::new(FilesLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let batch_load = Arc::new(BatchLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let upload = Arc::new(UploadFile::new("../upload"));
+    let port = Arc::new(HttpPort::with_handler(None, handler));
+
+    //构建处理CORS的Options方法的请求的中间件链
+    let mut chain = MiddlewareChain::new();
+    chain.push_back(cors_handler.clone());
+    chain.finish();
+    let cors_middleware = Arc::new(chain);
+
+    //构建处理文件加载的中间件链
+    let mut chain = MiddlewareChain::new();
+    chain.push_back(cors_handler.clone());
+    chain.push_back(parser.clone());
+    chain.push_back(file_load);
+    chain.finish();
+    let file_load_middleware = Arc::new(chain);
+
+    //构建处理文件批量加载的中间件链
+    let mut chain = MiddlewareChain::new();
+    chain.push_back(cors_handler.clone());
+    chain.push_back(parser.clone());
+    chain.push_back(files_load);
+    chain.finish();
+    let files_load_middleware = Arc::new(chain);
+
+    //构建改进的处理文件批量加载的中间件链
+    let mut chain = MiddlewareChain::new();
+    chain.push_back(cors_handler.clone());
+    chain.push_back(parser.clone());
+    chain.push_back(batch_load);
+    chain.finish();
+    let batch_load_middleware = Arc::new(chain);
+
+    //构建处理文件上传的中间件链
+    let mut chain = MiddlewareChain::new();
+    chain.push_back(cors_handler.clone());
+    chain.push_back(parser.clone());
+    chain.push_back(multi_parts.clone());
+    chain.push_back(upload);
+    chain.finish();
+    let upload_middleware = Arc::new(chain);
+
+    //构建处理动态资源访问的中间件链
+    let mut chain = MiddlewareChain::new();
+    chain.push_back(cors_handler.clone());
+    chain.push_back(parser);
+    chain.push_back(port);
+    chain.finish();
+    let port_middleware = Arc::new(chain);
+
+    //构建路由
+    let mut route = HttpRoute::new();
+    route.at("/").options(cors_middleware.clone())
+        .at("/**").options(cors_middleware)
+        .at("/").get(file_load_middleware.clone())
+        .at("/**").get(file_load_middleware.clone())
+        .at("/").post(file_load_middleware.clone())
+        .at("/**").post(file_load_middleware)
+        .at("/fs").get(files_load_middleware.clone())
+        .at("/fs").post(files_load_middleware)
+        .at("/batch").get(batch_load_middleware.clone())
+        .at("/batch").post(batch_load_middleware)
+        .at("/upload").post(upload_middleware.clone())
+        .at("/login").get(port_middleware.clone())
+        .at("/login").post(port_middleware);
+
+    //构建虚拟主机
+    let host = VirtualHost::with(route);
+
+    //设置虚拟主机
+    let mut hosts = VirtualHostTab::new();
+    hosts.add("msg.highapp.com", host.clone());
+    hosts.add("127.0.0.1", host);
+
+    let mut factory = AsyncPortsFactory::<TlsSocket>::new();
+    factory.bind(443,
+                 Box::new(HttpListenerFactory::<TlsSocket, _>::with_hosts(hosts)));
+    let mut config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
+    config.set_option(16384, 16384, 16384, 16);
+    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
+
+    let tls_config = TlsConfig::new_server("",
+                                           false,
+                                           "./3376363_msg.highapp.com.pem",
+                                           "./3376363_msg.highapp.com.key",
+                                           "",
+                                           "",
+                                           "",
+                                           512,
+                                           false,
+                                           "").unwrap();
+
+    match SocketListener::bind(factory, buffer, config, tls_config, 1024, 1024 * 1024, 1024, Some(10)) {
+        Err(e) => {
+            println!("!!!> Https Listener Bind Error, reason: {:?}", e);
+        },
+        Ok(driver) => {
+            println!("===> Https Listener Bind Ok");
         }
     }
 

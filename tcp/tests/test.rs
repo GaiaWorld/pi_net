@@ -241,8 +241,8 @@ fn test_tls_socket_server_shared() {
 
     let tls_config = TlsConfig::new_server("",
                                            false,
-                                           "./1595835_herominer.net.pem",
-                                           "./1595835_herominer.net.key",
+                                           "./3376363_msg.highapp.com.pem",
+                                           "./3376363_msg.highapp.com.key",
                                            "",
                                            "",
                                            "",
