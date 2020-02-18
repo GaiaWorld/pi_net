@@ -457,6 +457,8 @@ fn test_http_hosts() {
         .at("/batch").get(batch_load_middleware.clone())
         .at("/batch").post(batch_load_middleware)
         .at("/upload").post(upload_middleware.clone())
+        .at("/login").get(port_middleware.clone())
+        .at("/login").post(port_middleware.clone())
         .at("/port/**").get(port_middleware.clone())
         .at("/port/**").post(port_middleware);
 
@@ -572,6 +574,8 @@ fn test_https_hosts() {
         .at("/batch").get(batch_load_middleware.clone())
         .at("/batch").post(batch_load_middleware)
         .at("/upload").post(upload_middleware.clone())
+        .at("/login").get(port_middleware.clone())
+        .at("/login").post(port_middleware.clone())
         .at("/port/**").get(port_middleware.clone())
         .at("/port/**").post(port_middleware);
 
