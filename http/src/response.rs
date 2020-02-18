@@ -7,7 +7,7 @@ use bytes::BufMut;
 use https::{status::StatusCode,
             version::Version,
             header::{HeaderMap, HeaderName, HeaderValue}};
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 
 use gray::GrayVersion;
 use tcp::driver::{Socket, SocketHandle, AsyncIOWait};
@@ -121,7 +121,7 @@ impl<S: Socket, W: AsyncIOWait> RespBody<S, W> {
 * Http响应句柄
 */
 pub struct ResponseHandler<S: Socket> {
-    headers:    Arc<RwLock<HeaderMap>>,         //Http响应头
+    headers:    Arc<Mutex<HeaderMap>>,         //Http响应头
     producor:   HttpSender<S, (u64, Vec<u8>)>,  //Http响应体生产者
 }
 
@@ -139,7 +139,7 @@ impl<S: Socket> Clone for ResponseHandler<S> {
 
 impl<S: Socket> ResponseHandler<S> {
     //构建Http响应句柄
-    pub fn new(headers: Arc<RwLock<HeaderMap>>,
+    pub fn new(headers: Arc<Mutex<HeaderMap>>,
                producor: HttpSender<S, (u64, Vec<u8>)>) -> Self {
         ResponseHandler {
             headers,
@@ -151,7 +151,7 @@ impl<S: Socket> ResponseHandler<S> {
     pub fn header(&self, key: &str, value: &str) {
         if let Ok(key) = HeaderName::from_str(key) {
             if let Ok(value) = HeaderValue::from_str(value) {
-                self.headers.write().append(key, value);
+                self.headers.lock().append(key, value);
             }
         }
     }
@@ -179,7 +179,7 @@ pub struct HttpResponse<S: Socket, W: AsyncIOWait> {
     handle:     SocketHandle<S>,                    //Http连接句柄
     waits:      W,                                  //异步任务等待队列
     start:      Option<StartLine>,                  //Http响应启始行, 为空表示当前Http响应为数据流响应，否则表示当前Http响应为数据块响应
-    headers:    Arc<RwLock<HeaderMap>>,             //Http响应头
+    headers:    Arc<Mutex<HeaderMap>>,             //Http响应头
     body:       Option<RespBody<S, W>>,             //Http响应体
     handler:    Option<ResponseHandler<S>>,         //Http响应句柄，用于线程安全的跨运行时写响应头和响应体
 }
@@ -195,7 +195,7 @@ impl<S: Socket, W: AsyncIOWait> From<HttpResponse<S, W>> for Vec<u8> {
         }
 
         //序列化Http响应头
-        for (key, value) in resp.headers.read().iter() {
+        for (key, value) in resp.headers.lock().iter() {
             let slice: &[u8] = key.as_ref();
             buf.put_slice(&[slice, b":", value.as_bytes(), b"\r\n"].concat());
         }
@@ -227,7 +227,7 @@ impl<S: Socket, W: AsyncIOWait> HttpResponse<S, W> {
             handle,
             waits,
             start,
-            headers: Arc::new(RwLock::new(HeaderMap::new())),
+            headers: Arc::new(Mutex::new(HeaderMap::new())),
             body: None,
             handler: None,
         }
@@ -243,7 +243,7 @@ impl<S: Socket, W: AsyncIOWait> HttpResponse<S, W> {
             status: StatusCode::default(),
             version: Version::HTTP_11,
         });
-        let headers = Arc::new(RwLock::new(HeaderMap::new()));
+        let headers = Arc::new(Mutex::new(HeaderMap::new()));
         let (producor, consumer) = channel::<S, W, (u64, Vec<u8>)>(handle.clone(), waits.clone(), size);
         let body = RespBody {
             consumer,
@@ -263,7 +263,7 @@ impl<S: Socket, W: AsyncIOWait> HttpResponse<S, W> {
 
     //构建基于流的Http后续响应，一般通过流方式返回，首先会返回一个空响应体的响应，然后返回后续的流响应
     pub fn stream(handle: SocketHandle<S>, waits: W, size: usize) -> Self {
-        let headers = Arc::new(RwLock::new(HeaderMap::new()));
+        let headers = Arc::new(Mutex::new(HeaderMap::new()));
         let (producor, consumer) = channel::<S, W, (u64, Vec<u8>)>(handle.clone(), waits.clone(), size);
         let body = RespBody {
             consumer,
@@ -304,14 +304,14 @@ impl<S: Socket, W: AsyncIOWait> HttpResponse<S, W> {
 
     //检查是否有指定的Http响应头
     pub fn contains_header(&self, key: HeaderName) -> bool {
-        self.headers.read().contains_key(key)
+        self.headers.lock().contains_key(key)
     }
 
     //增加Http响应头
     pub fn header(&mut self, key: &str, value: &str) -> &mut Self {
         if let Ok(key) = HeaderName::from_str(key) {
             if let Ok(value) = HeaderValue::from_str(value) {
-                self.headers.write().append(key, value);
+                self.headers.lock().append(key, value);
             }
         }
 
