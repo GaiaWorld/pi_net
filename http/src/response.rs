@@ -121,7 +121,7 @@ impl<S: Socket, W: AsyncIOWait> RespBody<S, W> {
 * Http响应句柄
 */
 pub struct ResponseHandler<S: Socket> {
-    headers:    Arc<Mutex<HeaderMap>>,         //Http响应头
+    headers:    Arc<Mutex<HeaderMap>>,          //Http响应头
     producor:   HttpSender<S, (u64, Vec<u8>)>,  //Http响应体生产者
 }
 
