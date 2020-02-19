@@ -330,16 +330,16 @@ struct WrapMsg(Arc<RefCell<XHashMap<String, SGenType>>>);
 unsafe impl Send for WrapMsg {}
 unsafe impl Sync for WrapMsg {}
 
-struct TestHttpGatewayHandler<S: Socket>(PhantomData<S>);
+struct TestHttpGatewayHandler;
 
-unsafe impl<S: Socket> Send for TestHttpGatewayHandler<S> {}
-unsafe impl<S: Socket> Sync for TestHttpGatewayHandler<S> {}
+unsafe impl Send for TestHttpGatewayHandler {}
+unsafe impl Sync for TestHttpGatewayHandler {}
 
-impl<S: Socket> Handler for TestHttpGatewayHandler<S> {
+impl Handler for TestHttpGatewayHandler {
     type A = SocketAddr;
     type B = Arc<HeaderMap>;
     type C = Arc<RefCell<XHashMap<String, SGenType>>>;
-    type D = ResponseHandler<S>;
+    type D = ResponseHandler<TcpSocket>;
     type E = ();
     type F = ();
     type G = ();
@@ -349,27 +349,60 @@ impl<S: Socket> Handler for TestHttpGatewayHandler<S> {
     //处理方法
     fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> Self::HandleResult {
         if let Args::FourArgs(addr, headers, msg, handler) = args {
-            let msg = WrapMsg(msg);
-            let resp_handler = Arc::new(handler);
-
-            thread::spawn(move || {
-                println!("!!!!!!http gateway handle, topic: {:?}", topic);
-                println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
-                println!("!!!!!!http gateway handle, headers: {:?}", headers);
-                println!("!!!!!!http gateway handle, msg: {:?}", msg.0.borrow());
-
-                //处理Http响应
-                resp_handler.header("Port_Test", "true");
-                if let Err(e) = resp_handler.write(Vec::from("Hello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello Http\n".as_bytes())) {
-                    println!("!!!!!!write body failed, reason: {:?}", e);
-                    return;
-                }
-
-                resp_handler.finish();
-                println!("!!!!!!http gateway handle ok");
-            });
+            handle(env, topic, addr, headers, msg, handler);
         }
     }
+}
+
+struct TestHttpsGatewayHandler;
+
+unsafe impl Send for TestHttpsGatewayHandler {}
+unsafe impl Sync for TestHttpsGatewayHandler {}
+
+impl Handler for TestHttpsGatewayHandler {
+    type A = SocketAddr;
+    type B = Arc<HeaderMap>;
+    type C = Arc<RefCell<XHashMap<String, SGenType>>>;
+    type D = ResponseHandler<TlsSocket>;
+    type E = ();
+    type F = ();
+    type G = ();
+    type H = ();
+    type HandleResult = ();
+
+    //处理方法
+    fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> Self::HandleResult {
+        if let Args::FourArgs(addr, headers, msg, handler) = args {
+            handle(env, topic, addr, headers, msg, handler);
+        }
+    }
+}
+
+fn handle<S: Socket>(env: Arc<dyn GrayVersion>,
+                     topic: Atom,
+                     addr: SocketAddr,
+                     headers: Arc<HeaderMap>,
+                     msg: Arc<RefCell<XHashMap<String, SGenType>>>,
+                     handler: ResponseHandler<S>) {
+    let msg = WrapMsg(msg);
+    let resp_handler = Arc::new(handler);
+
+    thread::spawn(move || {
+        println!("!!!!!!http gateway handle, topic: {:?}", topic);
+        println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
+        println!("!!!!!!http gateway handle, headers: {:?}", headers);
+        println!("!!!!!!http gateway handle, msg: {:?}", msg.0.borrow());
+
+        //处理Http响应
+        resp_handler.header("Port_Test", "true");
+        if let Err(e) = resp_handler.write(Vec::from("Hello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello Http\n".as_bytes())) {
+            println!("!!!!!!write body failed, reason: {:?}", e);
+            return;
+        }
+
+        resp_handler.finish();
+        println!("!!!!!!http gateway handle ok");
+    });
 }
 
 #[test]
@@ -378,7 +411,7 @@ fn test_http_hosts() {
     worker_pool.run(STORE_TASK_POOL.clone());
 
     //构建请求处理器
-    let handler = Arc::new(TestHttpGatewayHandler(PhantomData));
+    let handler = Arc::new(TestHttpGatewayHandler);
 
     //构建全局静态资源缓存，并启动缓存的整理
     let cache = Arc::new(StaticCache::new(1024 * 1024 * 1024, 99999));
@@ -495,7 +528,7 @@ fn test_https_hosts() {
     worker_pool.run(STORE_TASK_POOL.clone());
 
     //构建请求处理器
-    let handler = Arc::new(TestHttpGatewayHandler(PhantomData));
+    let handler = Arc::new(TestHttpsGatewayHandler);
 
     //构建全局静态资源缓存，并启动缓存的整理
     let cache = Arc::new(StaticCache::new(1024 * 1024 * 1024, 99999));
