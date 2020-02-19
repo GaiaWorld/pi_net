@@ -57,7 +57,8 @@ impl<S: Socket, W: AsyncIOWait> HttpAcceptor<S, W> {
     pub async fn accept<P>(handle: SocketHandle<S>,
                            waits: W,
                            acceptor: HttpAcceptor<S, W>,
-                           hosts: P)
+                           hosts: P,
+                           keep_alive: usize)
         where P: VirtualHostPool<S, W> {
         let mut headers = [EMPTY_HEADER; MAX_CONNECT_HTTP_HEADER_LIMIT];
         let req = Request::new(&mut headers);
@@ -69,7 +70,7 @@ impl<S: Socket, W: AsyncIOWait> HttpAcceptor<S, W> {
             if let Some(value) = headers.get(HOST) {
                 if let Ok(host_name) = value.to_str() {
                     if let Some(host) = hosts.get(host_name) {
-                        let mut connect = HttpConnect::new(handle.clone(), waits.clone(), host.new_service());
+                        let mut connect = HttpConnect::new(handle.clone(), waits.clone(), host.new_service(), keep_alive);
                         if let &Some(method) = &req.method {
                             if let &Some(path) = &req.path {
                                 //构建本次Http连接请求

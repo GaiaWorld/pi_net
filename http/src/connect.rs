@@ -17,10 +17,10 @@ use crate::response::HttpResponse;
 * Http连接
 */
 pub struct HttpConnect<S: Socket, W: AsyncIOWait, HS: HttpService<S, W>> {
-    handle:     SocketHandle<S>,        //当前连接的Tcp连接句柄
-    waits:      W,                      //异步任务等待队列
-    service:    HS,                     //当前连接的服务
-    context:    SocketContext,          //连接上下文
+    handle:         SocketHandle<S>,        //当前连接的Tcp连接句柄
+    waits:          W,                      //异步任务等待队列
+    service:        HS,                     //当前连接的服务
+    keep_alive:     usize,                  //连接保持时
 }
 
 unsafe impl<S: Socket, W: AsyncIOWait, HS: HttpService<S, W>> Send for HttpConnect<S, W, HS> {}
@@ -30,13 +30,13 @@ unsafe impl<S: Socket, W: AsyncIOWait, HS: HttpService<S, W>> Sync for HttpConne
 * Http连接同步方法
 */
 impl<S: Socket, W: AsyncIOWait, HS: HttpService<S, W>> HttpConnect<S, W, HS> {
-    //构建指定Tcp连接句柄、异步任务等待队列和Http服务的Http连接
-    pub fn new(handle: SocketHandle<S>, waits: W, service: HS) -> Self {
+    //构建指定Tcp连接句柄、异步任务等待队列、Http服务和Http连接保持时长的Http连接
+    pub fn new(handle: SocketHandle<S>, waits: W, service: HS, keep_alive: usize) -> Self {
         HttpConnect {
             handle,
             waits,
             service,
-            context: SocketContext::empty(),
+            keep_alive,
         }
     }
 
@@ -58,14 +58,11 @@ impl<S: Socket, W: AsyncIOWait, HS: HttpService<S, W>> HttpConnect<S, W, HS> {
         Err(Error::new(ErrorKind::InvalidData, "invalid response"))
     }
 
-    //获取Http会话上下文的只读引用
-    pub fn get_context(&self) -> &SocketContext {
-        &self.context
-    }
-
-    //获取Http会话上下文的可写引用
-    pub fn get_context_mut(&mut self) -> &mut SocketContext {
-        &mut self.context
+    //更新Http连接的超时时长
+    pub fn update_timeout(&self) {
+        let mut event = SocketEvent::empty();
+        event.set::<usize>(self.keep_alive);
+        self.handle.set_timeout(self.keep_alive, event);
     }
 
     //抛出服务器端指定错误，将通过本次Http请求的响应返回给客户端，并关闭当前Http连接
@@ -108,6 +105,7 @@ impl<S: Socket, W: AsyncIOWait, HS: HttpService<S, W>> HttpConnect<S, W, HS> {
 impl<S: Socket, W: AsyncIOWait, HS: HttpService<S, W>> HttpConnect<S, W, HS> {
     //运行连接上的服务
     pub async fn run_service(&mut self, req: HttpRequest<S, W>) {
+        self.update_timeout(); //在调用服务前，更新当前Http连接的超时时长
         match self.service.call(req).await {
             Err(e) => {
                 //服务调用异常

@@ -21,6 +21,7 @@ use futures::future::{FutureExt, BoxFuture};
 use flate2::{Compression, FlushCompress, Compress, Status, write::GzEncoder};
 use twoway::{find_bytes, rfind_bytes};
 use parking_lot::RwLock;
+use env_logger;
 
 use hash::XHashMap;
 use atom::Atom;
@@ -407,6 +408,10 @@ fn handle<S: Socket>(env: Arc<dyn GrayVersion>,
 
 #[test]
 fn test_http_hosts() {
+    // 启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
+
+    //启动存储运行时
     let worker_pool = Box::new(WorkerPool::new("test http hosts".to_string(), WorkerType::Store, 8, 1024 * 1024, 10000, STORE_WORKER_WALKER.clone()));
     worker_pool.run(STORE_TASK_POOL.clone());
 
@@ -505,7 +510,7 @@ fn test_http_hosts() {
 
     let mut factory = AsyncPortsFactory::<TcpSocket>::new();
     factory.bind(80,
-                 Box::new(HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts)));
+                 Box::new(HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 10000)));
     let mut config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
@@ -524,6 +529,10 @@ fn test_http_hosts() {
 
 #[test]
 fn test_https_hosts() {
+    // 启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
+
+    //启动存储运行时
     let worker_pool = Box::new(WorkerPool::new("test https hosts".to_string(), WorkerType::Store, 8, 1024 * 1024, 10000, STORE_WORKER_WALKER.clone()));
     worker_pool.run(STORE_TASK_POOL.clone());
 
@@ -622,7 +631,7 @@ fn test_https_hosts() {
 
     let mut factory = AsyncPortsFactory::<TlsSocket>::new();
     factory.bind(443,
-                 Box::new(HttpListenerFactory::<TlsSocket, _>::with_hosts(hosts)));
+                 Box::new(HttpListenerFactory::<TlsSocket, _>::with_hosts(hosts, 10000)));
     let mut config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();

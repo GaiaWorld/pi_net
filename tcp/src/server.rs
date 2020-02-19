@@ -180,7 +180,34 @@ fn async_run<S, O>(waits: &Rc<RefCell<HashMap<usize, Waker, FnvBuildHasher>>>,
             //唤醒待完成异步任务
             let waker = o.remove();
             mem::drop(w); //因为后续操作在异步等待队列引用的作用域内，所以必须显示释放异步等待队列引用，以保证后续可以继续借用异步等待队列
-            waker.wake();
+            match &status {
+                SocketStatus::Closed(_) => {
+                    //当前状态为连接已关闭，则立即丢弃等待唤醒的异步任务，并创建处理连接关闭的异步任务
+                    let waits = AsyncWaitsHandle(Rc::downgrade(waits));
+                    let future = service.handle_closed(handle, waits, status);
+                    let task = LocalTask::new(spawner.clone(), async move {
+                        future.await;
+                    });
+                    if let Err(e) = spawner.spawn(task) {
+                        panic!("run async closed task failed, reason: {:?}", e);
+                    }
+                },
+                SocketStatus::Timeout(_) => {
+                    //当前状态为连接已超时，则立即丢弃等待唤醒的异步任务，并创建处理连接超时的异步任务
+                    let waits = AsyncWaitsHandle(Rc::downgrade(waits));
+                    let future = service.handle_timeouted(handle, waits, status);
+                    let task = LocalTask::new(spawner.clone(), async move {
+                        future.await;
+                    });
+                    if let Err(e) = spawner.spawn(task) {
+                        panic!("run async timeouted task failed, reason: {:?}", e);
+                    }
+                },
+                _ => {
+                    //其它状态，则立即唤醒待完成异步任务
+                    waker.wake();
+                },
+            }
         },
     }
 

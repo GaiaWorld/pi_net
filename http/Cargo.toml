@@ -24,10 +24,11 @@ bytes = "0.4"
 atom = { path = "../../pi_lib/atom" }
 path-absolutize = "1.1"
 log = "0.4"
+env_logger = "0.7"
 tcp = { path = "../tcp" }
+handler = { path = "../../pi_lib/handler" }
 hash = { path = "../../pi_lib/hash", features = ["xxhash"] }
 gray = { path = "../../pi_lib/gray" }
-handler = { path = "../../pi_lib/handler" }
 file = { path = "../../pi_lib/file" }
 adler32 = { path = "../../pi_lib/adler32" }
 

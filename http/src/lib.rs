@@ -23,6 +23,9 @@ extern crate bytes;
 extern crate path_absolutize;
 extern crate log;
 
+#[macro_use]
+extern crate env_logger;
+
 extern crate tcp;
 extern crate handler;
 extern crate hash;

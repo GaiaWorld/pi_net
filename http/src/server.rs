@@ -11,6 +11,7 @@ use std::io::{ErrorKind, Result, Error};
 use https::{Version, Response, HeaderMap, header::HOST};
 use httparse::{EMPTY_HEADER, Request};
 use futures::future::{FutureExt, BoxFuture};
+use log::warn;
 
 use tcp::{server::AsyncWaitsHandle,
           driver::{Socket, AsyncIOWait,
@@ -31,6 +32,7 @@ use crate::{acceptor::{MAX_CONNECT_HTTP_HEADER_LIMIT, HttpAcceptor},
 pub struct HttpListener<S: Socket, W: AsyncIOWait, P: VirtualHostPool<S, W>> {
     acceptor:   HttpAcceptor<S, W>, //连接接受器
     hosts:      P,                  //虚拟主机池
+    keep_alive: usize,              //Http保持连接时长
 }
 
 impl<S: Socket, W: AsyncIOWait, P: VirtualHostPool<S, W>> AsyncService<S, W> for HttpListener<S, W, P> {
@@ -41,6 +43,7 @@ impl<S: Socket, W: AsyncIOWait, P: VirtualHostPool<S, W>> AsyncService<S, W> for
         //处理Http连接，并处理首次请求
         let acceptor = self.acceptor.clone();
         let factory = self.hosts.clone();
+        let keep_alive = self.keep_alive;
 
         let future = async move {
             if let SocketStatus::Connected(Err(e)) = status {
@@ -49,7 +52,7 @@ impl<S: Socket, W: AsyncIOWait, P: VirtualHostPool<S, W>> AsyncService<S, W> for
                 return;
             }
 
-            HttpAcceptor::<S, W>::accept(handle, waits, acceptor, factory).await;
+            HttpAcceptor::<S, W>::accept(handle, waits, acceptor, factory, keep_alive).await;
         };
         future.boxed()
     }
@@ -121,12 +124,10 @@ impl<S: Socket, W: AsyncIOWait, P: VirtualHostPool<S, W>> AsyncService<S, W> for
     fn handle_writed(&self, handle: SocketHandle<S>, waits: W, status: SocketStatus) -> Self::Future {
         let future = async move {
             if let SocketStatus::Writed(Err(e)) = status {
-                //Tcp写数据失败
+                //Tcp写数据失败，则立即关闭当前Http连接
                 handle.close(Err(Error::new(ErrorKind::Other, format!("http server write failed, reason: {:?}", e))));
                 return;
             }
-
-
         };
         future.boxed()
     }
@@ -134,7 +135,14 @@ impl<S: Socket, W: AsyncIOWait, P: VirtualHostPool<S, W>> AsyncService<S, W> for
     fn handle_closed(&self, handle: SocketHandle<S>, waits: W, status: SocketStatus) -> Self::Future {
         let future = async move {
             if let SocketStatus::Closed(result) = status {
-                println!("!!!!!!tcp closed, result: {:?}", result);
+                if let Err(e) = result {
+                    warn!("!!!> Http Connect Close by Error, local: {:?}, remote: {:?}, reason: {:?}", handle.get_local(), handle.get_remote(), e);
+                }
+
+                //连接已关闭，则立即释放Tcp连接的上下文
+                if let Err(e) = handle.get_context_mut().remove::<HttpConnect<S, W, <<P as VirtualHostPool<S, W>>::Host as ServiceFactory<S, W>>::Service>>() {
+                    warn!("!!!> Free Context Failed by Http Connect Close, uid: {:?}, local: {:?}, remote: {:?}, reason: {:?}", handle.get_uid(), handle.get_local(), handle.get_remote(), e);
+                }
             }
         };
         future.boxed()
@@ -143,7 +151,9 @@ impl<S: Socket, W: AsyncIOWait, P: VirtualHostPool<S, W>> AsyncService<S, W> for
     fn handle_timeouted(&self, handle: SocketHandle<S>, waits: W, status: SocketStatus) -> Self::Future {
         let future = async move {
             if let SocketStatus::Timeout(event) = status {
-
+                //Http连接超时，则立即关闭当前Http连接
+                handle.close(Ok(()));
+                warn!("!!!> Http Connect Timeout, keep_alive: {:?}, local: {:?}, remote: {:?}", event.get::<usize>(), handle.get_local(), handle.get_remote());
             }
         };
         future.boxed()
@@ -152,10 +162,11 @@ impl<S: Socket, W: AsyncIOWait, P: VirtualHostPool<S, W>> AsyncService<S, W> for
 
 impl<S: Socket, W: AsyncIOWait, P: VirtualHostPool<S, W>> HttpListener<S, W, P> {
     //构建指定连接服务工厂的Http连接监听器
-    pub fn with_factory(hosts: P) -> Self {
+    pub fn with_factory(hosts: P, keep_alive: usize) -> Self {
         HttpListener {
             acceptor: HttpAcceptor::default(),
             hosts,
+            keep_alive,
         }
     }
 }
@@ -164,7 +175,8 @@ impl<S: Socket, W: AsyncIOWait, P: VirtualHostPool<S, W>> HttpListener<S, W, P> 
 * Http连接监听器工厂
 */
 pub struct HttpListenerFactory<S: Socket, P: VirtualHostPool<S, AsyncWaitsHandle>> {
-    hosts:      P,             //虚拟主机池
+    hosts:      P,      //虚拟主机池
+    keep_alive: usize,  //Http保持连接时长
     marker:     PhantomData<S>,
 }
 
@@ -175,15 +187,16 @@ impl<S: Socket, P: VirtualHostPool<S, AsyncWaitsHandle>> AsyncServiceFactory for
     type Future = BoxFuture<'static, Self::Out>;
 
     fn new_service(&self) -> Box<dyn AsyncService<Self::Connect, Self::Waits, Out = Self::Out, Future = Self::Future>> {
-        Box::new(HttpListener::with_factory(self.hosts.clone()))
+        Box::new(HttpListener::with_factory(self.hosts.clone(), self.keep_alive))
     }
 }
 
 impl<S: Socket, P: VirtualHostPool<S, AsyncWaitsHandle>> HttpListenerFactory<S, P> {
-    //构建指定虚拟主机池的Http连接监听器工厂
-    pub fn with_hosts(hosts: P) -> Self {
+    //构建指定虚拟主机池和Http保持连接时长的Http连接监听器工厂
+    pub fn with_hosts(hosts: P, keep_alive: usize) -> Self {
         HttpListenerFactory {
             hosts,
+            keep_alive,
             marker: PhantomData,
         }
     }
