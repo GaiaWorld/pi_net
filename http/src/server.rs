@@ -136,7 +136,10 @@ impl<S: Socket, W: AsyncIOWait, P: VirtualHostPool<S, W>> AsyncService<S, W> for
         let future = async move {
             if let SocketStatus::Closed(result) = status {
                 if let Err(e) = result {
-                    warn!("!!!> Http Connect Close by Error, local: {:?}, remote: {:?}, reason: {:?}", handle.get_local(), handle.get_remote(), e);
+                    if e.kind() != ErrorKind::UnexpectedEof {
+                        //Http连接非正常关闭
+                        warn!("!!!> Http Connect Close by Error, local: {:?}, remote: {:?}, reason: {:?}", handle.get_local(), handle.get_remote(), e);
+                    }
                 }
 
                 //连接已关闭，则立即释放Tcp连接的上下文
