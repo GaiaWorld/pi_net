@@ -408,7 +408,7 @@ fn handle<S: Socket>(env: Arc<dyn GrayVersion>,
 
 #[test]
 fn test_http_hosts() {
-    // 启动日志系统
+    //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
     //启动存储运行时
@@ -529,7 +529,7 @@ fn test_http_hosts() {
 
 #[test]
 fn test_https_hosts() {
-    // 启动日志系统
+    //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
     //启动存储运行时
