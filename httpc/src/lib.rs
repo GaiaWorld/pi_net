@@ -250,28 +250,37 @@ impl SharedHttpc for HttpClient {
                     .build()
             },
             HttpClientOptions::VaildHost(cert_file, identity_file, pk, gzip, referer, count, timeout) => {
-                let mut cert_buf = Vec::new();
-                File::open(cert_file)?.read_to_end(&mut cert_buf)?;
-                let cert = Certificate::from_der(&cert_buf).or_else(|e| {
-                    Err(Error::new(ErrorKind::Other, e))
-                })?;
+                let mut builder = ClientBuilder::new();
+                if let Some(cert_file_path) = cert_file.as_path().to_str() {
+                    //指定了根证书
+                    let mut cert_buf = Vec::new();
+                    if let Ok(mut file) = File::open(cert_file_path) {
+                        //指定了根证书
+                        if let Ok(_) = file.read_to_end(&mut cert_buf) {
+                            if let Ok(cert) = Certificate::from_der(&cert_buf).or_else(|e| {
+                                Err(Error::new(ErrorKind::Other, e))
+                            }) {
+                                builder.add_root_certificate(cert);
+                            }
+                        }
+                    }
+                }
                 let mut identity_buf = Vec::new();
                 File::open(identity_file)?.read_to_end(&mut identity_buf)?;
                 let identity = Identity::from_pkcs12_der(&identity_buf, &pk).or_else(|e| {
                     Err(Error::new(ErrorKind::Other, e))
                 })?;
-                ClientBuilder::new()
-                            .add_root_certificate(cert)
-                            .identity(identity)
-                            .gzip(gzip)
-                            .referer(referer)
-                            .redirect(if count < 0 {
-                                RedirectPolicy::none()
-                            } else {
-                                RedirectPolicy::limited(count as usize)
-                            })
-                            .timeout(Duration::from_millis(timeout))
-                            .build()
+                builder
+                    .identity(identity)
+                    .gzip(gzip)
+                    .referer(referer)
+                    .redirect(if count < 0 {
+                        RedirectPolicy::none()
+                    } else {
+                        RedirectPolicy::limited(count as usize)
+                    })
+                    .timeout(Duration::from_millis(timeout))
+                    .build()
             },
             HttpClientOptions::Proxy(proxy_url, https, gzip, referer, count, timeout) => {
                 let proxy = Proxy::http(&*proxy_url).or_else(|e| {
@@ -298,11 +307,21 @@ impl SharedHttpc for HttpClient {
                     .build()
             },
             HttpClientOptions::ValidHostProxy(cert_file, identity_file, pk, proxy_url, gzip, referer, count, timeout) => {
-                let mut cert_buf = Vec::new();
-                File::open(cert_file)?.read_to_end(&mut cert_buf)?;
-                let cert = Certificate::from_der(&cert_buf).or_else(|e| {
-                    Err(Error::new(ErrorKind::Other, e))
-                })?;
+                let mut builder = ClientBuilder::new();
+                if let Some(cert_file_path) = cert_file.as_path().to_str() {
+                    //指定了根证书
+                    let mut cert_buf = Vec::new();
+                    if let Ok(mut file) = File::open(cert_file_path) {
+                        //指定了根证书
+                        if let Ok(_) = file.read_to_end(&mut cert_buf) {
+                            if let Ok(cert) = Certificate::from_der(&cert_buf).or_else(|e| {
+                                Err(Error::new(ErrorKind::Other, e))
+                            }) {
+                                builder.add_root_certificate(cert);
+                            }
+                        }
+                    }
+                }
                 let mut identity_buf = Vec::new();
                 File::open(identity_file)?.read_to_end(&mut identity_buf)?;
                 let identity = Identity::from_pkcs12_der(&identity_buf, &pk).or_else(|e| {
@@ -311,19 +330,18 @@ impl SharedHttpc for HttpClient {
                 let proxy = Proxy::http(&*proxy_url).or_else(|e| {
                     Err(Error::new(ErrorKind::Other, e))
                 })?;
-                ClientBuilder::new()
-                            .add_root_certificate(cert)
-                            .identity(identity)
-                            .proxy(proxy)
-                            .gzip(gzip)
-                            .referer(referer)
-                            .redirect(if count < 0 {
-                                RedirectPolicy::none()
-                            } else {
-                                RedirectPolicy::limited(count as usize)
-                            })
-                            .timeout(Duration::from_millis(timeout))
-                            .build()
+                builder
+                    .identity(identity)
+                    .proxy(proxy)
+                    .gzip(gzip)
+                    .referer(referer)
+                    .redirect(if count < 0 {
+                        RedirectPolicy::none()
+                    } else {
+                        RedirectPolicy::limited(count as usize)
+                    })
+                    .timeout(Duration::from_millis(timeout))
+                    .build()
             },
         }.or_else(|e| {
             Err(Error::new(ErrorKind::Other, e))
