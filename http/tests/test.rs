@@ -45,6 +45,7 @@ use http::{server::HttpListenerFactory,
            cors_handler::CORSHandler,
            default_parser::DefaultParser,
            multi_parts::MutilParts,
+           range_load::RangeLoad,
            file_load::FileLoad,
            files_load::FilesLoad,
            batch_load::BatchLoad,
@@ -429,6 +430,7 @@ fn test_http_hosts() {
     let cors_handler = Arc::new(cors_handler);
     let parser = Arc::new(DefaultParser::with(128, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
+    let range_load = Arc::new(RangeLoad::new());
     let file_load = Arc::new(FileLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
     let files_load = Arc::new(FilesLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
     let batch_load = Arc::new(BatchLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
@@ -445,6 +447,7 @@ fn test_http_hosts() {
     let mut chain = MiddlewareChain::new();
     chain.push_back(cors_handler.clone());
     chain.push_back(parser.clone());
+    chain.push_back(range_load.clone());
     chain.push_back(file_load);
     chain.finish();
     let file_load_middleware = Arc::new(chain);
@@ -453,6 +456,7 @@ fn test_http_hosts() {
     let mut chain = MiddlewareChain::new();
     chain.push_back(cors_handler.clone());
     chain.push_back(parser.clone());
+    chain.push_back(range_load.clone());
     chain.push_back(files_load);
     chain.finish();
     let files_load_middleware = Arc::new(chain);
@@ -461,6 +465,7 @@ fn test_http_hosts() {
     let mut chain = MiddlewareChain::new();
     chain.push_back(cors_handler.clone());
     chain.push_back(parser.clone());
+    chain.push_back(range_load);
     chain.push_back(batch_load);
     chain.finish();
     let batch_load_middleware = Arc::new(chain);
@@ -550,6 +555,7 @@ fn test_https_hosts() {
     let cors_handler = Arc::new(cors_handler);
     let parser = Arc::new(DefaultParser::with(128, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
+    let range_load = Arc::new(RangeLoad::new());
     let file_load = Arc::new(FileLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
     let files_load = Arc::new(FilesLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
     let batch_load = Arc::new(BatchLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
@@ -566,6 +572,7 @@ fn test_https_hosts() {
     let mut chain = MiddlewareChain::new();
     chain.push_back(cors_handler.clone());
     chain.push_back(parser.clone());
+    chain.push_back(range_load.clone());
     chain.push_back(file_load);
     chain.finish();
     let file_load_middleware = Arc::new(chain);
@@ -574,6 +581,7 @@ fn test_https_hosts() {
     let mut chain = MiddlewareChain::new();
     chain.push_back(cors_handler.clone());
     chain.push_back(parser.clone());
+    chain.push_back(range_load.clone());
     chain.push_back(files_load);
     chain.finish();
     let files_load_middleware = Arc::new(chain);
@@ -582,6 +590,7 @@ fn test_https_hosts() {
     let mut chain = MiddlewareChain::new();
     chain.push_back(cors_handler.clone());
     chain.push_back(parser.clone());
+    chain.push_back(range_load);
     chain.push_back(batch_load);
     chain.finish();
     let batch_load_middleware = Arc::new(chain);

@@ -45,6 +45,7 @@ pub mod middleware;
 pub mod cors_handler;
 pub mod default_parser;
 pub mod multi_parts;
+pub mod range_load;
 pub mod file_load;
 pub mod files_load;
 pub mod batch_load;
