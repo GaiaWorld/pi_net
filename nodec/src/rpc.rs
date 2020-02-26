@@ -54,6 +54,10 @@ impl RPCClient {
         }
     }
 
+    pub fn status(&self) -> isize {
+        self.connect.status()
+    }
+
     //连接
     pub fn connect(&self,
                    keep_alive: u16,

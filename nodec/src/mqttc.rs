@@ -56,6 +56,10 @@ impl SharedMqttClient {
         }
     }
 
+    pub fn status(&self) -> isize {
+        self.0.status()
+    }
+
     //获取当前客户端通讯id生成器
     pub fn get_id_gen(&self) -> Arc<AtomicU32> {
         self.0.connect.get_id_gen()
@@ -259,6 +263,12 @@ struct MqttClient {
     pkid:       PacketIdentifier,   //pkid
     connect:    SharedWSClient,     //websocket连接
 }
+
+impl MqttClient {
+    pub fn status(&self) -> isize {
+        self.connect.status()
+    }
+ }
 
 //将Mqtt包序列化为二进制数据
 fn packet_to_binary(packet: &Packet) -> Result<Vec<u8>> {
