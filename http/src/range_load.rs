@@ -59,7 +59,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for RangeLoad {
                                 end = e;
                             }
 
-                            if start > end || end > body_len {
+                            if start > end || end >= body_len {
                                 //客户端需要的静态资源范围越界，则立即返回错误
                                 if let Some(body) = response.as_mut_body() {
                                     body.reset(&[]);
@@ -74,11 +74,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for RangeLoad {
                             if let Some(body) = response.as_mut_body() {
                                 let mut buf = Vec::with_capacity(0);
                                 if let Some(bin) = body.as_slice() {
-                                    if start == end {
-                                        buf = Vec::from(&bin[start..(start + 1)]);
-                                    } else {
-                                        buf = Vec::from(&bin[start..(end - start + 1)]);
-                                    }
+                                    buf = Vec::from(&bin[start..(end + 1)]);
                                 }
                                 body.reset(buf.as_slice()); //重置响应体为指定范围的数据
                             }
