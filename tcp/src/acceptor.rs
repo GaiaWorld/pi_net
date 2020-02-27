@@ -23,6 +23,7 @@ use crate::util::{pause, TlsConfig};
 struct AcceptorContext<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
     listener:   TcpListener,        //Tcp连接监听器
     driver:     SocketDriver<S, A>, //Tcp连接驱动
+    tls_cfg:    TlsConfig,          //传输层安全协议配置
 }
 
 /*
@@ -35,7 +36,6 @@ pub struct Acceptor<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
     listeners:  HashMap<SocketAddr, Token, FnvBuildHasher>,         //Tcp连接监听器表
     sender:     Sender<Box<dyn FnOnce() -> AcceptorCmd + Send>>,    //Tcp连接接受器的控制发送器
     receiver:   Receiver<Box<dyn FnOnce() -> AcceptorCmd + Send>>,  //Tcp连接接受器的控制接收器
-    tls_cfg:    TlsConfig,                                          //传输层安全协议配置
 }
 
 unsafe impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Send for Acceptor<S, A> {}
@@ -43,7 +43,7 @@ unsafe impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Sync for Acceptor
 
 impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
     //构建指定地址列表的Tcp连接接受器，并绑定地址列表
-    pub fn bind(addrs: &[SocketAddr], driver: &SocketDriver<S, A>, tls_cfg: TlsConfig) -> Result<Self> {
+    pub fn bind(addrs: &[(SocketAddr, TlsConfig)], driver: &SocketDriver<S, A>) -> Result<Self> {
         let mut len = addrs.len();
         let mut contexts = Slab::with_capacity(len);
         let mut listeners = HashMap::with_capacity_and_hasher(len, FnvBuildHasher::default());
@@ -60,7 +60,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
         let (sender, receiver) = unbounded();
 
         //绑定所有地址
-        for addr in addrs {
+        for (addr, tls_cfg) in addrs {
             match TcpListener::bind(addr) {
                 Err(e) => {
                     //绑定指定地址失败，则继续绑定其它地址
@@ -91,6 +91,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
                     entry.insert(AcceptorContext {
                         listener,
                         driver: copy,
+                        tls_cfg: tls_cfg.clone(),
                     });
                 },
             }
@@ -115,7 +116,6 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
                 listeners,
                 sender,
                 receiver,
-                tls_cfg,
             })
         }
     }
@@ -194,7 +194,7 @@ fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(mut acceptor: 
             let mut is_error = false;
             if let Some(context) = (&mut acceptor.contexts).get_mut(token.0) {
                 if event.readiness().is_readable() {
-                    match accept(&context.listener, token.0, &acceptor.tls_cfg) {
+                    match accept(&context.listener, token.0, context.tls_cfg.clone()) {
                         Ok(socket) => {
                             //连接成功，则路由连接到连接池
                             if let Err(e) = context.driver.route(socket) {
@@ -235,7 +235,7 @@ fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(mut acceptor: 
 }
 
 //接受连接请求
-fn accept<S: Socket + Stream>(listener: &TcpListener, id: usize, tls_cfg: &TlsConfig) -> Result<S> {
+fn accept<S: Socket + Stream>(listener: &TcpListener, id: usize, tls_cfg: TlsConfig) -> Result<S> {
     loop {
         match listener.accept() {
             Err(ref e) if e.kind() == ErrorKind::Interrupted => {
@@ -254,11 +254,7 @@ fn accept<S: Socket + Stream>(listener: &TcpListener, id: usize, tls_cfg: &TlsCo
                         return Err(e);
                     },
                     Ok(local) => {
-                        if tls_cfg.is_server() {
-                            return Ok(S::new(&local, &remote, Some(Token(id)), stream, tls_cfg.clone()));
-                        }
-
-                        return Ok(S::new(&local, &remote, Some(Token(id)), stream, TlsConfig::Empty));
+                        return Ok(S::new(&local, &remote, Some(Token(id)), stream, tls_cfg));
                     },
                 }
             },

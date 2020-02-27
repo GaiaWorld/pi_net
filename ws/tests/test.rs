@@ -73,7 +73,7 @@ fn test_websocket_listener() {
     config.set_option(16384, 16384, 16384, 16);
     let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
-    match SocketListener::bind(factory, buffer, config, TlsConfig::empty(), 1024, 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
         },
@@ -102,10 +102,6 @@ fn test_tls_websocket_listener() {
     factory.bind(38080,
                  Box::new(WebsocketListenerFactory::<TlsSocket>::with_protocol_factory(
                      Arc::new(TestTlsChildProtocolFactory))));
-    let mut config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
-    config.set_option(16384, 16384, 16384, 16);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
-
     let tls_config = TlsConfig::new_server("",
                                            false,
                                            "./3376363_msg.highapp.com.pem",
@@ -116,8 +112,10 @@ fn test_tls_websocket_listener() {
                                            512,
                                            false,
                                            "").unwrap();
-
-    match SocketListener::bind(factory, buffer, config, tls_config, 1024, 1024 * 1024, 1024, Some(10)) {
+    let mut config = SocketConfig::with_tls("0.0.0.0", &[(38080, tls_config)]);
+    config.set_option(16384, 16384, 16384, 16);
+    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
+    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
         Err(e) => {
             println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
         },

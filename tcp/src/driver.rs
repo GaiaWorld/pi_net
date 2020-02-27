@@ -624,12 +624,12 @@ impl Default for SocketOption {
 */
 #[derive(Clone)]
 pub enum SocketConfig {
-    Raw(Vec<u16>, SocketOption),                                            //非安全的tcp连接共享配置，可以同时在ipv4和ipv6上，绑定相同port
-    Tls(Vec<u16>, Atom, Atom, Option<Atom>, SocketOption),                  //安全的tcp连接共享配置，可以同时在ipv4和ipv6上，绑定相同的port
-    RawIpv4(IpAddr, Vec<u16>, SocketOption),                                //非安全的tcp连接兼容配置，兼容ipv4和ipv4映射的ipv6
-    TlsIpv4(IpAddr, Vec<u16>, Atom, Atom, Option<Atom>, SocketOption),      //安全的tcp连接兼容配置，兼容ipv4和ipv4映射的ipv6
-    RawIpv6(Ipv6Addr, Vec<u16>, SocketOption),                              //非安全的tcp连接ipv6独占配置，可以与兼容的ipv4配置，绑定相同port
-    TlsIpv6(Ipv6Addr, Vec<u16>, Atom, Atom, Option<Atom>, SocketOption),    //安全的tcp连接ipv6独占配置，可以与兼容的ipv4配置，绑定相同port
+    Raw(Vec<u16>, SocketOption),                            //非安全的tcp连接共享配置，可以同时在ipv4和ipv6上，绑定相同port
+    Tls(Vec<(u16, TlsConfig)>, SocketOption),               //安全的tcp连接共享配置，可以同时在ipv4和ipv6上，绑定相同的port
+    RawIpv4(IpAddr, Vec<u16>, SocketOption),                //非安全的tcp连接兼容配置，兼容ipv4和ipv4映射的ipv6
+    TlsIpv4(IpAddr, Vec<(u16, TlsConfig)>, SocketOption),   //安全的tcp连接兼容配置，兼容ipv4和ipv4映射的ipv6
+    RawIpv6(Ipv6Addr, Vec<u16>, SocketOption),              //非安全的tcp连接ipv6独占配置，可以与兼容的ipv4配置，绑定相同port
+    TlsIpv6(Ipv6Addr, Vec<(u16, TlsConfig)>, SocketOption), //安全的tcp连接ipv6独占配置，可以与兼容的ipv4配置，绑定相同port
 }
 
 impl Default for SocketConfig {
@@ -661,6 +661,28 @@ impl SocketConfig {
         }
     }
 
+    //构建一个指定ip、端口和TLS配置的Tcp连接兼容配置
+    pub fn with_tls(ip: &str, port: &[(u16, TlsConfig)]) -> Self {
+        if ip == DEFAULT_TCP_IP_V6 {
+            //在本地ipv4和ipv6地址上绑定相同的port
+            SocketConfig::Tls(port.to_vec(), SocketOption::default())
+        } else {
+            //在指定的本地地址上绑定port
+            let addr: IpAddr;
+            if let Ok(r) = Ipv4Addr::from_str(ip) {
+                addr = IpAddr::V4(r);
+            } else {
+                if let Ok(r) = Ipv6Addr::from_str(ip) {
+                    addr = IpAddr::V6(r);
+                } else {
+                    panic!("invalid ip");
+                }
+            }
+
+            SocketConfig::TlsIpv4(addr, port.to_vec(), SocketOption::default())
+        }
+    }
+
     //将地址转换为ipv6
     pub fn into_ipv6(self) -> Self {
         match self {
@@ -675,14 +697,14 @@ impl SocketConfig {
                     },
                 }
             },
-            SocketConfig::TlsIpv4(ip, ports, cert_file, key_file, cert_path, option) => {
+            SocketConfig::TlsIpv4(ip, ports, option) => {
                 //安全的兼容配置，则转换为安全的ipv6独占配置
                 match ip {
                     IpAddr::V4(addr) => {
-                        SocketConfig::TlsIpv6(addr.to_ipv6_mapped(), ports, cert_file, key_file, cert_path, option)
+                        SocketConfig::TlsIpv6(addr.to_ipv6_mapped(), ports, option)
                     },
                     IpAddr::V6(addr) => {
-                        SocketConfig::TlsIpv6(addr, ports, cert_file, key_file, cert_path, option)
+                        SocketConfig::TlsIpv6(addr, ports, option)
                     },
                 }
             },
@@ -693,46 +715,15 @@ impl SocketConfig {
         }
     }
 
-    //设置为安全连接，允许提供tls连接或只允许证书认证通过的客户端建立连接
-    pub fn security(self, cert_file: &str, key_file: &str, cert_path: Option<&str>) -> Self {
-        let client_cert_path: Option<Atom>;
-        if let Some(path) = cert_path {
-            //设置了客户端证书路径
-            client_cert_path = Some(Atom::from(path))
-        } else {
-            //未设置客户端证书路径
-            client_cert_path = None
-        }
-
-        match self {
-            SocketConfig::Raw(ports, option) => {
-                //非安全的共享配置，则转换为安全的共享配置
-                SocketConfig::Tls(ports, Atom::from(cert_file), Atom::from(key_file), client_cert_path, option)
-            },
-            SocketConfig::RawIpv4(ip, ports, option) => {
-                //非安全的兼容配置，则转换为安全的兼容配置
-                SocketConfig::TlsIpv4(ip, ports, Atom::from(cert_file), Atom::from(key_file), client_cert_path, option)
-            },
-            SocketConfig::RawIpv6(ip, ports, option) => {
-                //非安全的ipv6独占配置，则转换为安全的ipv6独占配置
-                SocketConfig::TlsIpv6(ip, ports, Atom::from(cert_file), Atom::from(key_file), client_cert_path, option)
-            },
-            config => {
-                //已经是安全配置，则忽略
-                config
-            }
-        }
-    }
-
     //获取配置的连接通用选项
     pub fn option(&self) -> SocketOption {
         match self {
             SocketConfig::Raw(_ports, option) => option.clone(),
-            SocketConfig::Tls(_ports, _cert_file, _key_file, _cert_path, option) => option.clone(),
+            SocketConfig::Tls(_ports, option) => option.clone(),
             SocketConfig::RawIpv4(_ip, _ports, option) => option.clone(),
-            SocketConfig::TlsIpv4(_ip, _ports, _cert_file, _key_file, _cert_path, option) => option.clone(),
+            SocketConfig::TlsIpv4(_ip, _ports, option) => option.clone(),
             SocketConfig::RawIpv6(_ip, _ports, option) => option.clone(),
-            SocketConfig::TlsIpv6(_ip, _ports, _cert_file, _key_file, _cert_path, option) => option.clone(),
+            SocketConfig::TlsIpv6(_ip, _ports, option) => option.clone(),
         }
     }
 
@@ -746,19 +737,19 @@ impl SocketConfig {
             SocketConfig::Raw(_ports, option) => {
                 option
             },
-            SocketConfig::Tls(_ports, _cert_file, _key_file, _cert_path, option) => {
+            SocketConfig::Tls(_ports, option) => {
                 option
             },
             SocketConfig::RawIpv4(_ip, _ports, option) => {
                 option
             },
-            SocketConfig::TlsIpv4(_ip, _ports, _cert_file, _key_file, _cert_path, option) => {
+            SocketConfig::TlsIpv4(_ip, _ports, option) => {
                 option
             },
             SocketConfig::RawIpv6(_ip, _ports, option) => {
                 option
             },
-            SocketConfig::TlsIpv6(_ip, _ports, _cert_file, _key_file, _cert_path, option) => {
+            SocketConfig::TlsIpv6(_ip, _ports, option) => {
                 option
             },
         };
@@ -770,42 +761,42 @@ impl SocketConfig {
     }
 
     //获取配置的地址列表
-    pub fn addrs(&self) -> Vec<SocketAddr> {
+    pub fn addrs(&self) -> Vec<(SocketAddr, TlsConfig)> {
         let mut addrs = Vec::with_capacity(1);
 
         match self {
             SocketConfig::Raw(ports, _option) => {
                 for port in ports {
                     //同时插入默认的ipv4和ipv6地址
-                    addrs.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::from_str(DEFAULT_TCP_IP_V4).unwrap()), port.clone()));
-                    addrs.push(SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str(DEFAULT_TCP_IP_V6).unwrap()), port.clone()));
+                    addrs.push((SocketAddr::new(IpAddr::V4(Ipv4Addr::from_str(DEFAULT_TCP_IP_V4).unwrap()), port.clone()), TlsConfig::empty()));
+                    addrs.push((SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str(DEFAULT_TCP_IP_V6).unwrap()), port.clone()), TlsConfig::empty()));
                 }
             },
-            SocketConfig::Tls(ports, _cert_file, _key_file, _cert_path, _option) => {
-                for port in ports {
+            SocketConfig::Tls(ports, _option) => {
+                for (port, tls_cfg) in ports {
                     //同时插入默认的ipv4和ipv6地址
-                    addrs.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::from_str(DEFAULT_TCP_IP_V4).unwrap()), port.clone()));
-                    addrs.push(SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str(DEFAULT_TCP_IP_V6).unwrap()), port.clone()));
+                    addrs.push((SocketAddr::new(IpAddr::V4(Ipv4Addr::from_str(DEFAULT_TCP_IP_V4).unwrap()), port.clone()), tls_cfg.clone()));
+                    addrs.push((SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str(DEFAULT_TCP_IP_V6).unwrap()), port.clone()), tls_cfg.clone()));
                 }
             },
             SocketConfig::RawIpv4(ip, ports, _option) => {
                 for port in ports {
-                    addrs.push(SocketAddr::new(ip.clone(), port.clone()))
+                    addrs.push((SocketAddr::new(ip.clone(), port.clone()), TlsConfig::empty()))
                 }
             },
-            SocketConfig::TlsIpv4(ip, ports, _cert_file, _key_file, _cert_path, _option) => {
-                for port in ports {
-                    addrs.push(SocketAddr::new(ip.clone(), port.clone()))
+            SocketConfig::TlsIpv4(ip, ports, _option) => {
+                for (port, tls_cfg) in ports {
+                    addrs.push((SocketAddr::new(ip.clone(), port.clone()), tls_cfg.clone()))
                 }
             },
             SocketConfig::RawIpv6(ip, ports, _option) => {
                 for port in ports {
-                    addrs.push(SocketAddr::new(IpAddr::V6(ip.clone()), port.clone()))
+                    addrs.push((SocketAddr::new(IpAddr::V6(ip.clone()), port.clone()), TlsConfig::empty()))
                 }
             },
-            SocketConfig::TlsIpv6(ip, ports, _cert_file, _key_file, _cert_path, _option) => {
-                for port in ports {
-                    addrs.push(SocketAddr::new(IpAddr::V6(ip.clone()), port.clone()))
+            SocketConfig::TlsIpv6(ip, ports, _option) => {
+                for (port, tls_cfg) in ports {
+                    addrs.push((SocketAddr::new(IpAddr::V6(ip.clone()), port.clone()), tls_cfg.clone()))
                 }
             },
         }
@@ -814,42 +805,42 @@ impl SocketConfig {
     }
 
     //获取配置列表
-    pub fn configs(&self) -> Vec<(SocketAddr, Option<Atom>, Option<Atom>, Option<Atom>, SocketOption)> {
+    pub fn configs(&self) -> Vec<(SocketAddr, SocketOption, TlsConfig)> {
         let mut configs = Vec::with_capacity(1);
 
         match self {
             SocketConfig::Raw(ports, option) => {
                 for port in ports {
                     //同时插入默认的ipv4和ipv6配置
-                    configs.push((SocketAddr::new(IpAddr::V4(Ipv4Addr::from_str(DEFAULT_TCP_IP_V4).unwrap()), port.clone()), None, None, None, option.clone()));
-                    configs.push((SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str(DEFAULT_TCP_IP_V6).unwrap()), port.clone()), None, None, None, option.clone()));
+                    configs.push((SocketAddr::new(IpAddr::V4(Ipv4Addr::from_str(DEFAULT_TCP_IP_V4).unwrap()), port.clone()), option.clone(), TlsConfig::empty()));
+                    configs.push((SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str(DEFAULT_TCP_IP_V6).unwrap()), port.clone()), option.clone(), TlsConfig::empty()));
                 }
             },
-            SocketConfig::Tls(ports, cert_file, key_file, cert_path, option) => {
-                for port in ports {
+            SocketConfig::Tls(ports, option) => {
+                for (port, tls_cfg) in ports {
                     //同时插入默认的ipv4和ipv6的安全配置
-                    configs.push((SocketAddr::new(IpAddr::V4(Ipv4Addr::from_str(DEFAULT_TCP_IP_V4).unwrap()), port.clone()), Some(cert_file.clone()), Some(key_file.clone()), cert_path.clone(), option.clone()));
-                    configs.push((SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str(DEFAULT_TCP_IP_V6).unwrap()), port.clone()), Some(cert_file.clone()), Some(key_file.clone()), cert_path.clone(), option.clone()));
+                    configs.push((SocketAddr::new(IpAddr::V4(Ipv4Addr::from_str(DEFAULT_TCP_IP_V4).unwrap()), port.clone()), option.clone(), tls_cfg.clone()));
+                    configs.push((SocketAddr::new(IpAddr::V6(Ipv6Addr::from_str(DEFAULT_TCP_IP_V6).unwrap()), port.clone()), option.clone(), tls_cfg.clone()));
                 }
             },
             SocketConfig::RawIpv4(ip, ports, option) => {
                 for port in ports {
-                    configs.push((SocketAddr::new(ip.clone(), port.clone()), None, None, None, option.clone()))
+                    configs.push((SocketAddr::new(ip.clone(), port.clone()), option.clone(), TlsConfig::empty()))
                 }
             },
-            SocketConfig::TlsIpv4(ip, ports, cert_file, key_file, cert_path, option) => {
-                for port in ports {
-                    configs.push((SocketAddr::new(ip.clone(), port.clone()), Some(cert_file.clone()), Some(key_file.clone()), cert_path.clone(), option.clone()))
+            SocketConfig::TlsIpv4(ip, ports, option) => {
+                for (port, tls_cfg) in ports {
+                    configs.push((SocketAddr::new(ip.clone(), port.clone()), option.clone(), tls_cfg.clone()))
                 }
             },
             SocketConfig::RawIpv6(ip, ports, option) => {
                 for port in ports {
-                    configs.push((SocketAddr::new(IpAddr::V6(ip.clone()), port.clone()), None, None, None, option.clone()))
+                    configs.push((SocketAddr::new(IpAddr::V6(ip.clone()), port.clone()), option.clone(), TlsConfig::empty()))
                 }
             },
-            SocketConfig::TlsIpv6(ip, ports, cert_file, key_file, cert_path, option) => {
-                for port in ports {
-                    configs.push((SocketAddr::new(IpAddr::V6(ip.clone()), port.clone()), Some(cert_file.clone()), Some(key_file.clone()), cert_path.clone(), option.clone()))
+            SocketConfig::TlsIpv6(ip, ports, option) => {
+                for (port, tls_cfg) in ports {
+                    configs.push((SocketAddr::new(IpAddr::V6(ip.clone()), port.clone()), option.clone(), tls_cfg.clone()))
                 }
             },
         }
