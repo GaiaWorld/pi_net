@@ -556,15 +556,15 @@ impl TlsConfig {
         };
 
         match make_server_config(client_auth_path,
-                                        is_client_auth,
-                                        server_certs_path,
-                                        server_key_path,
-                                        server_ocsp_path,
-                                        server_suite,
-                                        server_versions,
-                                        server_session_size,
-                                        is_server_tickets,
-                                        server_alpns) {
+                                 is_client_auth,
+                                 server_certs_path,
+                                 server_key_path,
+                                 server_ocsp_path,
+                                 server_suite,
+                                 server_versions,
+                                 server_session_size,
+                                 is_server_tickets,
+                                 server_alpns) {
             Err(e) => Err(e),
             Ok(config) => Ok(TlsConfig::Server(config)),
         }
