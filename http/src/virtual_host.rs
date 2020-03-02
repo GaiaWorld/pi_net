@@ -49,7 +49,8 @@ impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> VirtualHost
     }
 
     fn get(&self, name: &str) -> Option<&Self::Host> {
-        self.0.get(&Atom::from(name))
+        let host: Vec<&str> = name.split(":").collect();
+        self.0.get(&Atom::from(host[0]))
     }
 
     fn add(&mut self, name: &str, host: Self::Host) -> Result<()> {
