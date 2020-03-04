@@ -25,7 +25,7 @@ use crate::{gateway::GatewayContext,
             request::HttpRequest,
             response::HttpResponse,
             static_cache::{is_unmodified, is_modified, request_get_cache, set_cache_resp_headers, CacheRes, StaticCache},
-            util::HttpRecvResult};
+            util::{HttpRecvResult, trim_path}};
 use std::time::SystemTime;
 
 /*
@@ -70,7 +70,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for BatchLoad {
             let files_id = Atom::from(ds.to_string() + "&" + fs.as_str());
             let root = if rp.as_path().to_str().unwrap().as_bytes().len() > 0 {
                 &rp
-            }else{
+            } else {
                 &self.root
             };
 
@@ -313,14 +313,21 @@ impl BatchLoad {
                                  is_transform: bool,
                                  is_only_if_cached: bool,
                                  max_age: usize) -> Self {
-        BatchLoad {
-            root: dir.into(),
-            cache,
-            is_cache,
-            is_store,
-            is_transform,
-            is_only_if_cached,
-            max_age: max_age as u64,
+        match trim_path(dir) {
+            Err(e) => {
+                panic!("Create Http Batch Load Failed, reason: {:?}", e);
+            },
+            Ok(root) => {
+                BatchLoad {
+                    root,
+                    cache,
+                    is_cache,
+                    is_store,
+                    is_transform,
+                    is_only_if_cached,
+                    max_age: max_age as u64,
+                }
+            },
         }
     }
 }

@@ -16,7 +16,7 @@ use crate::{gateway::GatewayContext,
             middleware::{MiddlewareResult, Middleware},
             request::HttpRequest,
             response::HttpResponse,
-            util::HttpRecvResult};
+            util::{HttpRecvResult, trim_path}};
 
 /*
 * https文件上传任务优先级
@@ -183,17 +183,23 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for UploadFile 
 impl UploadFile {
     //构建指定根目录的文件上传处理器
     pub fn new<P: Into<PathBuf>>(dir: P) -> Self {
-        let root = dir.into();
-        if !root.exists() {
-            //不存在，则创建根目录
-            if create_dir_all(&root).is_err() {
-                //创建根目录失败
-                panic!("New UploadFile Failed, make root failed, root: {:?}", root);
-            }
-        }
+        match trim_path(dir) {
+            Err(e) => {
+                panic!("Create Http Upload Failed, reason: {:?}", e);
+            },
+            Ok(root) => {
+                if !root.exists() {
+                    //不存在，则创建根目录
+                    if create_dir_all(&root).is_err() {
+                        //创建根目录失败
+                        panic!("New UploadFile Failed, make root failed, root: {:?}", root);
+                    }
+                }
 
-        UploadFile {
-            root,
+                UploadFile {
+                    root,
+                }
+            },
         }
     }
 }

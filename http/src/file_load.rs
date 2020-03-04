@@ -21,7 +21,7 @@ use crate::{gateway::GatewayContext,
             request::HttpRequest,
             response::HttpResponse,
             static_cache::{is_unmodified, is_modified, request_get_cache, set_cache_resp_headers, CacheRes, StaticCache},
-            util::HttpRecvResult};
+            util::{HttpRecvResult, trim_path}};
 
 /*
 * Http文件加载
@@ -266,14 +266,21 @@ impl FileLoad {
                                  is_transform: bool,
                                  is_only_if_cached: bool,
                                  max_age: usize) -> Self {
-        FileLoad {
-            root: dir.into(),
-            cache,
-            is_cache,
-            is_store,
-            is_transform,
-            is_only_if_cached,
-            max_age: max_age as u64,
+        match trim_path(dir) {
+            Err(e) => {
+                panic!("Create Http File Load Failed, reason: {:?}", e);
+            },
+            Ok(root) => {
+                FileLoad {
+                    root,
+                    cache,
+                    is_cache,
+                    is_store,
+                    is_transform,
+                    is_only_if_cached,
+                    max_age: max_age as u64,
+                }
+            },
         }
     }
 }

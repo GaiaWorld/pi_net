@@ -17,7 +17,7 @@ use crate::util::{HttpSender, HttpRecvResult, HttpReceiver, channel};
 /*
 * Http响应体，默认最大缓冲区
 */
-const MAX_HTTP_RESP_BODY_BUFFER_LEN: usize = 0xff;
+const MAX_HTTP_RESP_BODY_BUFFER_LEN: usize = 0xffff;
 
 /*
 * Http响应启始行

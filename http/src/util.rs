@@ -1,5 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
+use std::path::PathBuf;
 use std::future::Future;
 use std::result::Result as GenResult;
 use std::task::{Context, Poll, Waker};
@@ -183,4 +184,17 @@ pub fn channel<S, W, T: Send + Sync + 'static>(handle: SocketHandle<S>, waits: W
          waits,
          receiver,
     })
+}
+
+/*
+* 路径修剪
+*/
+pub fn trim_path<P: Into<PathBuf>>(path: P) -> Result<PathBuf> {
+    let input: PathBuf = path.into();
+    let mut path = PathBuf::new();
+    for e in input.iter() {
+        path = path.join(e);
+    }
+
+    Ok(path)
 }
