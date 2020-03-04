@@ -670,12 +670,14 @@ fn async_load_files<S: Socket, W: AsyncIOWait>(resp: &HttpResponse<S, W>, files:
                                     //为文件内容增加元信息
                                     let file_path_bin = file_path_copy.to_str().unwrap().as_bytes();
                                     let file_path_bin_len = file_path_bin.len() - root_len;
-                                    bin.put_u16_le(file_path_bin_len as u16);
-                                    bin.put_slice(&file_path_bin[root_len..]);
-                                    bin.put_u32_le(bin_size as u32);
+                                    let mut part = Vec::with_capacity(file_path_bin_len + 6);
+                                    part.put_u16_le(file_path_bin_len as u16);
+                                    part.put_slice(&file_path_bin[root_len..]);
+                                    part.put_u32_le(bin_size as u32);
                                     let part_len = 6 + file_path_bin_len as u64 + bin_size;
+                                    part.put(bin);
 
-                                    if let Err(e) = resp_handler_copy.write_index(index, bin) {
+                                    if let Err(e) = resp_handler_copy.write_index(index, part) {
                                         warn!("!!!> Http Body Mut Write Index Failed, index: {:?}, file: {:?}, reason: {:?}", index, file_path_copy, e);
                                     } else {
                                         //发送文件成功，则减去当前文件的大小
