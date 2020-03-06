@@ -167,19 +167,18 @@ impl SharedWSClient {
 
     //发送websocket close消息
     pub fn close(&self, code: u16, reason: &str) -> Result<()> {
-        let mut wsc = self.0.lock().unwrap();
-
-        if let WSClientStatus::Connected(_) = wsc.status {
-            if let Err(e) = wsc.client.as_mut().unwrap().send(Message::close(Some((code, reason)))) {
-                Err(Error::new(ErrorKind::InvalidData, e.to_string()))
-            } else {
+        let mut r = Ok(());
+        {
+            let mut wsc = self.0.lock().unwrap();
+            if let WSClientStatus::Connected(_) = wsc.status {
+                if let Err(e) = wsc.client.as_mut().unwrap().send(Message::close(Some((code, reason)))) {
+                    r = Err(Error::new(ErrorKind::InvalidData, e.to_string()))
+                }
                 wsc.status = WSClientStatus::Closed(now_second());
-                WSC_TABLE.write().unwrap().remove(&self.get_url());
-                Ok(())
             }
-        } else {
-            Ok(())
         }
+        WSC_TABLE.write().unwrap().remove(&self.get_url());
+        r
     }
 
     //异步接收websocket消息，通过抢占式控制，可以在超时后退出阻塞的接收线程
