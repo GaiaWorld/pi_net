@@ -58,20 +58,14 @@ impl SharedWSClient {
         }
 
         //连接指定url的客户端不存在，则构建
-        match ClientBuilder::new(url) {
-            Err(e) => Err(Error::new(ErrorKind::AddrNotAvailable, e)),
-            Ok(builder) => {
-                let wsc = SharedWSClient(Arc::new(Mutex::new(WSClient {
-                    status: WSClientStatus::NotConnected,
-                    url: url.to_string(),
-                    builder: Some(builder),
-                    client: None,
-                })), Arc::new(AtomicU32::new(1)), create_net_task_queue(ASYNC_WSC_PRIORITY, false));
-                WSC_TABLE.write().unwrap().insert(url_str, wsc.clone());
+        let wsc = SharedWSClient(Arc::new(Mutex::new(WSClient {
+            status: WSClientStatus::NotConnected,
+            url: url.to_string(),
+            client: None,
+        })), Arc::new(AtomicU32::new(1)), create_net_task_queue(ASYNC_WSC_PRIORITY, false));
+        WSC_TABLE.write().unwrap().insert(url_str, wsc.clone());
 
-                Ok(wsc)
-            },
-        }
+        Ok(wsc)
     }
 
     //检查当前客户端状态
@@ -101,17 +95,18 @@ impl SharedWSClient {
             return Err(Error::new(ErrorKind::AlreadyExists, "wsc connect already exists"));
         }
 
-        if let Some(builder) = wsc.builder.take() {
-            match builder.connect() {
-                Err(e) => Err(Error::new(ErrorKind::ConnectionRefused, e.to_string())),
-                Ok(client) => {
-                    wsc.status = WSClientStatus::Connected(now_second());
-                    wsc.client = Some(client);
-                    Ok(())
-                },
-            }
-        } else {
-            Err(Error::new(ErrorKind::ConnectionAborted, "invalid wsc builder"))
+        match ClientBuilder::new(wsc.url.as_str()) {
+            Err(e) => Err(Error::new(ErrorKind::AddrNotAvailable, e)),
+            Ok(builder) => {
+                match builder.connect() {
+                    Err(e) => Err(Error::new(ErrorKind::ConnectionRefused, e.to_string())),
+                    Ok(client) => {
+                        wsc.status = WSClientStatus::Connected(now_second());
+                        wsc.client = Some(client);
+                        Ok(())
+                    },
+                }
+            },
         }
     }
 
@@ -261,7 +256,6 @@ impl WSClientStatus {
 struct WSClient {
     status:     WSClientStatus,                                                 //客户端状态
     url:        String,                                                         //对端url
-    builder:    Option<ClientBuilder>,                                          //连接构造器
     client:     Option<Client<Box<dyn NetworkStream + Sync + Send + 'static>>>, //内部客户端
 }
 
