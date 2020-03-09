@@ -236,19 +236,18 @@ impl SharedMqttClient {
     pub fn disconnect(&self, callback: Arc<Fn(Result<Option<Vec<u8>>>) -> bool>) {
         let client = self.clone();
         let request = Box::new(move |_lock| {
-            match send_packet(&client, &Packet::Disconnect) {
-                Err(e) => {
+            let r = send_packet(&client, &Packet::Disconnect);
+               
+            //关闭连接消息发送成功，则立即关闭连接
+            if let Err(e) = client.0.connect.close(1000, "mqtt disconnect") {
+                //关闭连接错误
+                callback(Err(e));
+            } else {
+                //关闭连接成功
+                if let Err(e) = r {
                     callback(Err(e));
-                },
-                Ok(_) => {
-                    //关闭连接消息发送成功，则立即关闭连接
-                    if let Err(e) = client.0.connect.close(1000, "mqtt disconnect") {
-                        //关闭连接错误
-                        callback(Err(e));
-                    } else {
-                        //关闭连接成功
-                        callback(Ok(None));
-                    }
+                } else {
+                    callback(Ok(None));
                 }
             }
         });
