@@ -112,57 +112,82 @@ impl SharedWSClient {
 
     //发送websocket文本消息
     pub fn send_text(&self, text: &str) -> Result<()> {
-        let mut wsc = self.0.lock().unwrap();
-
-        if let WSClientStatus::Connected(_) = wsc.status {
-            match Message::new(Opcode::Text, text) {
-                Err(e) => Err(Error::new(ErrorKind::InvalidData, e)),
-                Ok(msg) => {
-                    if let Err(e) = wsc.client.as_mut().unwrap().send(msg) {
-                        Err(Error::new(ErrorKind::InvalidData, e.to_string()))
-                    } else {
-                        Ok(())
-                    }
-                },
+        let mut r = Ok(());
+        {
+            let mut wsc = self.0.lock().unwrap();
+            if let WSClientStatus::Connected(_) = wsc.status {
+                match Message::new(Opcode::Text, text) {
+                    Err(e) => {
+                        wsc.status = WSClientStatus::Closed(now_second());
+                        r = Err(Error::new(ErrorKind::InvalidData, e));
+                    },
+                    Ok(msg) => {
+                        if let Err(e) = wsc.client.as_mut().unwrap().send(msg) {
+                            wsc.status = WSClientStatus::Closed(now_second());
+                            r = Err(Error::new(ErrorKind::InvalidData, e.to_string()))
+                        }
+                    },
+                }
+            } else {
+                r = Err(Error::new(ErrorKind::NotConnected, "wsc connect closed"));
             }
-        } else {
-            Err(Error::new(ErrorKind::NotConnected, "wsc connect closed"))
         }
+
+        if r.is_err() {
+            WSC_TABLE.write().unwrap().remove(&self.get_url());
+        }
+        r
     }
 
     //发送websocket二进制消息
     pub fn send_bin(&self, bin: Vec<u8>) -> Result<()> {
-        let mut wsc = self.0.lock().unwrap();
-
-        if let WSClientStatus::Connected(_) = wsc.status {
-            match Message::new(Opcode::Binary, bin) {
-                Err(e) => Err(Error::new(ErrorKind::InvalidData, e)),
-                Ok(msg) => {
-                    if let Err(e) = wsc.client.as_mut().unwrap().send(msg) {
-                        Err(Error::new(ErrorKind::InvalidData, e.to_string()))
-                    } else {
-                        Ok(())
-                    }
-                },
+        let mut r = Ok(());
+        {
+            let mut wsc = self.0.lock().unwrap();
+            if let WSClientStatus::Connected(_) = wsc.status {
+                match Message::new(Opcode::Binary, bin) {
+                    Err(e) => {
+                        wsc.status = WSClientStatus::Closed(now_second());
+                        r = Err(Error::new(ErrorKind::InvalidData, e));
+                    },
+                    Ok(msg) => {
+                        if let Err(e) = wsc.client.as_mut().unwrap().send(msg) {
+                            //发送异常，则立即关闭当前客户端
+                            wsc.status = WSClientStatus::Closed(now_second());
+                            r = Err(Error::new(ErrorKind::InvalidData, e.to_string()))
+                        }
+                    },
+                }
+            } else {
+                r = Err(Error::new(ErrorKind::NotConnected, "wsc connect closed"));
             }
-        } else {
-            Err(Error::new(ErrorKind::NotConnected, "wsc connect closed"))
         }
+
+        if r.is_err() {
+            WSC_TABLE.write().unwrap().remove(&self.get_url());
+        }
+        r
     }
 
     //发送websocket ping消息
     pub fn ping(&self, bin: Vec<u8>) -> Result<()> {
-        let mut wsc = self.0.lock().unwrap();
-
-        if let WSClientStatus::Connected(_) = wsc.status {
-            if let Err(e) = wsc.client.as_mut().unwrap().send(Message::ping(bin)) {
-                Err(Error::new(ErrorKind::InvalidData, e.to_string()))
+        let mut r = Ok(());
+        {
+            let mut wsc = self.0.lock().unwrap();
+            if let WSClientStatus::Connected(_) = wsc.status {
+                if let Err(e) = wsc.client.as_mut().unwrap().send(Message::ping(bin)) {
+                    wsc.status = WSClientStatus::Closed(now_second());
+                    r = Err(Error::new(ErrorKind::InvalidData, e.to_string()));
+                }
             } else {
-                Ok(())
+                r = Err(Error::new(ErrorKind::NotConnected, "wsc connect closed"));
             }
-        } else {
-            Err(Error::new(ErrorKind::NotConnected, "wsc connect closed"))
         }
+
+        if r.is_err() {
+            WSC_TABLE.write().unwrap().remove(&self.get_url());
+        }
+        r
     }
 
     //发送websocket close消息
