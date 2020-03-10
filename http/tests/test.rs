@@ -38,7 +38,7 @@ use tcp::connect::TcpSocket;
 use tcp::tls_connect::TlsSocket;
 
 use http::{server::HttpListenerFactory,
-           virtual_host::{VirtualHostTab, VirtualHost},
+           virtual_host::{VirtualHostTab, VirtualHost, VirtualHostPool},
            gateway::GatewayContext,
            route::HttpRoute,
            middleware::{MiddlewareResult, Middleware, MiddlewareChain},
@@ -55,7 +55,6 @@ use http::{server::HttpListenerFactory,
            request::HttpRequest,
            response::{ResponseHandler, HttpResponse},
            util::HttpRecvResult};
-use http::virtual_host::VirtualHostPool;
 
 #[test]
 fn test_regex() {
