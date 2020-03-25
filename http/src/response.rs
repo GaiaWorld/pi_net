@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::str::FromStr;
 use std::io::{Error, Result, ErrorKind};
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicIsize, Ordering};
 
 use bytes::BufMut;
 use https::{status::StatusCode,
@@ -9,7 +9,6 @@ use https::{status::StatusCode,
             header::{HeaderMap, HeaderName, HeaderValue}};
 use parking_lot::Mutex;
 
-use gray::GrayVersion;
 use tcp::driver::{Socket, SocketHandle, AsyncIOWait};
 
 use crate::util::{HttpSender, HttpRecvResult, HttpReceiver, channel};
@@ -23,8 +22,8 @@ const MAX_HTTP_RESP_BODY_BUFFER_LEN: usize = 0xffff;
 * Http响应启始行
 */
 pub struct StartLine {
-    status:     StatusCode, //响应状态码
-    version:    Version,    //响应协议版本
+    status:     Arc<AtomicU16>, //响应状态码
+    version:    Version,        //响应协议版本
 }
 
 /*
@@ -121,6 +120,7 @@ impl<S: Socket, W: AsyncIOWait> RespBody<S, W> {
 * Http响应句柄
 */
 pub struct ResponseHandler<S: Socket> {
+    status:     Arc<AtomicU16>,                 //Http响应状态码
     headers:    Arc<Mutex<HeaderMap>>,          //Http响应头
     producor:   HttpSender<S, (u64, Vec<u8>)>,  //Http响应体生产者
 }
@@ -131,6 +131,7 @@ unsafe impl<S: Socket> Sync for ResponseHandler<S> {}
 impl<S: Socket> Clone for ResponseHandler<S> {
     fn clone(&self) -> Self {
         ResponseHandler {
+            status: self.status.clone(),
             headers: self.headers.clone(),
             producor: self.producor.clone(),
         }
@@ -139,12 +140,19 @@ impl<S: Socket> Clone for ResponseHandler<S> {
 
 impl<S: Socket> ResponseHandler<S> {
     //构建Http响应句柄
-    pub fn new(headers: Arc<Mutex<HeaderMap>>,
+    pub fn new(status: Arc<AtomicU16>,
+               headers: Arc<Mutex<HeaderMap>>,
                producor: HttpSender<S, (u64, Vec<u8>)>) -> Self {
         ResponseHandler {
+            status,
             headers,
             producor,
         }
+    }
+
+    //线程安全的设置Http状态码
+    pub fn status(&self, status: u16) {
+        self.status.store(status, Ordering::Relaxed);
     }
 
     //线程安全的增加Http请求头
@@ -191,7 +199,7 @@ impl<S: Socket, W: AsyncIOWait> From<HttpResponse<S, W>> for Vec<u8> {
 
         if let Some(start) = &resp.start {
             //当前Http响应为数据块响应，则序列化Http响应启始行
-            buf.put(format!("{:?} {}\r\n", &start.version, &start.status).into_bytes());
+            buf.put(format!("{:?} {}\r\n", &start.version, &start.status.load(Ordering::Relaxed)).into_bytes());
         }
 
         //序列化Http响应头
@@ -219,7 +227,7 @@ impl<S: Socket, W: AsyncIOWait> HttpResponse<S, W> {
     //构建空响应体的Http响应
     pub fn empty(handle: SocketHandle<S>, waits: W) -> Self {
         let start = Some(StartLine {
-            status: StatusCode::default(),
+            status: Arc::new(AtomicU16::new(StatusCode::default().as_u16())),
             version: Version::HTTP_11,
         });
 
@@ -239,8 +247,9 @@ impl<S: Socket, W: AsyncIOWait> HttpResponse<S, W> {
             panic!("Invalid HttpResponse, reason: invalid buffer len of response body, len: {:?}", size);
         }
 
+        let status = Arc::new(AtomicU16::new(StatusCode::default().as_u16()));
         let start = Some(StartLine {
-            status: StatusCode::default(),
+            status: status.clone(),
             version: Version::HTTP_11,
         });
         let headers = Arc::new(Mutex::new(HeaderMap::new()));
@@ -249,7 +258,7 @@ impl<S: Socket, W: AsyncIOWait> HttpResponse<S, W> {
             consumer,
             buf: None,
         };
-        let handler = ResponseHandler::new(headers.clone(), producor);
+        let handler = ResponseHandler::new(status, headers.clone(), producor);
 
         HttpResponse {
             handle,
@@ -263,13 +272,14 @@ impl<S: Socket, W: AsyncIOWait> HttpResponse<S, W> {
 
     //构建基于流的Http后续响应，一般通过流方式返回，首先会返回一个空响应体的响应，然后返回后续的流响应
     pub fn stream(handle: SocketHandle<S>, waits: W, size: usize) -> Self {
+        let status = Arc::new(AtomicU16::new(StatusCode::default().as_u16()));
         let headers = Arc::new(Mutex::new(HeaderMap::new()));
         let (producor, consumer) = channel::<S, W, (u64, Vec<u8>)>(handle.clone(), waits.clone(), size);
         let body = RespBody {
             consumer,
             buf: None,
         };
-        let handler = ResponseHandler::new(headers.clone(), producor);
+        let handler = ResponseHandler::new(status, headers.clone(), producor);
 
         HttpResponse {
             handle,
@@ -293,10 +303,8 @@ impl<S: Socket, W: AsyncIOWait> HttpResponse<S, W> {
 
     //设置Http响应状态码
     pub fn status(&mut self, status_code: u16) -> &mut Self {
-        if let Ok(status) = StatusCode::from_u16(status_code) {
-            if let Some(start) = &mut self.start {
-                start.status = status;
-            }
+        if let Some(start) = &mut self.start {
+            start.status.store(status_code, Ordering::Relaxed);
         }
 
         self

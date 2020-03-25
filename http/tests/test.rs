@@ -395,6 +395,7 @@ fn handle<S: Socket>(env: Arc<dyn GrayVersion>,
         println!("!!!!!!http gateway handle, msg: {:?}", msg.0.borrow());
 
         //处理Http响应
+        resp_handler.status(200);
         resp_handler.header("Port_Test", "true");
         if let Err(e) = resp_handler.write(Vec::from("Hello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello Http\n".as_bytes())) {
             println!("!!!!!!write body failed, reason: {:?}", e);
