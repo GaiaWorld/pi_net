@@ -118,12 +118,18 @@ impl SharedWSClient {
             if let WSClientStatus::Connected(_) = wsc.status {
                 match Message::new(Opcode::Text, text) {
                     Err(e) => {
-                        wsc.status = WSClientStatus::Closed(now_second());
+                        #[cfg(any(windows))]
+                        {
+                            wsc.status = WSClientStatus::Closed(now_second());
+                        }
                         r = Err(Error::new(ErrorKind::InvalidData, e));
                     },
                     Ok(msg) => {
                         if let Err(e) = wsc.client.as_mut().unwrap().send(msg) {
-                            wsc.status = WSClientStatus::Closed(now_second());
+                            #[cfg(any(windows))]
+                            {
+                                wsc.status = WSClientStatus::Closed(now_second());
+                            }
                             r = Err(Error::new(ErrorKind::InvalidData, e.to_string()))
                         }
                     },
@@ -133,9 +139,13 @@ impl SharedWSClient {
             }
         }
 
-        if r.is_err() {
-            WSC_TABLE.write().unwrap().remove(&self.get_url());
+        #[cfg(any(windows))]
+        {
+            if r.is_err() {
+                WSC_TABLE.write().unwrap().remove(&self.get_url());
+            }
         }
+        
         r
     }
 
@@ -147,13 +157,19 @@ impl SharedWSClient {
             if let WSClientStatus::Connected(_) = wsc.status {
                 match Message::new(Opcode::Binary, bin) {
                     Err(e) => {
-                        wsc.status = WSClientStatus::Closed(now_second());
+                        #[cfg(any(windows))]
+                        {
+                            wsc.status = WSClientStatus::Closed(now_second());
+                        }
                         r = Err(Error::new(ErrorKind::InvalidData, e));
                     },
                     Ok(msg) => {
                         if let Err(e) = wsc.client.as_mut().unwrap().send(msg) {
-                            //发送异常，则立即关闭当前客户端
-                            wsc.status = WSClientStatus::Closed(now_second());
+                            #[cfg(any(windows))]
+                            {
+                                //发送异常，则立即关闭当前客户端
+                                wsc.status = WSClientStatus::Closed(now_second());
+                            }
                             r = Err(Error::new(ErrorKind::InvalidData, e.to_string()))
                         }
                     },
@@ -163,8 +179,11 @@ impl SharedWSClient {
             }
         }
 
-        if r.is_err() {
-            WSC_TABLE.write().unwrap().remove(&self.get_url());
+        #[cfg(any(windows))]
+        {
+            if r.is_err() {
+                WSC_TABLE.write().unwrap().remove(&self.get_url());
+            }
         }
         r
     }
@@ -176,7 +195,11 @@ impl SharedWSClient {
             let mut wsc = self.0.lock().unwrap();
             if let WSClientStatus::Connected(_) = wsc.status {
                 if let Err(e) = wsc.client.as_mut().unwrap().send(Message::ping(bin)) {
-                    wsc.status = WSClientStatus::Closed(now_second());
+                    #[cfg(any(windows))]
+                    {
+                        //发送异常，则立即关闭当前客户端
+                        wsc.status = WSClientStatus::Closed(now_second());
+                    }
                     r = Err(Error::new(ErrorKind::InvalidData, e.to_string()));
                 }
             } else {
@@ -184,8 +207,11 @@ impl SharedWSClient {
             }
         }
 
-        if r.is_err() {
-            WSC_TABLE.write().unwrap().remove(&self.get_url());
+        #[cfg(any(windows))]
+        {
+            if r.is_err() {
+                WSC_TABLE.write().unwrap().remove(&self.get_url());
+            }
         }
         r
     }
