@@ -71,10 +71,8 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for UploadFile 
                 match map.remove("content") {
                     Some(SGenType::Str(str)) => {
                         content = str.into_bytes();
-                        println!("!!!!!!upload str, len: {:?}", content.len());
                     },
                     Some(SGenType::Bin(bin)) => {
-                        println!("!!!!!!upload bin, len: {:?}", bin.len());
                         content = bin;
                     },
                     _ => (),

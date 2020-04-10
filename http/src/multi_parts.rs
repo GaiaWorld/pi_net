@@ -281,7 +281,6 @@ fn parse_part_headers_body<'a>(context: &'a mut GatewayContext, part: &'a [u8]) 
                                         //表示当前部分的体数据有指定类型
                                         if let Some(name_key) = name_key.take() {
                                             if let Ok(mime) = Mime::from_str(value_str) {
-                                                println!("!!!!!!mime: {:?}", mime);
                                                 if mime.type_() == AUDIO
                                                     || mime.type_() == VIDEO
                                                     || mime.type_() == IMAGE
