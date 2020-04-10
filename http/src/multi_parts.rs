@@ -10,8 +10,13 @@ use url::form_urlencoded;
 use mime::{MULTIPART,
            FORM_DATA,
            BOUNDARY,
+           AUDIO,
+           VIDEO,
+           IMAGE,
+           FONT,
            APPLICATION,
            OCTET_STREAM,
+           PDF,
            Mime,
            Name};
 use twoway::{find_bytes, rfind_bytes};
@@ -276,8 +281,13 @@ fn parse_part_headers_body<'a>(context: &'a mut GatewayContext, part: &'a [u8]) 
                                         //表示当前部分的体数据有指定类型
                                         if let Some(name_key) = name_key.take() {
                                             if let Ok(mime) = Mime::from_str(value_str) {
-                                                if mime.type_() == APPLICATION
-                                                    && (mime.subtype() == OCTET_STREAM || mime.subtype().as_str() == X_MSDOWNLOAD_MIME_SUBTYPE) {
+                                                println!("!!!!!!mime: {:?}", mime);
+                                                if mime.type_() == AUDIO
+                                                    || mime.type_() == VIDEO
+                                                    || mime.type_() == IMAGE
+                                                    || mime.type_() == FONT
+                                                    || (mime.type_() == APPLICATION
+                                                    && (mime.subtype() == OCTET_STREAM || mime.subtype() == PDF || mime.subtype().as_str() == X_MSDOWNLOAD_MIME_SUBTYPE)) {
                                                     //写入二进制的体数据
                                                     context_parts.insert(name_key, SGenType::Bin(Vec::from(&part[offset..(part.len() - MULTI_PARTS_LINE_BREAK.len())])));
                                                 } else {
