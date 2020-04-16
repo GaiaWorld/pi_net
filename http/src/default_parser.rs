@@ -81,17 +81,8 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for DefaultPars
                             if let Some(body) = request.body().await {
                                 let opt: JsonResult<Value> = serde_json::from_slice(body);
                                 if let Ok(json) = opt {
-                                    if json.is_object() {
-                                        //Json对象，则将对象返列化到参数表
-                                        if let Some(map) = json.as_object() {
-                                            for (key, value) in map {
-                                                context.as_params().borrow_mut().insert(key.clone(), SGenType::Str(value.to_string()));
-                                            }
-                                        }
-                                    } else {
-                                        //非Json对象，则直接写入关键字为空串，值为Json字符串的参数
-                                        context.as_params().borrow_mut().insert("".to_string(), SGenType::Str(String::from_utf8_lossy(body).to_string()));
-                                    }
+                                    //Json对象，则直接写入关键字为空串，值为Json字符串的参数
+                                    context.as_params().borrow_mut().insert("".to_string(), SGenType::Str(json.to_string()));
                                 }
                             }
                         } else if mime.type_() == APPLICATION && mime.subtype() == OCTET_STREAM {
