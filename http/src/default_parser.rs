@@ -6,7 +6,7 @@ use url::form_urlencoded;
 use mime::{APPLICATION, WWW_FORM_URLENCODED, JSON, OCTET_STREAM, TEXT, CHARSET, UTF_8, Mime};
 use https::{header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, CONTENT_LENGTH}, StatusCode};
 use flate2::{Compression, FlushCompress, Compress, Status, write::GzEncoder};
-use serde_json::{Result as JsonResult, Value};
+use serde_json::{Result as JsonResult, Map, Value};
 use futures::future::{FutureExt, BoxFuture};
 use crossbeam_channel::{Sender, Receiver, unbounded, TryRecvError};
 
@@ -18,6 +18,7 @@ use crate::{gateway::GatewayContext,
             request::HttpRequest,
             response::HttpResponse,
             util::HttpRecvResult};
+use hash::XHashMap;
 
 /*
 * 默认支持的压缩算法
@@ -84,11 +85,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for DefaultPars
                                         //Json对象，则将对象返列化到参数表
                                         if let Some(map) = json.as_object() {
                                             for (key, value) in map {
-                                                if let Some(val) = value.as_str() {
-                                                    context.as_params().borrow_mut().insert(key.clone(), SGenType::Str(val.to_string()));
-                                                } else {
-                                                    context.as_params().borrow_mut().insert(key.clone(), SGenType::Str("".to_string()));
-                                                }
+                                                context.as_params().borrow_mut().insert(key.clone(), SGenType::Str(value.to_string()));
                                             }
                                         }
                                     } else {
