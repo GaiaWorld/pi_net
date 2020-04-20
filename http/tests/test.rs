@@ -483,6 +483,7 @@ fn test_http_hosts() {
     let mut chain = MiddlewareChain::new();
     chain.push_back(cors_handler.clone());
     chain.push_back(parser);
+    chain.push_back(multi_parts);
     chain.push_back(port);
     chain.finish();
     let port_middleware = Arc::new(chain);
@@ -608,6 +609,7 @@ fn test_https_hosts() {
     let mut chain = MiddlewareChain::new();
     chain.push_back(cors_handler.clone());
     chain.push_back(parser);
+    chain.push_back(multi_parts);
     chain.push_back(port);
     chain.finish();
     let port_middleware = Arc::new(chain);

@@ -1,7 +1,7 @@
 use std::sync::Arc;
+use std::str::FromStr;
 use std::cell::RefCell;
 use std::net::SocketAddr;
-
 use std::collections::hash_map::Entry;
 use std::io::{Error, Result, ErrorKind};
 
@@ -82,10 +82,26 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for HttpPort<S>
         let future = async move {
             //处理请求
             let uid = req.get_handle().get_uid(); //获取当前http连接的唯一id
-            let mut gray = self.get_gray(); //获取当前灰度
+            let gray = self.get_gray(); //获取当前灰度
             let remote_addr = req.get_handle().get_remote().clone(); //获取当前http连接的对端地址
             let headers = req.share_headers(); //获取当前http请求头
             let args = context.as_params().clone(); //获取http请求参数或请求体
+
+            //检查是否有表单分段数据
+            if !context.as_parts().is_empty() {
+                //请求中有表单分段数据，则填充到参数中
+                let parts = context.as_mut_parts();
+                let keys = parts
+                    .keys()
+                    .map(|key| key.clone())
+                    .collect::<Vec<String>>();
+                let map = &mut *args.borrow_mut();
+                for key in keys {
+                    if let Some(value) = parts.remove(&key) {
+                        map.insert(key, value);
+                    }
+                }
+            }
 
             let resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
             if let Some(resp_handler) = resp.get_response_handler() {
