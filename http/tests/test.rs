@@ -424,7 +424,7 @@ fn test_http_hosts() {
     StaticCache::run_collect(cache.clone(), "test http cache".to_string(), 10000);
 
     //构建中间件
-    let cors_handler = CORSHandler::new("OPTIONS, GET, POST".to_string(), false);
+    let cors_handler = CORSHandler::new("OPTIONS, GET, POST".to_string(), None);
     cors_handler.allow_origin("http".to_string(), "msg.highapp.com".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     cors_handler.allow_origin("http".to_string(), "127.0.0.1".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     let cors_handler = Arc::new(cors_handler);
@@ -550,7 +550,7 @@ fn test_https_hosts() {
     StaticCache::run_collect(cache.clone(), "test https cache".to_string(), 10000);
 
     //构建中间件
-    let cors_handler = CORSHandler::new("OPTIONS, GET, POST".to_string(), false);
+    let cors_handler = CORSHandler::new("OPTIONS, GET, POST".to_string(), None);
     cors_handler.allow_origin("https".to_string(), "msg.highapp.com".to_string(), 443, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     cors_handler.allow_origin("https".to_string(), "127.0.0.1".to_string(), 443, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     let cors_handler = Arc::new(cors_handler);

@@ -38,10 +38,10 @@ const ACCESS_CONTROL_ALLOW_ANY_ORIGIN_HEADER_VALUE: &str = "*";
 * Http的CORS请求处理器
 */
 pub struct CORSHandler {
-    default_methods:        String,                                                                     //默认允许的Http请求Method
-    is_allow_any_origin:    bool,                                                                       //是否允许任意跨域访问
-    allow_origins:          RwLock<XHashMap<Origin, (Vec<String>, Option<String>, Option<usize>)>>,     //允许的跨域请求源表
-    allowed:                RwLock<XHashMap<String, Option<(usize, SystemTime)>>>,                      //已允许的跨域请求
+    default_methods:            String,                                                                     //默认允许的Http请求Method
+    allow_any_origin_max_age:   Option<usize>,                                                              //是否允许任意跨域访问
+    allow_origins:              RwLock<XHashMap<Origin, (Vec<String>, Option<String>, Option<usize>)>>,     //允许的跨域请求源表
+    allowed:                    RwLock<XHashMap<String, Option<(usize, SystemTime)>>>,                      //已允许的跨域请求
 }
 
 unsafe impl Send for CORSHandler {}
@@ -69,7 +69,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for CORSHandler
         let future = async move {
             if let Some(allow_origin) = req.headers().get(ORIGIN) {
                 //当前Http请求需要返回CORS简单验证后的响应头
-                if self.is_allow_any_origin {
+                if self.allow_any_origin_max_age.is_some() {
                     //允许任意源的跨域访问
                     response.header(ACCESS_CONTROL_ALLOW_ORIGIN.as_str(), ACCESS_CONTROL_ALLOW_ANY_ORIGIN_HEADER_VALUE);
                 } else {
@@ -86,10 +86,10 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for CORSHandler
 
 impl CORSHandler {
     //构建Http的CORS请求处理器
-    pub fn new(default_methods: String, is_allow_any_origin: bool) -> Self {
+    pub fn new(default_methods: String, allow_any_origin_max_age: Option<usize>) -> Self {
         CORSHandler {
             default_methods,
-            is_allow_any_origin,
+            allow_any_origin_max_age,
             allow_origins: RwLock::new(XHashMap::default()),
             allowed: RwLock::new(XHashMap::default()),
         }
@@ -117,19 +117,22 @@ impl CORSHandler {
                 }
 
                 let mut allow_headers = Vec::with_capacity(headers.len());
-                for header in headers {
-                    if header.trim().to_lowercase() == "" {
-                        //如果允许的跨域请求头为空，则忽略
-                        continue;
-                    }
+                if headers.len() > 0 {
+                    //允许指定的跨域请求头
+                    for header in headers {
+                        if header.trim().to_lowercase() == "" {
+                            //如果允许的跨域请求头为空，则忽略
+                            continue;
+                        }
 
-                    match HeaderName::from_str(header.as_str()) {
-                        Err(e) => {
-                            return Err(Error::new(ErrorKind::AddrNotAvailable, format!("add allow origin failed, header: {:?}, reason: {:?}", header, e)));
-                        },
-                        Ok(allow_header) => {
-                            allow_headers.push(allow_header.to_string());
-                        },
+                        match HeaderName::from_str(header.as_str()) {
+                            Err(e) => {
+                                return Err(Error::new(ErrorKind::AddrNotAvailable, format!("add allow origin failed, header: {:?}, reason: {:?}", header, e)));
+                            },
+                            Ok(allow_header) => {
+                                allow_headers.push(allow_header.to_string());
+                            },
+                        }
                     }
                 }
 
@@ -200,14 +203,15 @@ fn handle_options_request<S: Socket, W: AsyncIOWait>(handler: &CORSHandler,
                 },
                 Ok(key) => {
                     //解析请求的源成功
-                    if handler.is_allow_any_origin {
+                    if let Some(max_age) = handler.allow_any_origin_max_age {
                         //允许任意源的跨域访问
                         resp.header(ACCESS_CONTROL_ALLOW_ORIGIN.as_str(), ACCESS_CONTROL_ALLOW_ANY_ORIGIN_HEADER_VALUE);
                         resp.header(ACCESS_CONTROL_ALLOW_METHODS.as_str(), handler.default_methods.as_str());
-                        if let Some(_) = req.headers().get(ACCESS_CONTROL_REQUEST_HEADERS) {
-                            //当前CORS请求中有Access-Control-Request-Headers请求头，则设置对应的空响应头
-                            resp.header(ACCESS_CONTROL_ALLOW_HEADERS.as_str(), "");
+                        if let Some(value) = req.headers().get(ACCESS_CONTROL_REQUEST_HEADERS) {
+                            //当前CORS请求中有Access-Control-Request-Headers请求头，则设置对应的响应头
+                            resp.header(ACCESS_CONTROL_ALLOW_HEADERS.as_str(), String::from_utf8_lossy(value.as_bytes()).as_ref());
                         }
+                        resp.header(ACCESS_CONTROL_MAX_AGE.as_str(), max_age.to_string().as_str());
                     } else {
                         //允许指定源的跨域访问
                         let allow_origin = String::from_utf8_lossy(origin.as_bytes());
@@ -227,12 +231,14 @@ fn handle_options_request<S: Socket, W: AsyncIOWait>(handler: &CORSHandler,
                             //允许客户端指定的源进行指定的跨域访问，则设置对应的响应头
                             resp.header(ACCESS_CONTROL_ALLOW_ORIGIN.as_str(), allow_origin.as_ref());
                             resp.header(ACCESS_CONTROL_ALLOW_METHODS.as_str(), &allow_methods.join(","));
-                            if let Some(_) = req.headers().get(ACCESS_CONTROL_REQUEST_HEADERS) {
+                            if let Some(value) = req.headers().get(ACCESS_CONTROL_REQUEST_HEADERS) {
                                 //当前CORS请求中有Access-Control-Request-Headers请求头，则设置对应的响应头
                                 if let Some(allow_headers) = allow_headers {
+                                    //允许指定的跨域请求头
                                     resp.header(ACCESS_CONTROL_ALLOW_HEADERS.as_str(), allow_headers);
                                 } else {
-                                    resp.header(ACCESS_CONTROL_ALLOW_HEADERS.as_str(), "");
+                                    //允许任意的跨域请求头
+                                    resp.header(ACCESS_CONTROL_ALLOW_HEADERS.as_str(), String::from_utf8_lossy(value.as_bytes()).as_ref());
                                 }
                             }
                             if let Some(max_age) = allow_max_age {
@@ -265,7 +271,7 @@ fn handle_options_request<S: Socket, W: AsyncIOWait>(handler: &CORSHandler,
 //处理简单CORS请求
 fn handle_simple_request<S: Socket, W: AsyncIOWait>(handler: &CORSHandler, req: HttpRequest<S, W>) -> MiddlewareResult<S, W> {
     if let Some(value) = req.headers().get(ORIGIN) {
-        if handler.is_allow_any_origin {
+        if handler.allow_any_origin_max_age.is_some() {
             //允许任意源的跨域访问，则继续后继中间件的处理
             return MiddlewareResult::ContinueRequest(req);
         } else {
