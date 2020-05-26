@@ -1,0 +1,16 @@
+[package]
+name = "mqtt_proxy"
+version = "0.1.0"
+authors = ["vmos <vmos@fairblock.io>"]
+edition = "2018"
+
+[dependencies]
+handler = { path = "../../pi_lib/handler" }
+mqtt = { path = "../mqtt" }
+gray = { path = "../../pi_lib/gray" }
+atom = { path = "../../pi_lib/atom" }
+log = "0.4"
+
+[dev-dependencies]
+tcp = { path = "../tcp" }
+ws = { path = "../ws" }

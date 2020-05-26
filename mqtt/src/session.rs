@@ -99,6 +99,12 @@ pub trait MqttConnect: Debug + Send + Sync + 'static {
     //获取远端地址
     fn get_remote_addr(&self) -> Option<SocketAddr>;
 
+    //判断是否是安全的连接
+    fn is_security(&self) -> bool;
+
+    //唤醒连接
+    fn wakeup(&self) -> Result<()>;
+
     //获取连接的代理会话
     fn get_session(&self) -> Option<ContextHandle<BrokerSession>>;
 
@@ -298,6 +304,22 @@ impl<S: Socket> MqttConnect for QosZeroSession<S> {
         }
 
         None
+    }
+
+    fn is_security(&self) -> bool {
+        if let Some(connect) = &self.connect {
+            return connect.is_security();
+        }
+
+        false
+    }
+
+    fn wakeup(&self) -> Result<()> {
+        if let Some(connect) = &self.connect {
+            return connect.wake();
+        }
+
+        Err(Error::new(ErrorKind::ConnectionAborted, "Wakeup connect failed, reason: connect not exist"))
     }
 
     fn get_session(&self) -> Option<ContextHandle<BrokerSession>> {

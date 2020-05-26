@@ -1,9 +1,11 @@
 use std::sync::Arc;
 use std::io::Result;
+use std::future::Future;
 use std::collections::HashMap;
 
 use bytes::BufMut;
 use fnv::FnvBuildHasher;
+use futures::future::BoxFuture;
 
 use tcp::{driver::{Socket, AsyncIOWait},
           buffer_pool::WriteBuffer,
@@ -20,7 +22,7 @@ pub trait ChildProtocol<S: Socket, H: AsyncIOWait>: Send + Sync + 'static {
     fn protocol_name(&self) -> &str;
 
     //解码子协议，返回错误将立即关闭当前连接
-    fn decode_protocol(&self, connect: WsSocket<S, H>, context: &mut WsSession) -> Result<()>;
+    fn decode_protocol(&self, connect: WsSocket<S, H>, waits: H, context: &mut WsSession) -> BoxFuture<'static, Result<()>>;
 
     //关闭子协议
     fn close_protocol(&self, connect: WsSocket<S, H>, context: WsSession, reason: Result<()>);
@@ -123,6 +125,7 @@ pub struct WsSession {
 }
 
 unsafe impl Send for WsSession {}
+unsafe impl Sync for WsSession {}
 
 impl Default for WsSession {
     fn default() -> Self {

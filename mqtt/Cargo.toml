@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 fnv = "1.0"
+futures = "0.3"
 mio = "0.6"
 mqtt311 = "0.2"
 parking_lot = "0.10"

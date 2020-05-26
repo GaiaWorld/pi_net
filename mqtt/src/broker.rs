@@ -8,7 +8,7 @@ use hash::XHashMap;
 
 use tcp::driver::Socket;
 
-use crate::{session::{MqttSession, MqttConnect, QosZeroSession}, util::{PathTree, BrokerSession}};
+use crate::{session::{MqttSession, MqttConnect, QosZeroSession}, util::{AsyncResult, PathTree, BrokerSession}};
 
 /*
 * Mqtt连接回应的系统主题
@@ -20,9 +20,9 @@ lazy_static! {
 /*
 * Mqtt代理监听器
 */
-pub trait MqttBrokerListener {
-    //处理Mqtt客户端连接事件
-    fn connected(&self, connect: Arc<dyn MqttConnect>) -> Result<()>;
+pub trait MqttBrokerListener: Send + 'static {
+    //处理Mqtt客户端已连接事件
+    fn connected(&self, connect: Arc<dyn MqttConnect>) -> AsyncResult;
 
     //处理Mqtt客户端关闭事件
     fn closed(&self, connect: Arc<dyn MqttConnect>, context: BrokerSession, reason: Result<()>);
@@ -31,9 +31,15 @@ pub trait MqttBrokerListener {
 /*
 * Mqtt代理服务
 */
-pub trait MqttBrokerService {
-    //指定Mqtt客户端请求的指定主题的服务
-    fn request(&self, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()>;
+pub trait MqttBrokerService: Send + 'static {
+    //指定Mqtt客户端订阅指定主题的服务
+    fn subscribe(&self, connect: Arc<dyn MqttConnect>, topics: Vec<(String, u8)>) -> AsyncResult;
+
+    //指定Mqtt客户端取消订阅指定主题的服务
+    fn unsubscribe(&self, connect: Arc<dyn MqttConnect>, topics: Vec<String>) -> Result<()>;
+
+    //指定Mqtt客户端发布指定主题的服务
+    fn publish(&self, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()>;
 }
 
 /*
@@ -53,6 +59,8 @@ struct SubCache<S: Socket> {
     sessions:   Vec<Arc<QosZeroSession<S>>>,    //会话表
 }
 
+unsafe impl<S: Socket> Send for SubCache<S> {}
+
 impl<S: Socket> SubCache<S> {
     //构建指定会话和retain的订阅缓存
     pub fn with_session(first: Option<Arc<QosZeroSession<S>>>, retain: Option<Publish>) -> Self {
@@ -65,11 +73,28 @@ impl<S: Socket> SubCache<S> {
 }
 
 /*
+* Mqtt监听器
+*/
+pub struct MqttListener(pub Arc<dyn MqttBrokerListener>);
+
+unsafe impl Send for MqttListener {}
+unsafe impl Sync for MqttListener {}
+
+/*
+* Mqtt服务
+*/
+pub struct MqttService(pub Arc<dyn MqttBrokerService>);
+
+unsafe impl Send for MqttService {}
+unsafe impl Sync for MqttService {}
+
+/*
 * Mqtt代理
 */
 #[derive(Clone)]
 pub struct MqttBroker<S: Socket> {
     listener:   Arc<RwLock<Option<Arc<dyn MqttBrokerListener>>>>,           //监听器，用于监听Mqtt连接和关闭事件
+    service:    Arc<RwLock<Option<Arc<dyn MqttBrokerService>>>>,            //通用主题服务
     services:   Arc<RwLock<XHashMap<String, Arc<dyn MqttBrokerService>>>>,  //服务表，保存指定主题的服务
     sessions:   Arc<RwLock<XHashMap<String, Arc<QosZeroSession<S>>>>>,      //会话表
     sub_tab:    Arc<RwLock<XHashMap<String, Arc<RwLock<SubCache<S>>>>>>,    //会话订阅表
@@ -86,6 +111,7 @@ impl<S: Socket> MqttBroker<S> {
     pub fn new() -> Self {
         MqttBroker {
             listener: Arc::new(RwLock::new(None)),
+            service: Arc::new(RwLock::new(None)),
             services: Arc::new(RwLock::new(XHashMap::default())),
             sessions: Arc::new(RwLock::new(XHashMap::default())),
             sub_tab: Arc::new(RwLock::new(XHashMap::default())),
@@ -96,8 +122,12 @@ impl<S: Socket> MqttBroker<S> {
     }
 
     //获取代理监听器
-    pub fn get_listener(&self) -> Option<Arc<dyn MqttBrokerListener>> {
-        self.listener.read().as_ref().cloned()
+    pub fn get_listener(&self) -> Option<MqttListener> {
+        if let Some(listener) = self.listener.read().as_ref() {
+            return Some(MqttListener(listener.clone()));
+        }
+
+        None
     }
 
     //注册代理监听器
@@ -105,13 +135,31 @@ impl<S: Socket> MqttBroker<S> {
         *self.listener.write() = Some(listener);
     }
 
+    //获取通用服务
+    pub fn get_service(&self) -> Option<MqttService> {
+        if let Some(service) = self.service.read().as_ref() {
+            return Some(MqttService(service.clone()));
+        }
+
+        None
+    }
+
+    //注册通用服务
+    pub fn register_service(&self, service: Arc<dyn MqttBrokerService>) {
+        *self.service.write() = Some(service);
+    }
+
     //获取指定主题的服务
-    pub fn get_service(&self, topic: &String) -> Option<Arc<dyn MqttBrokerService>> {
-        self.services.read().get(topic).cloned()
+    pub fn get_topic_service(&self, topic: &String) -> Option<MqttService> {
+        if let Some(service) = self.services.read().get(topic) {
+            return Some(MqttService(service.clone()));
+        }
+
+        None
     }
 
     //注册指定主题的服务
-    pub fn register_service(&self, topic: String, service: Arc<dyn MqttBrokerService>) {
+    pub fn register_topic_service(&self, topic: String, service: Arc<dyn MqttBrokerService>) {
         self.services.write().insert(topic, service);
     }
 

@@ -5,8 +5,8 @@ use std::io::{Error, ErrorKind, Result};
 use log::warn;
 
 use mqtt::broker::{MqttBrokerListener, MqttBrokerService};
-use mqtt::session::MqttConnect;
-use mqtt::util::BrokerSession;
+use mqtt::session::{MqttSession, MqttConnect};
+use mqtt::util::{AsyncResult, BrokerSession};
 
 use crate::connect::{BaseInnerListener, BaseInnerService, decode, BaseConnect};
 
@@ -20,18 +20,18 @@ pub struct BaseListener {
 unsafe impl Send for BaseListener {}
 
 impl MqttBrokerListener for BaseListener {
-    fn connected(&self, connect: Arc<dyn MqttConnect>) -> Result<()> {
+    fn connected(&self, connect: Arc<dyn MqttConnect>) -> AsyncResult {
         //Mqtt已连接，则初始化基础协议的连接，保存在Mqtt连接的上下文，并继续通知上层协议
         if let Some(mut handle) = connect.get_session() {
             if let Some(session) = handle.as_mut() {
                 let mut base_connect = BaseConnect::new(connect.clone());
                 let result = self.inner.connected(&mut base_connect);
                 session.get_context_mut().set::<BaseConnect>(base_connect);
-                return result;
+                return AsyncResult::with(result);
             }
         }
 
-        Err(Error::new(ErrorKind::Other, format!("base connect error, connect: {:?}, reason: init base service context failed", connect)))
+        AsyncResult::with(Err(Error::new(ErrorKind::Other, format!("base connect error, connect: {:?}, reason: init base service context failed", connect))))
     }
 
     fn closed(&self, connect: Arc<dyn MqttConnect>, mut context: BrokerSession, reason: Result<()>) {
@@ -68,7 +68,15 @@ pub struct BaseService {
 unsafe impl Send for BaseService {}
 
 impl MqttBrokerService for BaseService {
-    fn request(&self, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()> {
+    fn subscribe(&self, connect: Arc<dyn MqttConnect>, topics: Vec<(String, u8)>) -> AsyncResult {
+        AsyncResult::with(Ok(()))
+    }
+
+    fn unsubscribe(&self, connect: Arc<dyn MqttConnect>, topics: Vec<String>) -> Result<()> {
+        Ok(())
+    }
+
+    fn publish(&self, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()> {
         if let Some(mut handle) = connect.get_session() {
             if let Some(session) = handle.as_mut() {
                 if let Some(mut h) = session.get_context().get::<BaseConnect>() {

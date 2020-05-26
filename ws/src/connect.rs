@@ -151,6 +151,11 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
         Err(Error::new(ErrorKind::InvalidData, "invalid payload"))
     }
 
+    //线程安全的异步唤醒连接
+    pub fn wake(&self) -> Result<()> {
+        self.socket.wake()
+    }
+
     //线程安全的异步关闭当前连接
     pub fn close(&self, reason: Result<()>) -> Result<()> {
         close::<S, H>(&self.socket, reason)
@@ -214,7 +219,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
             if head.is_single() {
                 //数据帧，且只有单帧，则设置帧类型，并开始消息处理
                 context.set_type(head.get_type());
-                if let Err(e) = protocol.decode_protocol(Self::new(handle.clone(), window_bits), context) {
+                if let Err(e) = protocol.decode_protocol(Self::new(handle.clone(), window_bits), waits.clone(), context).await {
                     //协议处理失败，则立即关闭当前Ws连接
                     close::<S, H>(handle, Err(e));
                 }
@@ -247,7 +252,7 @@ impl<S: Socket, H: AsyncIOWait> WsSocket<S, H> {
                 return;
             } else if head.is_finish() {
                 //数据帧，当前是结束帧，则开始消息处理
-                if let Err(e) = protocol.decode_protocol(Self::new(handle.clone(), window_bits), context) {
+                if let Err(e) = protocol.decode_protocol(Self::new(handle.clone(), window_bits), waits.clone(), context).await {
                     //协议处理失败，则立即关闭当前Ws连接
                     close::<S, H>(handle, Err(e));
                 }

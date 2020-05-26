@@ -1,4 +1,5 @@
 extern crate fnv;
+extern crate futures;
 extern crate mio;
 extern crate mqtt311;
 extern crate parking_lot;
