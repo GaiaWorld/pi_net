@@ -1,6 +1,6 @@
 [workspace]
 members = [
-  #"http",
+  "http",
   "httpc",
   "https",
   "net",
