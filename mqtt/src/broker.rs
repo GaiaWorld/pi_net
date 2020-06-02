@@ -8,7 +8,8 @@ use hash::XHashMap;
 
 use tcp::driver::Socket;
 
-use crate::{session::{MqttSession, MqttConnect, QosZeroSession}, util::{AsyncResult, PathTree, BrokerSession}};
+use crate::{server::MqttBrokerProtocol,
+            session::{MqttSession, MqttConnect, QosZeroSession}, util::{AsyncResult, PathTree, BrokerSession}};
 
 /*
 * Mqtt连接回应的系统主题
@@ -22,10 +23,10 @@ lazy_static! {
 */
 pub trait MqttBrokerListener: Send + 'static {
     //处理Mqtt客户端已连接事件
-    fn connected(&self, connect: Arc<dyn MqttConnect>) -> AsyncResult;
+    fn connected(&self, protocol: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>) -> AsyncResult;
 
     //处理Mqtt客户端关闭事件
-    fn closed(&self, connect: Arc<dyn MqttConnect>, context: BrokerSession, reason: Result<()>);
+    fn closed(&self, protocol: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>, context: BrokerSession, reason: Result<()>);
 }
 
 /*
@@ -33,13 +34,13 @@ pub trait MqttBrokerListener: Send + 'static {
 */
 pub trait MqttBrokerService: Send + 'static {
     //指定Mqtt客户端订阅指定主题的服务
-    fn subscribe(&self, connect: Arc<dyn MqttConnect>, topics: Vec<(String, u8)>) -> AsyncResult;
+    fn subscribe(&self, protocol: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>, topics: Vec<(String, u8)>) -> AsyncResult;
 
     //指定Mqtt客户端取消订阅指定主题的服务
-    fn unsubscribe(&self, connect: Arc<dyn MqttConnect>, topics: Vec<String>) -> Result<()>;
+    fn unsubscribe(&self, protocol: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>, topics: Vec<String>) -> Result<()>;
 
     //指定Mqtt客户端发布指定主题的服务
-    fn publish(&self, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()>;
+    fn publish(&self, protocol: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()>;
 }
 
 /*
@@ -91,7 +92,6 @@ unsafe impl Sync for MqttService {}
 /*
 * Mqtt代理
 */
-#[derive(Clone)]
 pub struct MqttBroker<S: Socket> {
     listener:   Arc<RwLock<Option<Arc<dyn MqttBrokerListener>>>>,           //监听器，用于监听Mqtt连接和关闭事件
     service:    Arc<RwLock<Option<Arc<dyn MqttBrokerService>>>>,            //通用主题服务
@@ -105,6 +105,21 @@ pub struct MqttBroker<S: Socket> {
 
 unsafe impl<S: Socket> Send for MqttBroker<S> {}
 unsafe impl<S: Socket> Sync for MqttBroker<S> {}
+
+impl<S: Socket> Clone for MqttBroker<S> {
+    fn clone(&self) -> Self {
+        MqttBroker {
+            listener: self.listener.clone(),
+            service: self.service.clone(),
+            services: self.services.clone(),
+            sessions: self.sessions.clone(),
+            sub_tab: self.sub_tab.clone(),
+            patterns: self.patterns.clone(),
+            publics: self.publics.clone(),
+            topics: self.topics.clone(),
+        }
+    }
+}
 
 impl<S: Socket> MqttBroker<S> {
     //构建Mqtt代理

@@ -117,13 +117,17 @@ impl SocketReady {
         if ready.is_readable() && ready.is_writable() {
             self.0.store(0, Ordering::SeqCst);
         } else if ready.is_readable() {
-            self.0.fetch_update(|v| {
-                Some(v & !1)
-            }, Ordering::SeqCst, Ordering::SeqCst);
+            self.0.fetch_update(Ordering::SeqCst,
+                                Ordering::SeqCst,
+                                |v| {
+                                    Some(v & !1)
+            });
         } else if ready.is_writable() {
-            self.0.fetch_update(|v| {
-                Some(v & !2)
-            }, Ordering::SeqCst, Ordering::SeqCst);
+            self.0.fetch_update(Ordering::SeqCst,
+                                Ordering::SeqCst,
+                                |v| {
+                                    Some(v & !2)
+            });
         }
     }
 }

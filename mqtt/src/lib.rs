@@ -15,6 +15,7 @@ extern crate atom;
 extern crate tcp;
 extern crate ws;
 
+pub mod server;
 pub mod v311;
 pub mod tls_v311;
 pub mod broker;

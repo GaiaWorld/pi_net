@@ -18,25 +18,28 @@ use tcp::{server::AsyncWaitsHandle, driver::{Socket, PendSocket}, connect::TcpSo
 use ws::{connect::WsSocket,
          util::{ChildProtocol, ChildProtocolFactory, WsFrameType, WsSession}};
 
-use crate::{broker::{Retain, MqttBroker},
+use crate::{server::MqttBrokerProtocol,
+            broker::{Retain, MqttBroker},
             session::{MqttSession, QosZeroSession},
             util::BrokerSession};
 use futures::FutureExt;
 
-/*
-* 全局Mqtt3.1.1协议代理
-*/
-lazy_static! {
-    pub static ref WS_MQTT3_BROKER: MqttBroker<TcpSocket> = MqttBroker::new();
-}
+// /*
+// * 全局Mqtt3.1.1协议代理
+// */
+// lazy_static! {
+//     pub static ref WS_MQTT3_BROKER: MqttBroker<TcpSocket> = MqttBroker::new();
+// }
 
 /*
 * 基于Websocket的Mqtt3.1.1协议，服务质量为Qos0
 */
 #[derive(Clone)]
 pub struct WsMqtt311 {
-    name:       String,         //协议名
-    qos:        QoS,            //支持的最大Qos
+    protocol_name:  String,                 //协议名
+    broker_name:    String,                 //代理名
+    qos:            QoS,                    //支持的最大Qos
+    broker:         MqttBroker<TcpSocket>,  //Mqtt代理
 }
 
 unsafe impl Send for WsMqtt311 {}
@@ -44,7 +47,7 @@ unsafe impl Sync for WsMqtt311 {}
 
 impl ChildProtocol<TcpSocket, AsyncWaitsHandle> for WsMqtt311 {
     fn protocol_name(&self) -> &str {
-        self.name.as_str()
+        self.protocol_name.as_str()
     }
 
     fn decode_protocol(&self,
@@ -56,7 +59,7 @@ impl ChildProtocol<TcpSocket, AsyncWaitsHandle> for WsMqtt311 {
             Err(e) => {
                 //解码Mqtt报文失败，则立即返回错误原因
                 async move {
-                    Err(Error::new(ErrorKind::Other, format!("websocket decode child protocol failed, protocol: {:?}, reason: {:?}", ws_mqtt.name, e)))
+                    Err(Error::new(ErrorKind::Other, format!("websocket decode child protocol failed, protocol: {:?}, reason: {:?}", ws_mqtt.protocol_name, e)))
                 }.boxed()
             },
             Ok(packet) => {
@@ -100,19 +103,19 @@ impl ChildProtocol<TcpSocket, AsyncWaitsHandle> for WsMqtt311 {
             Ok(opt) => {
                 if let Some(context) = opt {
                     let client_id = context.get_client_id();
-                    if let Some(session) = WS_MQTT3_BROKER.get_session(client_id) {
+                    if let Some(session) = self.broker.get_session(client_id) {
                         if session.is_clean() {
                             //需要清理会话
-                            WS_MQTT3_BROKER.unsubscribe_all(&session); //退订当前会话订阅的所有主题
-                            WS_MQTT3_BROKER.remove_session(client_id); //从会话表中移除会话
+                            self.broker.unsubscribe_all(&session); //退订当前会话订阅的所有主题
+                            self.broker.remove_session(client_id); //从会话表中移除会话
                         }
 
                         //设置会话为已关闭
                         session.set_accept(false);
 
                         //处理Mqtt连接关闭
-                        if let Some(listener) = WS_MQTT3_BROKER.get_listener() {
-                            listener.0.closed(session, context, reason);
+                        if let Some(listener) = self.broker.get_listener() {
+                            listener.0.closed(MqttBrokerProtocol::WsMqtt311(Arc::new(self.clone())), session, context, reason);
                         }
                     }
                 }
@@ -158,7 +161,7 @@ fn send_packet(connect: &WsSocket<TcpSocket, AsyncWaitsHandle>,
 }
 
 //广播指定的Mqtt报文，用于发布消息的发送
-fn broadcast_packet(connects: &[WsSocket<TcpSocket, AsyncWaitsHandle>],
+pub fn broadcast_packet(connects: &[WsSocket<TcpSocket, AsyncWaitsHandle>],
                     packet: &Packet) -> Result<()> {
     if connects.len() == 0 {
         //Ws连接列表为空，则忽略
@@ -199,7 +202,7 @@ async fn accept(protocol: WsMqtt311,
 
     if is_exist_session {
         //当前客户端会话存在
-        if let Some(session) = WS_MQTT3_BROKER.get_session(&client_id) {
+        if let Some(session) = protocol.broker.get_session(&client_id) {
             if session.is_accepted() {
                 //当前客户端已连接，则立即返回错误原因
                 return Err(Error::new(ErrorKind::AlreadyExists, "mqtt connect failed, reason: connect already exist"));
@@ -252,9 +255,9 @@ async fn accept(protocol: WsMqtt311,
     //重置当前客户端会话
     let mut code = ConnectReturnCode::Accepted; //默认连接成功
     let mqtt_connect = reset_session(&protocol, connect.clone(), client_id, packet);
-    if let Some(listener) = WS_MQTT3_BROKER.get_listener() {
+    if let Some(listener) = protocol.broker.get_listener() {
         //指定的监听器存在，则执行已连接处理
-        let r = listener.0.connected(mqtt_connect);
+        let r = listener.0.connected(MqttBrokerProtocol::WsMqtt311(Arc::new(protocol)), mqtt_connect);
         if r.is_wait() {
             //需要等待异步回应，则挂起连接，并等待握手检查完成
             PendSocket::pending(connect.get_token().clone(), waits).await;
@@ -296,7 +299,7 @@ fn reset_session(protocol: &WsMqtt311,
 
     update_timeout(&connect, packet.client_id, packet.keep_alive);
 
-    WS_MQTT3_BROKER.insert_session(client_id, session)
+    protocol.broker.insert_session(client_id, session)
 }
 
 //获取Ws连接绑定的客户端id和客户端保持时长
@@ -346,17 +349,17 @@ fn publish(protocol: WsMqtt311,
         retain = Some(packet.clone());
     }
 
-    if let Some(service) = WS_MQTT3_BROKER.get_service() {
+    if let Some(service) = protocol.broker.get_service() {
         //如果有服务，则只执行服务
-        if let Some(session) = WS_MQTT3_BROKER.get_session(&client_id) {
-            return service.0.publish(session, packet.topic_name.clone(), packet.payload);
+        if let Some(session) = protocol.broker.get_session(&client_id) {
+            return service.0.publish(MqttBrokerProtocol::WsMqtt311(Arc::new(protocol)), session, packet.topic_name.clone(), packet.payload);
         }
     }
 
     //如果指定主题没有服务，则执行标准发布
     let mut is_public = true; //是否为公共主题
 
-    if let Some(sessions) = WS_MQTT3_BROKER.subscribed(is_public, &topic_path.path, qos, retain) {
+    if let Some(sessions) = protocol.broker.subscribed(is_public, &topic_path.path, qos, retain) {
         //指定主题有订阅
         let mut connects: Vec<WsSocket<TcpSocket, AsyncWaitsHandle>> = Vec::with_capacity(sessions.len());
         for session in sessions {
@@ -393,14 +396,14 @@ async fn subscribe(protocol: WsMqtt311,
     let topics = packet.topics;
     let mut retains: Option<Retain> = None;
     let mut return_codes = Vec::with_capacity(topics.len()); //订阅回应码向量
-    if let Some(service) = WS_MQTT3_BROKER.get_service() {
+    if let Some(service) = protocol.broker.get_service() {
         //如果有服务，则只执行服务
-        if let Some(session) = WS_MQTT3_BROKER.get_session(&client_id) {
+        if let Some(session) = protocol.broker.get_session(&client_id) {
             let mut sub_topics = Vec::with_capacity(topics.len());
             for topic in &topics {
                 sub_topics.push((topic.topic_path.clone(), topic.qos.to_u8()));
             }
-            let r = service.0.subscribe(session, sub_topics);
+            let r = service.0.subscribe(MqttBrokerProtocol::WsMqtt311(Arc::new(protocol.clone())), session, sub_topics);
             if r.is_wait() {
                 //需要等待异步回应，则挂起连接，并等待订阅完成
                 PendSocket::pending(connect.get_token().clone(), waits).await;
@@ -421,7 +424,7 @@ async fn subscribe(protocol: WsMqtt311,
         }
     } else {
         //没有服务，则订阅指定主题
-        if let Some(session) = WS_MQTT3_BROKER.get_session(&client_id) {
+        if let Some(session) = protocol.broker.get_session(&client_id) {
             //客户端的会话存在，则开始订阅主题
             let qos = protocol.get_qos();
             let qos_val = qos.to_u8();
@@ -434,7 +437,7 @@ async fn subscribe(protocol: WsMqtt311,
                     return_codes.push(SubscribeReturnCodes::Success(qos));
                 }
 
-                retains = WS_MQTT3_BROKER.subscribe(session.clone(), topic.topic_path);
+                retains = protocol.broker.subscribe(session.clone(), topic.topic_path);
             }
         }
     }
@@ -482,19 +485,19 @@ fn unsubscribe(protocol: WsMqtt311,
 
     let pkid = packet.pkid;
     let topics = packet.topics;
-    if let Some(service) = WS_MQTT3_BROKER.get_service() {
+    if let Some(service) = protocol.broker.get_service() {
         //如果有服务，则只执行服务
-        if let Some(session) = WS_MQTT3_BROKER.get_session(&client_id) {
-            if let Err(e) = service.0.unsubscribe(session, topics.clone()) {
+        if let Some(session) = protocol.broker.get_session(&client_id) {
+            if let Err(e) = service.0.unsubscribe(MqttBrokerProtocol::WsMqtt311(Arc::new(protocol)), session, topics.clone()) {
                 return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt unsubscribe failed, reason: {:?}", e)));
             }
         }
     } else {
         //没有服务，则取消订阅
-        if let Some(session) = WS_MQTT3_BROKER.get_session(&client_id) {
+        if let Some(session) = protocol.broker.get_session(&client_id) {
             //客户端的会话存在，则开始退订主题
             for topic in topics {
-                WS_MQTT3_BROKER.unsubscribe(&session, topic);
+                protocol.broker.unsubscribe(&session, topic);
             }
         }
     }
@@ -539,17 +542,26 @@ impl WsMqtt311 {
     pub const MAX_QOS: u8 = 0;                                  //支持的最大Qos
 
     //构建指定协议名和支持的最大Qos，且基于Websocket的Mqtt3.1.1协议
-    pub fn with_name(name: &str, qos: u8) -> Self {
+    pub fn with_name(protocol_name: &str,
+                     broker_name: &str,
+                     qos: u8) -> Self {
         WsMqtt311 {
-            name: name.to_lowercase(),
+            protocol_name: protocol_name.to_lowercase(),
+            broker_name: broker_name.to_string(),
             qos: QoS::from_u8(qos).unwrap(),
+            broker: MqttBroker::new(),
         }
     }
 
     //判断指定ClientId的会话是否存在
     #[inline(always)]
     pub fn is_exist(&self, client_id: &str) -> bool {
-        WS_MQTT3_BROKER.is_exist_session(&client_id.to_string())
+        self.broker.is_exist_session(&client_id.to_string())
+    }
+
+    //获取Mqtt代理名
+    pub fn get_broker_name(&self) -> &str {
+        self.broker_name.as_str()
     }
 
     //获取支持的最大Qos
@@ -557,66 +569,9 @@ impl WsMqtt311 {
     pub fn get_qos(&self) -> QoS {
         self.qos
     }
-}
 
-/*
-* 基于Websocket的Mqtt3.1.1协议工厂
-*/
-pub struct WsMqtt311Factory {
-    name:   String,         //协议名
-}
-
-impl ChildProtocolFactory for WsMqtt311Factory {
-    type Connect = TcpSocket;
-    type Waits = AsyncWaitsHandle;
-
-    fn new_protocol(&self) -> Arc<dyn ChildProtocol<Self::Connect, Self::Waits>> {
-        Arc::new(WsMqtt311::with_name(&self.name, WsMqtt311::MAX_QOS))
+    //获取内部代理
+    pub fn get_broker(&self) -> &MqttBroker<TcpSocket> {
+        &self.broker
     }
-}
-
-impl WsMqtt311Factory {
-    //构建指定协议名的基于Websocket的Mqtt3.1.1协议工厂
-    pub fn with_name(name: &str) -> Self {
-        WsMqtt311Factory {
-            name: name.to_string(),
-        }
-    }
-}
-
-//服务器订阅增加指定的主题
-pub fn add_topic(is_public: bool, topic: String, qos: u8, retain: Option<Publish>) -> Option<Vec<Arc<QosZeroSession<TcpSocket>>>> {
-    WS_MQTT3_BROKER.subscribed(is_public, &topic, qos, retain)
-}
-
-//服务器发布指定主题的消息
-pub fn publish_topic(is_public: bool, topic: String, qos: u8, retain: Option<Publish>, payload: Arc<Vec<u8>>) -> Result<()> {
-    //获取订阅了当前主题的Mqtt会话
-    if let Some(sessions) = WS_MQTT3_BROKER.subscribed(is_public, &topic, qos, retain) {
-        //获取Mqtt会话的Ws连接
-        let mut connects: Vec<WsSocket<TcpSocket, AsyncWaitsHandle>> = Vec::with_capacity(sessions.len());
-        for session in sessions {
-            //返回会话绑定的Ws连接
-            if let Some(connect) = session.get_connect() {
-                connects.push(connect.clone());
-            }
-        };
-
-        //构建指定负载的报文
-        let packet = Packet::Publish(Publish {
-            dup: false,
-            qos: QoS::AtMostOnce,
-            retain: false,
-            topic_name: topic.clone(),
-            pkid: None,
-            payload,
-        });
-
-        if let Err(e) = broadcast_packet(&connects[..], &packet) {
-            //发布消息失败，则立即返回错误原因
-            return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt broker broadcast failed, reason: {:?}", e)));
-        }
-    }
-
-    Ok(())
 }
