@@ -117,8 +117,6 @@ fn test_mqtt_proxy_service() {
     register_listener(broker_name, listener);
     register_service(broker_name, service);
 
-
-
     let mut factory = AsyncPortsFactory::<TcpSocket>::new();
     factory.bind(port,
                  Box::new(WebsocketListenerFactory::<TcpSocket>::with_protocol_factory(
