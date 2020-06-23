@@ -141,11 +141,23 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
                             //将客户端需要的子协议名转换为全小写，并与服务器端支持的子协议进行对比
                             if protocols_len == 1 && (*p) == "" {
                                 //客户端没有指定子协议
-                                let resp = reply_handshake(Ok((ws_ext, None, ws_accept.as_str())));
+                                let resp = if let Err(e) = protocol.handshake_protocol(&req) {
+                                    //子协议处理握手失败，则立即中止握手
+                                    reply_handshake(Err(StatusCode::BAD_REQUEST))
+                                } else {
+                                    //子协议处理握手成功
+                                    reply_handshake(Ok((ws_ext, None, ws_accept.as_str())))
+                                };
                                 return (resp.is_ok(), resp);
                             } else if protocol.protocol_name() == (*p).to_lowercase().as_str() {
                                 //客户端需要的子协议中有服务器端支持的子协议，则握手成功，将客户端需要，且服务器端支持的子协议名原样返回
-                                let resp = reply_handshake(Ok((ws_ext, Some((*p)), ws_accept.as_str())));
+                                let resp = if let Err(e) = protocol.handshake_protocol(&req) {
+                                    //子协议处理握手失败，则立即中止握手
+                                    reply_handshake(Err(StatusCode::BAD_REQUEST))
+                                } else {
+                                    //子协议处理握手成功
+                                    reply_handshake(Ok((ws_ext, Some((*p)), ws_accept.as_str())))
+                                };
                                 return (resp.is_ok(), resp);
                             }
                         }

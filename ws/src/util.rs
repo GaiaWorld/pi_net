@@ -4,6 +4,7 @@ use std::future::Future;
 use std::collections::HashMap;
 
 use bytes::BufMut;
+use httparse::Request;
 use fnv::FnvBuildHasher;
 use futures::future::BoxFuture;
 
@@ -20,6 +21,11 @@ use crate::{connect::WsSocket,
 pub trait ChildProtocol<S: Socket, H: AsyncIOWait>: Send + Sync + 'static {
     //获取子协议名称
     fn protocol_name(&self) -> &str;
+
+    //处理握手子协议
+    fn handshake_protocol(&self, request: &Request) -> Result<()> {
+        Ok(())
+    }
 
     //解码子协议，返回错误将立即关闭当前连接
     fn decode_protocol(&self, connect: WsSocket<S, H>, waits: H, context: &mut WsSession) -> BoxFuture<'static, Result<()>>;
