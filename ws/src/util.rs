@@ -8,7 +8,7 @@ use httparse::Request;
 use fnv::FnvBuildHasher;
 use futures::future::BoxFuture;
 
-use tcp::{driver::{Socket, AsyncIOWait},
+use tcp::{driver::{Socket, AsyncIOWait, SocketHandle},
           buffer_pool::WriteBuffer,
           util::{SocketContext, SocketEvent}};
 
@@ -23,7 +23,7 @@ pub trait ChildProtocol<S: Socket, H: AsyncIOWait>: Send + Sync + 'static {
     fn protocol_name(&self) -> &str;
 
     //处理握手子协议
-    fn handshake_protocol(&self, request: &Request) -> Result<()> {
+    fn handshake_protocol(&self, handle: SocketHandle<S>, request: &Request) -> Result<()> {
         Ok(())
     }
 

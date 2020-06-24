@@ -76,7 +76,7 @@ pub enum Status {
 * Websocket连接接受器
 */
 pub struct WsAcceptor<S: Socket, H: AsyncIOWait> {
-    window_bits:    u8,     //客户端的压缩窗口大小，等于0表示，不支持每消息Deflate压缩的扩展协议
+    window_bits:    u8,                     //客户端的压缩窗口大小，等于0表示，不支持每消息Deflate压缩的扩展协议
     marker:         PhantomData<(S, H)>,
 }
 
@@ -119,7 +119,10 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
     }
 
     //握手，返回握手是否成功、握手请求的响应和子协议
-    pub fn handshake(&self, protocol: &Arc<dyn ChildProtocol<S, H>>, mut req: Request) -> (bool, HttpResult<Response<()>>) {
+    pub fn handshake(&self,
+                     handle: SocketHandle<S>,
+                     protocol: &Arc<dyn ChildProtocol<S, H>>,
+                     mut req: Request) -> (bool, HttpResult<Response<()>>) {
         match check_handshake_request(&mut req, self.window_bits) {
             Err(e) => {
                 //握手请求失败
@@ -141,7 +144,7 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
                             //将客户端需要的子协议名转换为全小写，并与服务器端支持的子协议进行对比
                             if protocols_len == 1 && (*p) == "" {
                                 //客户端没有指定子协议
-                                let resp = if let Err(e) = protocol.handshake_protocol(&req) {
+                                let resp = if let Err(e) = protocol.handshake_protocol(handle, &req) {
                                     //子协议处理握手失败，则立即中止握手
                                     warn!("!!!> Ws Handshake Failed, reason: {:?}", e);
                                     reply_handshake(Err(StatusCode::BAD_REQUEST))
@@ -152,7 +155,7 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
                                 return (resp.is_ok(), resp);
                             } else if protocol.protocol_name() == (*p).to_lowercase().as_str() {
                                 //客户端需要的子协议中有服务器端支持的子协议，则握手成功，将客户端需要，且服务器端支持的子协议名原样返回
-                                let resp = if let Err(e) = protocol.handshake_protocol(&req) {
+                                let resp = if let Err(e) = protocol.handshake_protocol(handle, &req) {
                                     //子协议处理握手失败，则立即中止握手
                                     warn!("!!!> Ws Handshake Failed, reason: {:?}", e);
                                     reply_handshake(Err(StatusCode::BAD_REQUEST))
@@ -238,18 +241,14 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
                                       acceptor: WsAcceptor<S, H>,
                                       req: Request<'h, 'b>,
                                       support_protocol: Arc<dyn ChildProtocol<S, H>>) {
-        match acceptor.handshake(&support_protocol, req) {
+        handle.get_context_mut().set(WsSession::default()); //握手前绑定Tcp连接上下文
+        match acceptor.handshake(handle.clone(), &support_protocol, req) {
             (_, Err(e)) => {
                 //握手异常
                 handle.close(Err(Error::new(ErrorKind::Other, format!("websocket handshake failed, reason: {:?}", e))));
             },
-            (is_ok, Ok(resp)) => {
+            (_, Ok(resp)) => {
                 //握手请求已完成，则返回
-                if is_ok {
-                    //握手成功，则绑定Tcp连接上下文
-                    handle.get_context_mut().set(WsSession::default());
-                }
-
                 let mut buf = handle.alloc().ok().unwrap().unwrap();
                 buf.get_iolist_mut().push_back(resp_to_vec(resp).into());
 
