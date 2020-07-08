@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::future::{FutureExt, BoxFuture};
 use crossbeam_channel::{Sender, Receiver, unbounded, TryRecvError};
-use bytes::{Buf, BufMut, IntoBuf, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use url::Url;
 use httparse::{EMPTY_HEADER, Status, Header, Request};
 use https::{Result as HttpResult, Response, Version,
@@ -37,65 +37,49 @@ pub struct UpStreamHeader;
 unsafe impl Send for UpStreamHeader {}
 unsafe impl Sync for UpStreamHeader {}
 
-/*
-* 上行请求头异步方法
-*/
 impl UpStreamHeader {
     //读请求，并解析报文头
-    pub async fn read_header<'h, 'b, S, W>(handle: SocketHandle<S>,
-                                           waits: W,
-                                           mut req: Request<'h, 'b>,
-                                           mut headers: HeaderMap) -> Option<(Request<'h, 'b>, HeaderMap, Vec<u8>, usize)>
-        where S: Socket,
+    pub fn read_header<'h, 'b, S, W>(handle: SocketHandle<S>,
+                                      waits: W,
+                                      buf: &'b [u8],
+                                      req: &mut Request<'h, 'b>,
+                                      headers: &mut HeaderMap) -> Option<usize>
+        where 'b: 'h,
+              S: Socket,
               W: AsyncIOWait {
-        let buf = Box::into_raw(Box::new(Vec::<u8>::new())) as usize;
-        loop {
-            match AsyncReadTask::async_read(handle.clone(), waits.clone(), DEFAULT_READ_READY_HTTP_REQUEST_BYTE_LEN).await {
-                Err(e) => {
-                    handle.close(Err(Error::new(ErrorKind::Other, format!("http server read header failed, reason: {:?}", e))));
-                    return None;
-                },
-                Ok(bin) => {
-                    unsafe { (&mut *(buf as *mut Vec<u8>)).put(bin); }
-                    match req.parse(unsafe { (&*(buf as *const Vec<u8>)).as_slice() }) {
-                        Err(e) => {
-                            //解析Http头错误
-                            handle.close(Err(Error::new(ErrorKind::Other, format!("http server parse header failed, reason: {:?}", e))));
-                            return None;
-                        },
-                        Ok(ref status) if status.is_partial() => {
-                            //部分头数据已到达
-                            match req.version {
-                                Some(ver) if ver != DEFAULT_SUPPORT_HTTP_VERSION => {
-                                    //不合法的Http版本号
-                                    handle.close(Err(Error::new(ErrorKind::Other, format!("http server parse header failed, version: {}, reason: not support http version", ver))));
-                                    return None;
-                                },
-                                _ => {
-                                    //头数据不完整，则继续读
-                                    continue;
-                                }
-                            }
-                        },
-                        Ok(status) => {
-                            //全部头数据已到达，则继续读取，并解析体数据
-                            if let Status::Complete(len) = status {
-                                if let Err(e) = fill_headers(&mut headers, &mut req) {
-                                    handle.close(Err(e));
-                                    return None;
-                                }
-
-                                let vec = unsafe {
-                                    Box::from_raw(buf as *mut Vec<u8>)
-                                };
-                                return Some((req, headers, *vec, len));
-                            }
-
-                            return None;
-                        },
+        match req.parse(buf) {
+            Err(e) => {
+                //解析Http头错误
+                handle.close(Err(Error::new(ErrorKind::Other, format!("http server parse header failed, reason: {:?}", e))));
+                return None;
+            },
+            Ok(ref status) if status.is_partial() => {
+                //部分头数据已到达
+                match req.version {
+                    Some(ver) if ver != DEFAULT_SUPPORT_HTTP_VERSION => {
+                        //不合法的Http版本号
+                        handle.close(Err(Error::new(ErrorKind::Other, format!("http server parse header failed, version: {}, reason: not support http version", ver))));
+                        return None;
+                    },
+                    _ => {
+                        //头数据不完整，则继续读
+                        return None;
                     }
-                },
-            }
+                }
+            },
+            Ok(status) => {
+                //全部头数据已到达，则继续读取，并解析体数据
+                if let Status::Complete(len) = status {
+                    if let Err(e) = fill_headers(headers, req) {
+                        handle.close(Err(e));
+                        return None;
+                    }
+
+                    return Some(len);
+                }
+
+                return None;
+            },
         }
     }
 }

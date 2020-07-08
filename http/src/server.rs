@@ -11,6 +11,7 @@ use std::io::{ErrorKind, Result, Error};
 use https::{Version, Response, HeaderMap, header::HOST};
 use httparse::{EMPTY_HEADER, Request};
 use futures::future::{FutureExt, BoxFuture};
+use bytes::{Buf, BufMut, BytesMut};
 use log::warn;
 
 use tcp::{server::AsyncWaitsHandle,
@@ -79,39 +80,65 @@ impl<S: Socket, W: AsyncIOWait, P: VirtualHostPool<S, W>> AsyncService<S, W> for
 
             //解析上行请求
             if let Some(connect) = context.as_mut() {
-                let mut headers = [EMPTY_HEADER; MAX_CONNECT_HTTP_HEADER_LIMIT];
-                let req = Request::new(&mut headers);
-                let headers = HeaderMap::new();
+                let mut http_request_result = None;
+                let buf = Box::into_raw(Box::new(Vec::<u8>::new())) as usize;
+                loop {
+                    match AsyncReadTask::async_read(handle.clone(), waits.clone(), 0).await {
+                        Err(e) => {
+                            handle.close(Err(Error::new(ErrorKind::Other, format!("http server read header failed, reason: {:?}", e))));
+                            return;
+                        },
+                        Ok(bin) => {
+                            unsafe { (&mut *(buf as *mut Vec<u8>)).put(bin); }
+                            let mut headers = HeaderMap::new();
+                            let mut header = [EMPTY_HEADER; MAX_CONNECT_HTTP_HEADER_LIMIT];
+                            let mut req = Request::new(&mut header);
+                            if let Some(body_offset) = UpStreamHeader::read_header(handle.clone(),
+                                                                                    waits.clone(),
+                                                                                    unsafe { (&*(buf as *mut Vec<u8>)).as_slice() },
+                                                                                    &mut req,
+                                                                                    &mut headers) {
+                                //解析成功
+                                let buf = unsafe { *Box::from_raw(buf as *mut Vec<u8>) };
+                                if let Some(value) = headers.get(HOST) {
+                                    if let Ok(host_name) = value.to_str() {
+                                        if let &Some(method) = &req.method {
+                                            if let &Some(path) = &req.path {
+                                                //构建本次Http连接请求
+                                                let url = if handle.is_security() {
+                                                    "https://".to_string() + host_name + path
+                                                } else {
+                                                    "https://".to_string() + host_name + path
+                                                };
 
-                if let Some((req, headers, buf, body_offset)) = UpStreamHeader::read_header(handle.clone(), waits.clone(), req, headers).await {
-                    //解析成功
-                    if let Some(value) = headers.get(HOST) {
-                        if let Ok(host_name) = value.to_str() {
-                            if let &Some(method) = &req.method {
-                                if let &Some(path) = &req.path {
-                                    //构建本次Http连接请求
-                                    let url = if handle.is_security() {
-                                        "https://".to_string() + host_name + path
+                                                if let Some(request) = HttpRequest::new(handle.clone(), waits.clone(), method, &url, Version::HTTP_11, headers, &buf[body_offset..]) {
+                                                    http_request_result = Some(request);
+                                                    break;
+                                                } else {
+                                                    //请求的Url无效，则立即关闭当前Tcp连接
+                                                    handle.close(Err(Error::new(ErrorKind::ConnectionRefused, format!("http server read failed, url: {:?}, reason: invalid url", url))));
+                                                    return;
+                                                }
+                                            }
+                                        }
                                     } else {
-                                        "https://".to_string() + host_name + path
-                                    };
-
-                                    if let Some(request) = HttpRequest::new(handle.clone(), waits, method, &url, Version::HTTP_11, headers, &buf[body_offset..]) {
-                                        connect.run_service(request).await; //运行Http服务
-                                    } else {
-                                        //请求的Url无效，则立即关闭当前Tcp连接
-                                        handle.close(Err(Error::new(ErrorKind::ConnectionRefused, format!("http server read failed, url: {:?}, reason: invalid url", url))));
+                                        //请求的主机头无效，则立即关闭当前连接
+                                        handle.close(Err(Error::new(ErrorKind::Other, "http server read failed, reason: invalid host header")));
+                                        return;
                                     }
+                                } else {
+                                    //请求没有主机头，则立即关闭当前连接
+                                    handle.close(Err(Error::new(ErrorKind::Other, "http server read failed, reason: host header not exist")));
+                                    return;
                                 }
                             }
-                        } else {
-                            //请求的主机头无效，则立即关闭当前连接
-                            handle.close(Err(Error::new(ErrorKind::Other, "http server read failed, reason: invalid host header")));
                         }
-                    } else {
-                        //请求没有主机头，则立即关闭当前连接
-                        handle.close(Err(Error::new(ErrorKind::Other, "http server read failed, reason: host header not exist")));
                     }
+                }
+
+                if let Some(request) = http_request_result {
+                    //运行Http服务
+                    connect.run_service(request).await;
                 }
             } else {
                 //请求没有绑定Http连接，则立即关闭当前Tcp连接

@@ -682,7 +682,7 @@ fn async_load_files<S: Socket, W: AsyncIOWait>(resp: &HttpResponse<S, W>, files:
                                     part.put_slice(&file_path_bin[root_len..]);
                                     part.put_u32_le(bin_size as u32);
                                     let part_len = 6 + file_path_bin_len as u64 + bin_size;
-                                    part.put(bin);
+                                    part.put(bin.as_slice());
 
                                     if let Err(e) = resp_handler_copy.write_index(index, part) {
                                         warn!("!!!> Http Body Mut Write Index Failed, index: {:?}, file: {:?}, reason: {:?}", index, file_path_copy, e);

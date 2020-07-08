@@ -199,7 +199,7 @@ impl<S: Socket, W: AsyncIOWait> From<HttpResponse<S, W>> for Vec<u8> {
 
         if let Some(start) = &resp.start {
             //当前Http响应为数据块响应，则序列化Http响应启始行
-            buf.put(format!("{:?} {}\r\n", &start.version, &start.status.load(Ordering::Relaxed)).into_bytes());
+            buf.put(format!("{:?} {}\r\n", &start.version, &start.status.load(Ordering::Relaxed)).as_bytes());
         }
 
         //序列化Http响应头
@@ -211,7 +211,7 @@ impl<S: Socket, W: AsyncIOWait> From<HttpResponse<S, W>> for Vec<u8> {
 
         //序列化Http响应体
         if let Some(body) = resp.body {
-            if let Some(bin) = body.into_bin() {
+            if let Some(bin) = body.as_slice() {
                 buf.put(bin);
             }
         }
