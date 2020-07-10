@@ -85,7 +85,7 @@ impl BaseInnerListener for RpcListener {
             Ok(opt) => {
                 if let Some(rpc_connect) = opt {
                     //异步处理Rpc连接关闭
-                    if let Some(handler) = &self.connected_handler {
+                    if let Some(handler) = &self.closed_handler {
                         let connect_uid = rpc_connect.get_id();
                         handler.handle(rpc_connect, Atom::from(CLOSED_EVENT_NAME), Args::OneArgs(connect_uid));
                     }
