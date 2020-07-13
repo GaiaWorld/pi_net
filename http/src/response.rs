@@ -187,7 +187,7 @@ pub struct HttpResponse<S: Socket, W: AsyncIOWait> {
     handle:     SocketHandle<S>,                    //Http连接句柄
     waits:      W,                                  //异步任务等待队列
     start:      Option<StartLine>,                  //Http响应启始行, 为空表示当前Http响应为数据流响应，否则表示当前Http响应为数据块响应
-    headers:    Arc<Mutex<HeaderMap>>,             //Http响应头
+    headers:    Arc<Mutex<HeaderMap>>,              //Http响应头
     body:       Option<RespBody<S, W>>,             //Http响应体
     handler:    Option<ResponseHandler<S>>,         //Http响应句柄，用于线程安全的跨运行时写响应头和响应体
 }
