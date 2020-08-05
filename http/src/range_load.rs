@@ -53,9 +53,11 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for RangeLoad {
                                 }
                             }
 
+                            let mut is_end = false; //默认未指定结束范围
                             let mut end = body_len - 1; //未指定结束范围，则默认为所有数据
                             if let Ok(e) = vec[1].parse::<usize>() {
                                 //已指定结束范围
+                                is_end = true;
                                 end = e;
                             }
 
@@ -80,10 +82,19 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for RangeLoad {
                             }
 
                             //设置范围响应状态码和响应头
-                            response
-                                .status(StatusCode::PARTIAL_CONTENT.as_u16())
-                                .header(ACCEPT_RANGES.as_str(), "bytes")
-                                .header(CONTENT_RANGE.as_str(), ["bytes", " ", range_str, "/", body_len.to_string().as_str()].concat().as_str());
+                            if !is_end {
+                                //未指定结束范围
+                                response
+                                    .status(StatusCode::PARTIAL_CONTENT.as_u16())
+                                    .header(ACCEPT_RANGES.as_str(), "bytes")
+                                    .header(CONTENT_RANGE.as_str(), ["bytes", " ", range_str, end.to_string().as_str(), "/", body_len.to_string().as_str()].concat().as_str());
+                            } else {
+                                //已指定结束范围
+                                response
+                                    .status(StatusCode::PARTIAL_CONTENT.as_u16())
+                                    .header(ACCEPT_RANGES.as_str(), "bytes")
+                                    .header(CONTENT_RANGE.as_str(), ["bytes", " ", range_str, "/", body_len.to_string().as_str()].concat().as_str());
+                            }
                         }
                     }
                 }
