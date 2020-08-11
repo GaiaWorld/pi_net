@@ -92,7 +92,7 @@ impl<S: Socket, W: AsyncIOWait> HttpAcceptor<S, W> {
                                             let url = if handle.is_security() {
                                                 "https://".to_string() + host_name + path
                                             } else {
-                                                "https://".to_string() + host_name + path
+                                                "http://".to_string() + host_name + path
                                             };
 
                                             if let Some(request) = HttpRequest::new(handle.clone(), waits.clone(), method, &url, Version::HTTP_11, headers, &buf[body_offset..]) {
