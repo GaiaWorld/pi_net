@@ -2,7 +2,6 @@
 members = [
   "http",
   "httpc",
-  "https",
   "net",
   "mqtt_tmp",
   "rpc_tmp",
@@ -11,4 +10,5 @@ members = [
   "ws",
   "mqtt",
   "mqtt_proxy",
+  "async_httpc",
 ]
