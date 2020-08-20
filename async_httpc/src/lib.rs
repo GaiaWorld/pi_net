@@ -467,14 +467,15 @@ impl AsyncHttpResponse {
 */
 impl AsyncHttpResponse {
     //获取响应体
-    pub async fn get_body(&mut self) -> Result<Option<Bytes>> {
+    pub async fn get_body(&mut self) -> Result<Option<Box<[u8]>>> {
         match self.0.chunk().await {
             Err(e) => {
                 Err(Error::new(ErrorKind::Other, format!("Get response body failed, reason: {:?}", e)))
             },
-            Ok(chunk) => {
-                Ok(chunk)
+            Ok(Some(chunk)) => {
+                Ok(Some(chunk.to_vec().into_boxed_slice()))
             },
+            Ok(None) => Ok(None),
         }
     }
 }
