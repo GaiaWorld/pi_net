@@ -5,7 +5,6 @@ authors = ["vmos <vmos@fairblock.io>"]
 edition = "2018"
 
 [dependencies]
-futures = "0.3"
 tokio = { version = "0.2", features = ["rt-core", "rt-threaded"] }
 reqwest = { version = "0.10", features = ["native-tls", "rustls-tls", "cookies", "gzip", "json", "socks"] }
 bytes = "0.5"

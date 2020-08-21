@@ -5,10 +5,8 @@ use std::fs;
 use std::sync::Arc;
 use std::path::Path;
 use std::str::FromStr;
-use std::future::Future;
 use std::time::Duration;
 use std::net::{IpAddr, SocketAddr};
-use std::task::{Context, Poll, Waker};
 use std::io::{Error, Result, ErrorKind};
 
 use tokio;

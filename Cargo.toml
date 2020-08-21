@@ -11,4 +11,5 @@ members = [
   "mqtt",
   "mqtt_proxy",
   "async_httpc",
+  "async_wsc",
 ]
