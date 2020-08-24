@@ -198,11 +198,34 @@ impl AsyncWebsocket {
                 let rt = self.0.read().rt.as_ref().unwrap().clone();
                 let task_id = self.0.read().task_id.as_ref().unwrap().clone();
 
-                AsyncOpenWebsocket::new(rt,
-                                        task_id,
-                                        self.clone(),
-                                        url,
-                                        timeout).await
+                match rt.clone() {
+                    AsyncRuntime::Single(r) => {
+                        r.clone().wait_any(vec![
+                            (rt.clone(),
+                             AsyncOpenWebsocket::new(rt.clone(),
+                                                     task_id,
+                                                     self.clone(),
+                                                     url.clone()).boxed()),
+                            (rt.clone(),
+                             async move {
+                                 r.wait_timeout(timeout as usize).await;
+                                 Err(Error::new(ErrorKind::TimedOut, format!("Open websocket failed, url: {:?}, reason: connect timeout", url)))
+                             }.boxed())]).await
+                    },
+                    AsyncRuntime::Multi(r) => {
+                        r.clone().wait_any(vec![
+                            (rt.clone(),
+                             AsyncOpenWebsocket::new(rt.clone(),
+                                                     task_id,
+                                                     self.clone(),
+                                                     url.clone()).boxed()),
+                            (rt.clone(),
+                             async move {
+                                 r.wait_timeout(timeout as usize).await;
+                                 Err(Error::new(ErrorKind::TimedOut, format!("Open websocket failed, url: {:?}, reason: connect timeout", url)))
+                             }.boxed())]).await
+                    }
+                }
             },
         }
     }
@@ -226,8 +249,6 @@ pub struct AsyncOpenWebsocket {
     task_id:    TaskId,             //异步任务id
     ws:         AsyncWebsocket,     //异步Websocket连接
     url:        Url,                //url
-    start:      Instant,            //打开连接的起始时间
-    timeout:    Duration,           //打开连接的超时时长
 }
 
 unsafe impl Send for AsyncOpenWebsocket {}
@@ -237,11 +258,6 @@ impl Future for AsyncOpenWebsocket {
     type Output = Result<Sender>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if Instant::now() - self.start > self.timeout {
-            //打开连接已超时，则立即返回错误
-            return Poll::Ready(Err(Error::new(ErrorKind::Other, "Websocket connect failed, reason: timeout")));
-        }
-
         if let Some(sender) = self.ws.0.write().sender.take() {
             //已打开指定Websocket连接，则返回
             return Poll::Ready(Ok(sender));
@@ -270,15 +286,12 @@ impl AsyncOpenWebsocket {
     pub fn new(rt: AsyncRuntime<()>,
                task_id: TaskId,
                ws: AsyncWebsocket,
-               url: Url,
-               timeout: u64) -> Self {
+               url: Url) -> Self {
         AsyncOpenWebsocket {
             rt,
             task_id,
             ws,
             url,
-            start: Instant::now(),
-            timeout: Duration::from_millis(timeout),
         }
     }
 }
