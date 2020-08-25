@@ -1,7 +1,7 @@
 use std::sync::Arc;
-use std::io::Result;
 use std::future::Future;
 use std::collections::HashMap;
+use std::io::{Error, Result, ErrorKind};
 
 use bytes::BufMut;
 use httparse::Request;
@@ -21,6 +21,11 @@ use crate::{connect::WsSocket,
 pub trait ChildProtocol<S: Socket, H: AsyncIOWait>: Send + Sync + 'static {
     //获取子协议名称
     fn protocol_name(&self) -> &str;
+
+    //处理非标准握手请求子协议
+    fn non_standard_handshake_protocol(&self, request: &Request) -> Result<(String, Vec<u8>)> {
+        Err(Error::new(ErrorKind::Other, "Handle non-standard handshake protocol failed, reason: empty protocol"))
+    }
 
     //处理握手子协议
     fn handshake_protocol(&self, handle: SocketHandle<S>, request: &Request) -> Result<()> {

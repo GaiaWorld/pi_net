@@ -15,8 +15,9 @@ use http::{Result as HttpResult,
            status::StatusCode,
            header::{HOST, CONNECTION, UPGRADE,
                     ORIGIN, USER_AGENT,
+                    CONTENT_TYPE, CONTENT_LENGTH,
                     SEC_WEBSOCKET_VERSION, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_EXTENSIONS,
-                    SEC_WEBSOCKET_PROTOCOL, SEC_WEBSOCKET_ACCEPT}};
+                    SEC_WEBSOCKET_PROTOCOL, SEC_WEBSOCKET_ACCEPT, HeaderValue}};
 use base64;
 use log::warn;
 
@@ -122,13 +123,23 @@ impl<S: Socket, H: AsyncIOWait> WsAcceptor<S, H> {
     pub fn handshake(&self,
                      handle: SocketHandle<S>,
                      protocol: &Arc<dyn ChildProtocol<S, H>>,
-                     mut req: Request) -> (bool, HttpResult<Response<()>>) {
+                     mut req: Request) -> (bool, HttpResult<Response<Vec<u8>>>) {
         match check_handshake_request(&mut req, self.window_bits) {
             Err(e) => {
-                //握手请求失败
-                warn!("!!!> Ws Check Handshake Failed, reason: {:?}", e);
-                let resp = reply_handshake(Err(StatusCode::BAD_REQUEST));
-                (resp.is_ok(), resp)
+                //非标准握手请求
+                match protocol.non_standard_handshake_protocol(&req) {
+                    Err(err) => {
+                        //处理非标准握手请求失败
+                        warn!("!!!> Ws Check Handshake Failed, check failed reason: {:?}, non-standard check failed reason: {:?}", e, err);
+                        let resp = reply_non_standard_handshake(Err(StatusCode::BAD_REQUEST));
+                        (resp.is_ok(), resp)
+                    },
+                    Ok(successed) => {
+                        //处理非标准握手请求成功
+                        let resp = reply_non_standard_handshake(Ok(successed));
+                        (resp.is_ok(), resp)
+                    },
+                }
             },
             Ok(success) => {
                 match success {
@@ -338,7 +349,7 @@ fn check_handshake_request(req: &mut Request, window_bits: u8) -> Result<Status>
 
     if count > 0 {
         //握手请求没有完整的Http头
-        Err(Error::new(ErrorKind::Other, format!("invalid request header")))
+        Err(Error::new(ErrorKind::Other, format!("invalid handshake header")))
     } else {
         //握手请求检查成功
         Ok(Status::Succeeded(ws_ext, ws_protocol, accept(ws_key)))
@@ -379,14 +390,14 @@ fn unmatch_header_value(key: &str, value: &[u8]) -> Result<String> {
 }
 
 //创建握手请求响应
-fn reply_handshake<'a>(result: GenResult<(u8, Option<&'a str>, &'a str), StatusCode>) -> HttpResult<Response<()>> {
+fn reply_handshake<'a>(result: GenResult<(u8, Option<&'a str>, &'a str), StatusCode>) -> HttpResult<Response<Vec<u8>>> {
     match result {
         Err(code) => {
             //握手失败，返回指定状态码的响应
             Response::builder()
                 .status(code)
                 .version(Version::HTTP_11)
-                .body(())
+                .body(vec![])
         },
         Ok((window_bits, p, accept)) => {
             //握手成功
@@ -410,7 +421,33 @@ fn reply_handshake<'a>(result: GenResult<(u8, Option<&'a str>, &'a str), StatusC
 
             //设置服务端指定的密钥，并返回握手成功响应
             resp.header(SEC_WEBSOCKET_ACCEPT, accept)
-                .body(())
+                .body(vec![])
+        },
+    }
+}
+
+//创建非标准握手请求响应
+fn reply_non_standard_handshake(result: GenResult<(String, Vec<u8>), StatusCode>) -> HttpResult<Response<Vec<u8>>> {
+    match result {
+        Err(code) => {
+            //处理非标准握手失败，返回指定状态码的响应
+            Response::builder()
+                .status(code)
+                .version(Version::HTTP_11)
+                .body(vec![])
+        },
+        Ok((mime, body)) => {
+            //处理非标准握手成功
+            let mut resp = Response::builder();
+
+            //初始化响应
+            resp.status(StatusCode::OK)
+                .version(Version::HTTP_11)
+                .header(CONTENT_TYPE, HeaderValue::from_str(mime.as_str()).unwrap())
+                .header(CONTENT_LENGTH, body.len());
+
+            //设置服务端指定的密钥，并返回握手成功响应
+            resp.body(body)
         },
     }
 }
@@ -422,8 +459,17 @@ fn accept(key: String) -> String {
 }
 
 //将握手请求的响应序列化为Vec<u8>
-fn resp_to_vec(resp: Response<()>) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(HANDSHAKE_RESP_BUFFER_SIZE);
+fn resp_to_vec(resp: Response<Vec<u8>>) -> Vec<u8> {
+    let body_len = resp.body().len();
+    let (mut buf, body) = if body_len > 0 {
+        //非标准握手请求成功
+        (Vec::with_capacity(HANDSHAKE_RESP_BUFFER_SIZE + body_len),
+        resp.body().clone())
+    } else {
+        //握手成功
+        (Vec::with_capacity(HANDSHAKE_RESP_BUFFER_SIZE), vec![])
+    };
+
     buf.put(format!("{:?}", resp.version()));
     buf.put(" ");
     let status = resp.status();
@@ -438,6 +484,7 @@ fn resp_to_vec(resp: Response<()>) -> Vec<u8> {
         buf.put("\r\n");
     }
     buf.put("\r\n");
+    buf.put(body);
 
     buf
 }
