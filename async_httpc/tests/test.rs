@@ -178,6 +178,43 @@ fn test_http_request() {
                 println!("!!!!!!url: {}", resp.get_url());
                 println!("!!!!!!status: {}", resp.get_status());
                 println!("!!!!!!version: {}", resp.get_version());
+                println!("!!!!!!headers: {:#?}", resp.to_headers());
+                println!("!!!!!!body len: {:?}", resp.get_body_len());
+
+                loop {
+                    match resp.get_body().await {
+                        Err(e) => {
+                            println!("!!!!!!get body failed, reason: {:?}", e);
+                            break;
+                        },
+                        Ok(Some(body)) => {
+                            println!("!!!!!!get body ok, len: {}", body.len());
+                        },
+                        Ok(None) => break,
+                    }
+                }
+            },
+        }
+    });
+    thread::sleep(Duration::from_millis(5000));
+
+    //传递表单数据
+    println!("");
+    let httpc_copy = httpc.clone();
+    let body = AsyncHttpRequestBody::with_string("user=test001&pwd=你好".to_string(), true);
+    rt.spawn(rt.alloc(), async move {
+        match httpc_copy
+            .build_request("http://127.0.0.1/", AsyncHttpRequestMethod::Post)
+            .add_header("content-type", "application/x-www-form-urlencoded")
+            .set_body(body)
+            .send().await {
+            Err(e) => println!("!!!!!!test request failed, e: {:?}", e),
+            Ok(mut resp) => {
+                println!("!!!!!!peer address: {:?}", resp.get_peer_addr());
+                println!("!!!!!!url: {}", resp.get_url());
+                println!("!!!!!!status: {}", resp.get_status());
+                println!("!!!!!!version: {}", resp.get_version());
+                println!("!!!!!!headers: {:#?}", resp.to_headers());
                 println!("!!!!!!body len: {:?}", resp.get_body_len());
 
                 loop {
@@ -219,6 +256,7 @@ fn test_http_request() {
                 println!("!!!!!!url: {}", resp.get_url());
                 println!("!!!!!!status: {}", resp.get_status());
                 println!("!!!!!!version: {}", resp.get_version());
+                println!("!!!!!!headers: {:#?}", resp.to_headers());
                 println!("!!!!!!body len: {:?}", resp.get_body_len());
 
                 loop {
@@ -255,6 +293,7 @@ fn test_http_request() {
                 println!("!!!!!!url: {}", resp.get_url());
                 println!("!!!!!!status: {}", resp.get_status());
                 println!("!!!!!!version: {}", resp.get_version());
+                println!("!!!!!!headers: {:#?}", resp.to_headers());
                 println!("!!!!!!body len: {:?}", resp.get_body_len());
 
                 loop {
@@ -427,7 +466,44 @@ fn test_https_request() {
                 println!("!!!!!!url: {}", resp.get_url());
                 println!("!!!!!!status: {}", resp.get_status());
                 println!("!!!!!!version: {}", resp.get_version());
+                println!("!!!!!!headers: {:#?}", resp.to_headers());
                 println!("!!!!!!body len: {:?}", resp.get_headers("content-length"));
+
+                loop {
+                    match resp.get_body().await {
+                        Err(e) => {
+                            println!("!!!!!!get body failed, reason: {:?}", e);
+                            break;
+                        },
+                        Ok(Some(body)) => {
+                            println!("!!!!!!get body ok, len: {}", body.len());
+                        },
+                        Ok(None) => break,
+                    }
+                }
+            },
+        }
+    });
+    thread::sleep(Duration::from_millis(5000));
+
+    //传递表单数据
+    println!("");
+    let httpc_copy = httpc.clone();
+    let body = AsyncHttpRequestBody::with_string("user=test001&pwd=你好".to_string(), true);
+    rt.spawn(rt.alloc(), async move {
+        match httpc_copy
+            .build_request("http://msg.highapp.com/", AsyncHttpRequestMethod::Post)
+            .add_header("content-type", "application/x-www-form-urlencoded")
+            .set_body(body)
+            .send().await {
+            Err(e) => println!("!!!!!!test request failed, e: {:?}", e),
+            Ok(mut resp) => {
+                println!("!!!!!!peer address: {:?}", resp.get_peer_addr());
+                println!("!!!!!!url: {}", resp.get_url());
+                println!("!!!!!!status: {}", resp.get_status());
+                println!("!!!!!!version: {}", resp.get_version());
+                println!("!!!!!!headers: {:#?}", resp.to_headers());
+                println!("!!!!!!body len: {:?}", resp.get_body_len());
 
                 loop {
                     match resp.get_body().await {
@@ -468,6 +544,7 @@ fn test_https_request() {
                 println!("!!!!!!url: {}", resp.get_url());
                 println!("!!!!!!status: {}", resp.get_status());
                 println!("!!!!!!version: {}", resp.get_version());
+                println!("!!!!!!headers: {:#?}", resp.to_headers());
                 println!("!!!!!!body len: {:?}", resp.get_body_len());
 
                 loop {
@@ -504,6 +581,7 @@ fn test_https_request() {
                 println!("!!!!!!url: {}", resp.get_url());
                 println!("!!!!!!status: {}", resp.get_status());
                 println!("!!!!!!version: {}", resp.get_version());
+                println!("!!!!!!headers: {:#?}", resp.to_headers());
                 println!("!!!!!!body len: {:?}", resp.get_body_len());
 
                 loop {

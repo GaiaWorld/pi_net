@@ -6,10 +6,12 @@ edition = "2018"
 
 [dependencies]
 tokio = { version = "0.2", features = ["rt-core", "rt-threaded"] }
+percent-encoding = "2.1"
 reqwest = { version = "0.10", features = ["native-tls", "rustls-tls", "cookies", "gzip", "json", "socks"] }
 bytes = "0.5"
 lazy_static = "1.4"
 async = { path = "../../pi_lib/async" }
+hash = { path = "../../pi_lib/hash" }
 
 [dev-dependencies]
 env_logger = "0.7"

@@ -10,11 +10,14 @@ use std::net::{IpAddr, SocketAddr};
 use std::io::{Error, Result, ErrorKind};
 
 use tokio;
+use percent_encoding::{CONTROLS, percent_encode};
 use reqwest::{ClientBuilder, Client, Proxy, Certificate, Identity, RequestBuilder, Request, Body, Response,
               header::{HeaderMap, HeaderName, HeaderValue},
               redirect::Policy,
               multipart::{Part, Form}};
 use bytes::Bytes;
+
+use hash::XHashMap;
 
 use r#async::rt::{AsyncRuntime, AsyncValue};
 
@@ -291,8 +294,12 @@ pub enum AsyncHttpRequestBody {
 
 impl AsyncHttpRequestBody {
     //构建一个字符串请求体
-    pub fn with_string(body: String) -> Self {
-        AsyncHttpRequestBody::Body(Body::from(body))
+    pub fn with_string(body: String, is_encode: bool) -> Self {
+        if is_encode {
+            AsyncHttpRequestBody::Body(Body::from(percent_encode(body.into_bytes().as_slice(), CONTROLS).to_string()))
+        } else {
+            AsyncHttpRequestBody::Body(Body::from(body))
+        }
     }
 
     //构建一个二进制请求体
@@ -452,6 +459,18 @@ impl AsyncHttpResponse {
         } else {
             Some(r)
         }
+    }
+
+    //获取所有的响应头
+    pub fn to_headers(&self) -> XHashMap<String, String> {
+        let mut headers = XHashMap::default();
+        for (key, value) in self.0.headers() {
+            if let Ok(value) = value.to_str() {
+                headers.insert(key.to_string(), value.to_string());
+            }
+        }
+
+        headers
     }
 
     //获取响应体的长度
