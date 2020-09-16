@@ -199,7 +199,7 @@ impl AsyncWebsocket {
                 let task_id = self.0.read().task_id.as_ref().unwrap().clone();
 
                 match rt.clone() {
-                    AsyncRuntime::Single(r) => {
+                    AsyncRuntime::Local(r) => {
                         r.clone().wait_any(vec![
                             (rt.clone(),
                              AsyncOpenWebsocket::new(rt.clone(),
@@ -224,7 +224,20 @@ impl AsyncWebsocket {
                                  r.wait_timeout(timeout as usize).await;
                                  Err(Error::new(ErrorKind::TimedOut, format!("Open websocket failed, url: {:?}, reason: connect timeout", url)))
                              }.boxed())]).await
-                    }
+                    },
+                    AsyncRuntime::Worker(_, _, r) => {
+                        r.clone().wait_any(vec![
+                            (rt.clone(),
+                             AsyncOpenWebsocket::new(rt.clone(),
+                                                     task_id,
+                                                     self.clone(),
+                                                     url.clone()).boxed()),
+                            (rt.clone(),
+                             async move {
+                                 r.wait_timeout(timeout as usize).await;
+                                 Err(Error::new(ErrorKind::TimedOut, format!("Open websocket failed, url: {:?}, reason: connect timeout", url)))
+                             }.boxed())]).await
+                    },
                 }
             },
         }
@@ -275,8 +288,9 @@ impl Future for AsyncOpenWebsocket {
         }
 
         match &self.rt {
-            AsyncRuntime::Single(rt) => rt.pending(&self.task_id, cx.waker().clone()),
+            AsyncRuntime::Local(rt) => rt.pending(&self.task_id, cx.waker().clone()),
             AsyncRuntime::Multi(rt) => rt.pending(&self.task_id, cx.waker().clone()),
+            AsyncRuntime::Worker(_, _, rt) => rt.pending(&self.task_id, cx.waker().clone()),
         }
     }
 }
@@ -309,8 +323,9 @@ impl Factory for AsyncWebsocketHandlerFactory {
         (self.0).0.write().sender = Some(sender); //
         let rt = (self.0).0.read().rt.as_ref().unwrap().clone();
         match rt {
-            AsyncRuntime::Single(rt) => rt.wakeup((self.0).0.read().task_id.as_ref().unwrap()),
+            AsyncRuntime::Local(rt) => rt.wakeup((self.0).0.read().task_id.as_ref().unwrap()),
             AsyncRuntime::Multi(rt) => rt.wakeup((self.0).0.read().task_id.as_ref().unwrap()),
+            AsyncRuntime::Worker(_, _, rt) => rt.wakeup((self.0).0.read().task_id.as_ref().unwrap()),
         }
 
         //返回异步Websocket连接上的处理器

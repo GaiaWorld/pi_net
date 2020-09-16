@@ -15,7 +15,7 @@ use reqwest::{ClientBuilder, Client, Proxy, Certificate, Identity, RequestBuilde
               header::{HeaderMap, HeaderName, HeaderValue},
               redirect::Policy,
               multipart::{Part, Form}};
-use bytes::Bytes;
+use bytes::{Buf, BufMut, Bytes};
 
 use hash::XHashMap;
 
@@ -483,7 +483,7 @@ impl AsyncHttpResponse {
 * 异步Http响应异步方法
 */
 impl AsyncHttpResponse {
-    //获取响应体
+    //获取响应体块
     pub async fn get_body(&mut self) -> Result<Option<Box<[u8]>>> {
         match self.0.chunk().await {
             Err(e) => {
@@ -494,5 +494,24 @@ impl AsyncHttpResponse {
             },
             Ok(None) => Ok(None),
         }
+    }
+
+    //获取所有响应体块
+    pub async fn body(&mut self) -> Result<Box<[u8]>> {
+        let mut body: Vec<u8> = Vec::new();
+
+        loop {
+            match self.get_body().await {
+                Err(e) => {
+                    return Err(e);
+                },
+                Ok(Some(block)) => {
+                    body.put_slice(&block[..]);
+                },
+                Ok(None) => break,
+            }
+        }
+
+        Ok(body.into_boxed_slice())
     }
 }

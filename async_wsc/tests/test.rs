@@ -151,7 +151,7 @@ fn test_wsc() {
 
     //开始连接，并获取连接的发送器
     let task_id = rt.alloc();
-    ws.set_runtime(AsyncRuntime::Single(rt.clone()));
+    ws.set_runtime(AsyncRuntime::Local(rt.clone()));
     ws.set_task_id(task_id.clone());
     let rt_copy = rt.clone();
     rt.spawn(task_id.clone(), async move {
