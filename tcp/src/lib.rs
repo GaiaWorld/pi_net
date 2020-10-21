@@ -1,3 +1,4 @@
+#![allow(warnings)]
 #![feature(async_await)]
 #![feature(range_is_empty)]
 #![feature(const_generics)]

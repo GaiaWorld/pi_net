@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 #![feature(mem_take)]
 #![feature(never_type)]
 #![feature(async_await)]
