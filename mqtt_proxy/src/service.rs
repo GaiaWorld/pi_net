@@ -14,6 +14,7 @@ use mqtt::server::MqttBrokerProtocol;
 use mqtt::broker::{MQTT_RESPONSE_SYS_TOPIC, MqttBrokerListener, MqttBrokerService};
 use mqtt::session::{MqttSession, MqttConnect};
 use mqtt::util::{AsyncResult, BrokerSession};
+use tcp::util::{ContextHandle, SocketContext};
 
 /*
 * Mqtt事件
@@ -169,6 +170,16 @@ impl MqttConnectHandle {
                 }
             }
         }
+    }
+
+    //获取连接会话上下文的只读引用
+    pub fn get_session(&self) -> Option<&ContextHandle<BrokerSession>> {
+        self.connect.get_session().as_ref()
+    }
+
+    //获取连接会话上下文的可写引用
+    pub fn get_session_mut(&self) -> Option<&mut ContextHandle<BrokerSession>> {
+        self.connect.get_session().as_mut()
     }
 
     //发送指定主题的数据
