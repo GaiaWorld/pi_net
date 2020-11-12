@@ -31,6 +31,8 @@ hash = { path = "../../pi_lib/hash", features = ["xxhash"] }
 gray = { path = "../../pi_lib/gray" }
 file = { path = "../../pi_lib/file" }
 adler32 = { path = "../../pi_lib/adler32" }
+async_file = { path = "../../pi_lib/async_file" }
+async = { path = "../../pi_lib/async" }
 
 [dev-dependencies]
 route-recognizer = "0.1"

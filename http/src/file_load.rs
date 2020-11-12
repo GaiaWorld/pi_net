@@ -1,47 +1,68 @@
-use std::sync::Arc;
-use std::str::FromStr;
-use std::io::{Error, Result, ErrorKind};
-use std::path::{Component, PathBuf, Path};
 use std::fs::{self, create_dir_all, Metadata};
+use std::io::{Error, ErrorKind, Result};
+use std::path::{Component, Path, PathBuf};
+use std::str::FromStr;
+use std::sync::Arc;
 
+use futures::future::{BoxFuture, FutureExt, MapErr};
+use https::{
+    header::{CONTENT_LENGTH, CONTENT_TYPE},
+    StatusCode,
+};
+use log::warn;
 use mime::Mime;
 use mime_guess;
-use https::{StatusCode, header::{CONTENT_TYPE, CONTENT_LENGTH}};
-use futures::future::{FutureExt, BoxFuture, MapErr};
 use path_absolutize::Absolutize;
-use log::warn;
 
-use tcp::driver::{Socket, AsyncIOWait};
-use handler::SGenType;
+use async_file::file::{AsyncFile, AsyncFileOptions};
 use atom::Atom;
-use file::file::{AsyncFileOptions, WriteOptions, Shared, SharedFile, AsyncFile};
+use handler::SGenType;
+use r#async::rt::multi_thread::MultiTaskRuntime;
+use tcp::driver::{AsyncIOWait, Socket};
 
-use crate::{gateway::GatewayContext,
-            middleware::{MiddlewareResult, Middleware},
-            request::HttpRequest,
-            response::HttpResponse,
-            static_cache::{is_unmodified, is_modified, request_get_cache, set_cache_resp_headers, CacheRes, StaticCache},
-            util::{HttpRecvResult, trim_path}};
+use crate::{
+    gateway::GatewayContext,
+    middleware::{Middleware, MiddlewareResult},
+    request::HttpRequest,
+    response::HttpResponse,
+    static_cache::{
+        is_modified, is_unmodified, request_get_cache, set_cache_resp_headers, CacheRes,
+        StaticCache,
+    },
+    util::{trim_path, HttpRecvResult},
+};
 
 /*
 * Http文件加载
 */
 pub struct FileLoad {
-    root:               PathBuf,                    //文件根路径
-    cache:              Option<Arc<StaticCache>>,   //文件缓存
-    is_cache:           bool,                       //是否要求客户端每次请求强制验证资源是否过期
-    is_store:           bool,                       //设置是否缓存资源
-    is_transform:       bool,                       //设置是否允许客户端更改前端资源内容
-    is_only_if_cached:  bool,                       //设置是否要求代理有缓存，则只由代理向客户端提供资源
-    max_age:            u64,                        //缓存有效时长
+    files_async_runtime: MultiTaskRuntime<()>,
+    //异步文件运行时
+    root: PathBuf,
+    //文件根路径
+    cache: Option<Arc<StaticCache>>,
+    //文件缓存
+    is_cache: bool,
+    //是否要求客户端每次请求强制验证资源是否过期
+    is_store: bool,
+    //设置是否缓存资源
+    is_transform: bool,
+    //设置是否允许客户端更改前端资源内容
+    is_only_if_cached: bool,
+    //设置是否要求代理有缓存，则只由代理向客户端提供资源
+    max_age: u64, //缓存有效时长
 }
 
 unsafe impl Send for FileLoad {}
+
 unsafe impl Sync for FileLoad {}
 
 impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FileLoad {
-    fn request<'a>(&'a self, context: &'a mut GatewayContext, req: HttpRequest<S, W>)
-                   -> BoxFuture<'a, MiddlewareResult<S, W>> {
+    fn request<'a>(
+        &'a self,
+        context: &'a mut GatewayContext,
+        req: HttpRequest<S, W>,
+    ) -> BoxFuture<'a, MiddlewareResult<S, W>> {
         let future = async move {
             let mut resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
 
@@ -54,7 +75,10 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FileLoad {
                 file_path_id = Atom::from(path);
             } else {
                 //无法获取有效文件路径的字符串，则立即抛出错误
-                return MiddlewareResult::Throw(Error::new(ErrorKind::Other, "file load failed, reason: invaild file path"));
+                return MiddlewareResult::Throw(Error::new(
+                    ErrorKind::Other,
+                    "file load failed, reason: invaild file path",
+                ));
             }
 
             //访问指定文件的内存缓存
@@ -63,43 +87,53 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FileLoad {
                 match is_unmodified(cache.as_ref(), &req, None, file_path_id.clone()) {
                     Err(e) => {
                         return MiddlewareResult::Throw(e);
-                    },
+                    }
                     Ok(None) => (), //忽略这个判断
                     Ok(Some(false)) => {
                         //验证指定文件的缓存已修改，则立即返回指定错误
                         resp.status(StatusCode::PRECONDITION_FAILED.as_u16());
                         resp.header(CONTENT_LENGTH.as_str(), "0");
                         return MiddlewareResult::Break(resp);
-                    },
+                    }
                     Ok(Some(true)) => {
                         //验证指定文件的缓存未修改，则立即返回
                         resp.status(StatusCode::NOT_MODIFIED.as_u16());
                         return MiddlewareResult::Break(resp);
-                    },
+                    }
                 }
 
                 match is_modified(cache.as_ref(), &req, None, file_path_id.clone()) {
                     Err(e) => {
                         return MiddlewareResult::Throw(e);
-                    },
+                    }
                     Ok(true) => (), //验证指定文件的缓存已修改，则继续
                     Ok(false) => {
                         //验证指定文件的缓存未修改，则立即返回
                         resp.status(StatusCode::NOT_MODIFIED.as_u16());
                         return MiddlewareResult::Break(resp);
-                    },
+                    }
                 }
 
                 match request_get_cache(cache.as_ref(), &req, None, file_path_id.clone()) {
                     Err(e) => {
                         //获取指定文件的缓存错误，则立即抛出错误
                         return MiddlewareResult::Throw(e);
-                    },
+                    }
                     Ok((is_store, max_age, res)) => {
                         match res {
                             CacheRes::Cache((last_modified, mime, sign, bin)) => {
                                 //指定文件存在有效的缓存，则设置缓存响应头，响应体文件类型和响应体长度，并立即返回响应
-                                set_cache_resp_headers(&mut resp, false, self.is_cache, is_store, self.is_transform, self.is_only_if_cached, max_age, Some(last_modified), sign);
+                                set_cache_resp_headers(
+                                    &mut resp,
+                                    false,
+                                    self.is_cache,
+                                    is_store,
+                                    self.is_transform,
+                                    self.is_only_if_cached,
+                                    max_age,
+                                    Some(last_modified),
+                                    sign,
+                                );
                                 resp.header(CONTENT_TYPE.as_str(), mime.as_ref());
                                 if let Some(body) = resp.as_mut_body() {
                                     //将缓存数据写入响应体
@@ -107,10 +141,10 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FileLoad {
                                     body.push(bin.as_slice());
                                 }
                                 return MiddlewareResult::Finish((req, resp)); //立即结束请求处理，继续进行响应处理
-                            },
+                            }
                             _ => (), //无效的缓存，则从磁盘加载指定文件
                         }
-                    },
+                    }
                 }
             }
 
@@ -124,19 +158,19 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FileLoad {
                             resp.status(StatusCode::NOT_FOUND.as_u16());
                             resp.header(CONTENT_LENGTH.as_str(), "0");
                             return MiddlewareResult::Break(resp);
-                        },
+                        }
                         ErrorKind::PermissionDenied => {
                             //禁止访问文件
                             resp.status(StatusCode::FORBIDDEN.as_u16());
                             resp.header(CONTENT_LENGTH.as_str(), "0");
                             return MiddlewareResult::Break(resp);
-                        },
+                        }
                         _ => {
                             //服务器内部错误
                             return MiddlewareResult::Throw(e);
-                        },
+                        }
                     }
-                },
+                }
                 Ok(meta) => meta,
             };
 
@@ -146,7 +180,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FileLoad {
                     resp.status(StatusCode::NOT_FOUND.as_u16());
                     resp.header(CONTENT_LENGTH.as_str(), "0");
                     return MiddlewareResult::Break(resp);
-                },
+                }
                 Some(path) => {
                     //文件存在，则异步加载指定文件，并根据文件扩展名，设置Mime
                     let file_mime;
@@ -162,13 +196,17 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FileLoad {
 
                     //缓存加载的文件名、文件的Mime和文件最近修改时间到网关上下文的参数表中
                     if let Ok(last_modified) = meta.modified() {
-                        context.set_cache_args(Some((file_path_id.to_string(), file_mime, last_modified)));
+                        context.set_cache_args(Some((
+                            file_path_id.to_string(),
+                            file_mime,
+                            last_modified,
+                        )));
                     }
 
-                    if let Err(e) = async_load_file(&resp, path) {
+                    if let Err(e) = async_load_file(self.files_async_runtime.clone(), &resp, path) {
                         return MiddlewareResult::Throw(e);
                     }
-                },
+                }
             }
 
             //完成请求处理
@@ -177,8 +215,12 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FileLoad {
         future.boxed()
     }
 
-    fn response<'a>(&'a self, context: &'a mut GatewayContext, req: HttpRequest<S, W>, resp: HttpResponse<S, W>)
-                    -> BoxFuture<'a, MiddlewareResult<S, W>> {
+    fn response<'a>(
+        &'a self,
+        context: &'a mut GatewayContext,
+        req: HttpRequest<S, W>,
+        resp: HttpResponse<S, W>,
+    ) -> BoxFuture<'a, MiddlewareResult<S, W>> {
         let mut body_bufs: Vec<Vec<u8>> = Vec::new();
         let mut response = resp;
         let future = async move {
@@ -195,13 +237,13 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FileLoad {
                         HttpRecvResult::Err(e) => {
                             //获取Http响应体错误
                             return MiddlewareResult::Throw(e);
-                        },
+                        }
                         HttpRecvResult::Ok(bodys) => {
                             //获取到的是Http响应体块的后继
                             for (_index, bin) in bodys {
                                 body_bufs.push(bin);
                             }
-                        },
+                        }
                         HttpRecvResult::Fin(bodys) => {
                             //获取到的是Http响应体块的尾部，处理后退出循环
                             body.init(); //未初始化，则初始化响应体
@@ -217,10 +259,10 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FileLoad {
                                 _ => {
                                     //加载指定文件失败，则设置响应状态为文件未找到
                                     response.status(StatusCode::NOT_FOUND.as_u16());
-                                },
+                                }
                             }
                             break;
-                        },
+                        }
                     }
                 }
             }
@@ -233,16 +275,35 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FileLoad {
                         //有文件内容
                         if let Some(cache) = &self.cache {
                             //需要缓存加载的文件
-                            if let Some((file_path, mime, last_modified)) = context.get_cache_args() {
-                                match cache.insert(None, self.max_age, last_modified.clone(), mime, false, Atom::from(file_path.clone()), Arc::new(Vec::from(body_bin))) {
+                            if let Some((file_path, mime, last_modified)) = context.get_cache_args()
+                            {
+                                match cache.insert(
+                                    None,
+                                    self.max_age,
+                                    last_modified.clone(),
+                                    mime,
+                                    false,
+                                    Atom::from(file_path.clone()),
+                                    Arc::new(Vec::from(body_bin)),
+                                ) {
                                     Err(e) => {
                                         //缓存指定文件错误
                                         warn!("!!!> File Load Ok, But Cache Failed, file: {:?}, reason: {:?}", file_path, e);
-                                    },
+                                    }
                                     Ok((sign, _)) => {
                                         //缓存指定文件成功，则设置响应的缓存头
-                                        set_cache_resp_headers(&mut response, false, self.is_cache, self.is_store, self.is_transform, self.is_only_if_cached, self.max_age, Some(last_modified), sign);
-                                    },
+                                        set_cache_resp_headers(
+                                            &mut response,
+                                            false,
+                                            self.is_cache,
+                                            self.is_store,
+                                            self.is_transform,
+                                            self.is_only_if_cached,
+                                            self.max_age,
+                                            Some(last_modified),
+                                            sign,
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -259,27 +320,29 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FileLoad {
 
 impl FileLoad {
     //构建指定根目录的文件加载器
-    pub fn new<P: Into<PathBuf>>(dir: P,
-                                 cache: Option<Arc<StaticCache>>,
-                                 is_cache: bool,
-                                 is_store: bool,
-                                 is_transform: bool,
-                                 is_only_if_cached: bool,
-                                 max_age: usize) -> Self {
+    pub fn new<P: Into<PathBuf>>(
+        files_async_runtime: MultiTaskRuntime<()>,
+        dir: P,
+        cache: Option<Arc<StaticCache>>,
+        is_cache: bool,
+        is_store: bool,
+        is_transform: bool,
+        is_only_if_cached: bool,
+        max_age: usize,
+    ) -> Self {
         match trim_path(dir) {
             Err(e) => {
                 panic!("Create Http File Load Failed, reason: {:?}", e);
-            },
-            Ok(root) => {
-                FileLoad {
-                    root,
-                    cache,
-                    is_cache,
-                    is_store,
-                    is_transform,
-                    is_only_if_cached,
-                    max_age: max_age as u64,
-                }
+            }
+            Ok(root) => FileLoad {
+                files_async_runtime,
+                root,
+                cache,
+                is_cache,
+                is_store,
+                is_transform,
+                is_only_if_cached,
+                max_age: max_age as u64,
             },
         }
     }
@@ -287,8 +350,8 @@ impl FileLoad {
 
 //标准化路径
 fn normalize_path(path: &Path) -> PathBuf {
-    path.components().fold(PathBuf::new(), |mut result, p| {
-        match p {
+    path.components()
+        .fold(PathBuf::new(), |mut result, p| match p {
             Component::Normal(x) => {
                 result.push(x);
                 result
@@ -296,10 +359,9 @@ fn normalize_path(path: &Path) -> PathBuf {
             Component::ParentDir => {
                 result.pop();
                 result
-            },
-            _ => result
-        }
-    })
+            }
+            _ => result,
+        })
 }
 
 //获取指定元信息的文件实际路径
@@ -320,56 +382,81 @@ fn get_file_path(file_path: PathBuf, meta: &Metadata) -> Option<PathBuf> {
             } else {
                 None
             }
-        },
+        }
     }
 }
 
 //异步加载指定文件
-fn async_load_file<S: Socket, W: AsyncIOWait>(resp: &HttpResponse<S, W>, file_path: PathBuf) -> Result<()> {
+fn async_load_file<S: Socket, W: AsyncIOWait>(
+    files_async_runtime: MultiTaskRuntime<()>,
+    resp: &HttpResponse<S, W>,
+    file_path: PathBuf,
+) -> Result<()> {
     if let Some(resp_handler) = resp.get_response_handler() {
         let path = file_path.clone();
-        let open = Box::new(move |f: Result<AsyncFile>| {
-            match f {
-                Err(e) => {
-                    //打开文件失败
-                    warn!("!!!> Http Async Open File Failed, file: {:?}, reason: {:?}", path, e);
-                    if let Err(e) = resp_handler.finish() {
-                        warn!("!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}", path, e);
-                    }
-                },
-                Ok(r) => {
-                    //打开文件成功
-                    let file = Arc::new(r);
-                    let size = file.get_size();
-                    let read = Box::new(move |_: SharedFile, result: Result<Vec<u8>>| {
-                        match result {
-                            Err(e) => {
-                                //读文件失败
-                                warn!("!!!> Http Async Read File Failed, file: {:?}, reason: {:?}", path, e);
+        let files_async_runtime_copy = files_async_runtime.clone();
+        if let Err(e) = files_async_runtime.spawn(files_async_runtime.alloc(), async move {
+            // 调用底层open接口
+            let file = AsyncFile::open(
+                files_async_runtime_copy,
+                path.clone(),
+                AsyncFileOptions::OnlyRead,
+            )
+                .await;
+            match file {
+                Ok(file) => {
+                    // 获取文件大小
+                    let size = file.get_size() as usize;
+                    let r = file.read(0, size).await;
+                    match r {
+                        Ok(bin) => {
+                            //读文件成功
+                            if let Err(e) = resp_handler.write(bin) {
+                                warn!("!!!> Http Body Mut Write Failed, file: {:?}, reason: {:?}", path, e);
+                            } else {
                                 if let Err(e) = resp_handler.finish() {
                                     warn!("!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}", path, e);
                                 }
-                            },
-                            Ok(bin) => {
-                                //读文件成功
-                                if let Err(e) = resp_handler.write(bin) {
-                                    warn!("!!!> Http Body Mut Write Failed, file: {:?}, reason: {:?}", path, e);
-                                } else {
-                                    if let Err(e) = resp_handler.finish() {
-                                        warn!("!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}", path, e);
-                                    }
-                                }
-                            },
+                            }
                         }
-                    });
-                    file.pread(0, size as usize, read);
-                },
+                        Err(e) => {
+                            warn!(
+                                "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                path, e
+                            );
+                            if let Err(e) = resp_handler.finish() {
+                                warn!(
+                                    "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                    path, e
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "!!!> Http Async Open File Failed, file: {:?}, reason: {:?}",
+                        path, e
+                    );
+                    if let Err(e) = resp_handler.finish() {
+                        warn!(
+                            "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                            path, e
+                        );
+                    }
+                }
             }
-        });
-        AsyncFile::open(file_path, AsyncFileOptions::OnlyRead(1), open);
-
+        }) {
+            warn!(
+                "!!!> Http Async Open File Failed, reason: {:?}",
+                e
+            );
+        }
         return Ok(());
     }
 
-    Err(Error::new(ErrorKind::NotFound, "load file error, reason: invalid response body"))
+    Err(Error::new(
+        ErrorKind::NotFound,
+        "load file error, reason: invalid response body",
+    ))
 }
