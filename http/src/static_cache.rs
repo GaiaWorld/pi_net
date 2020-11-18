@@ -606,6 +606,11 @@ impl StaticCache {
         CacheRes::Empty
     }
 
+    /// 移除所有缓存
+    pub fn remove_all_cache(&self) {
+        self.cache.write().clear();
+    }
+
     //暂停缓存的整理
     pub fn pause_collect(&self, reason: String) -> Result<()> {
         if !self.is_running.load(Ordering::SeqCst) {
