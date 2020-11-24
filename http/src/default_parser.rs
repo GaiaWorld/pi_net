@@ -4,7 +4,7 @@ use std::io::{Error, Result, ErrorKind, Write};
 
 use url::form_urlencoded;
 use mime::{APPLICATION, WWW_FORM_URLENCODED, JSON, OCTET_STREAM, TEXT, CHARSET, UTF_8, Mime};
-use https::{header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, CONTENT_LENGTH}, StatusCode};
+use https::{Method, header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, CONTENT_LENGTH}, StatusCode};
 use flate2::{Compression, FlushCompress, Compress, Status, write::GzEncoder};
 use serde_json::{Result as JsonResult, Map, Value};
 use futures::future::{FutureExt, BoxFuture};
@@ -144,8 +144,16 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for DefaultPars
                                                         return MiddlewareResult::Throw(e);
                                                     }
 
-                                                    //编码成功，则替换当前响应体，设置响应头，并将创建的编码器加入空闲编码器队列中
-                                                    body.reset(output.as_slice());
+                                                    //编码成功
+                                                    if req.method() == &Method::HEAD {
+                                                        //是HEAD方法请求的响应，则忽略响应体
+                                                        body.reset(&[]);
+                                                    } else {
+                                                        //非HEAD方法请求的响应，则替换为编码成功后的响应体
+                                                        body.reset(output.as_slice());
+                                                    }
+
+                                                    //设置响应头，并将创建的编码器加入空闲编码器队列中
                                                     response.header(CONTENT_ENCODING.as_str(), DEFLATE_ENCODING);
                                                     response.header(CONTENT_LENGTH.as_str(), deflate.total_out().to_string().as_str());
                                                     deflate.reset();
@@ -163,8 +171,16 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for DefaultPars
                                                         return MiddlewareResult::Throw(e);
                                                     }
 
-                                                    //编码成功，则替换当前响应体，设置响应头，并将使用后的编码器放入空闲编码器队列中
-                                                    body.reset(output.as_slice());
+                                                    //编码成功
+                                                    if req.method() == &Method::HEAD {
+                                                        //是HEAD方法请求的响应，则忽略响应体
+                                                        body.reset(&[]);
+                                                    } else {
+                                                        //非HEAD方法请求的响应，则替换为编码成功后的响应体
+                                                        body.reset(output.as_slice());
+                                                    }
+
+                                                    //设置响应头，并将使用后的编码器放入空闲编码器队列中
                                                     response.header(CONTENT_ENCODING.as_str(), DEFLATE_ENCODING);
                                                     response.header(CONTENT_LENGTH.as_str(), deflate.total_out().to_string().as_str());
                                                     deflate.reset();
@@ -193,8 +209,16 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for DefaultPars
                                                     return MiddlewareResult::Throw(e);
                                                 },
                                                 Ok(output) => {
-                                                    //编码成功，则替换当前响应体，设置响应头
-                                                    body.reset(output.as_slice());
+                                                    //编码成功
+                                                    if req.method() == &Method::HEAD {
+                                                        //是HEAD方法请求的响应，则忽略响应体
+                                                        body.reset(&[]);
+                                                    } else {
+                                                        //非HEAD方法请求的响应，则替换为编码成功后的响应体
+                                                        body.reset(output.as_slice());
+                                                    }
+
+                                                    //设置响应头
                                                     response.header(CONTENT_ENCODING.as_str(), GZIP_ENCODING);
                                                     response.header(CONTENT_LENGTH.as_str(), output.len().to_string().as_str());
                                                 },
@@ -223,6 +247,13 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for DefaultPars
                     response.header(CONTENT_LENGTH.as_str(), body_len.to_string().as_str());
                 } else {
                     response.header(CONTENT_LENGTH.as_str(), "0");
+                }
+
+                if req.method() == &Method::HEAD {
+                    //是HEAD方法请求的响应，则忽略响应体
+                    if let Some(body) = response.as_mut_body() {
+                        body.reset(&[]);
+                    }
                 }
             }
             MiddlewareResult::ContinueResponse((req, response))

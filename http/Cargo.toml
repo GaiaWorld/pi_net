@@ -36,4 +36,3 @@ async = { path = "../../pi_lib/async" }
 
 [dev-dependencies]
 route-recognizer = "0.1"
-worker = { path = "../../pi_lib/worker" }

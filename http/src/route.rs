@@ -368,6 +368,12 @@ impl<S: Socket, W: AsyncIOWait, Context: Send + Sync + 'static, Handler: Middlew
         self
     }
 
+    //为指定的路由设置head方法的处理器
+    pub fn head(&mut self, handler: Handler) -> &mut Self {
+        self.method(Method::HEAD, handler);
+        self
+    }
+
     //为指定的路由设置get方法的处理器
     pub fn get(&mut self, handler: Handler) -> &mut Self {
         self.method(Method::GET, handler);
