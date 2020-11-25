@@ -125,6 +125,16 @@ impl MqttConnectHandle {
         self.connect.is_security()
     }
 
+    //判断是否是被动接收消息
+    fn is_passive(&self) -> bool {
+        self.connect.is_passive_receive()
+    }
+
+    //设置是否被动接收消息
+    fn set_passive(&self, b: bool) {
+        self.connect.passive_receive(b);
+    }
+
     //唤醒连接
     pub fn wakeup(&self) -> Result<()> {
         self.connect.wakeup()
@@ -185,6 +195,10 @@ impl MqttConnectHandle {
     //回应指定请求
     pub fn reply(&self, bin: Vec<u8>) {
         self.send(&MQTT_RESPONSE_SYS_TOPIC, bin);
+        if self.is_passive() {
+            //是被动接收消息
+            self.wakeup();
+        }
     }
 
     //关闭当前连接

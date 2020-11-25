@@ -102,6 +102,12 @@ pub trait MqttConnect: Debug + Send + Sync + 'static {
     //判断是否是安全的连接
     fn is_security(&self) -> bool;
 
+    //是否被接收消息
+    fn is_passive_receive(&self) -> bool;
+
+    //设置是否被动接收消息
+    fn passive_receive(&self, b: bool);
+
     //唤醒连接
     fn wakeup(&self) -> Result<()>;
 
@@ -120,6 +126,7 @@ pub trait MqttConnect: Debug + Send + Sync + 'static {
 */
 pub struct QosZeroSession<S: Socket> {
     connect:        Option<WsSocket<S, AsyncWaitsHandle>>,  //Websocket连接
+    is_passive:     Arc<AtomicBool>,                        //是否被动接收消息
     client_id:      String,                                 //客户端id
     is_accepted:    Arc<AtomicBool>,                        //是否已连接
     is_clean:       Arc<AtomicBool>,                        //是否清理会话
@@ -170,6 +177,7 @@ impl<S: Socket> Clone for QosZeroSession<S> {
     fn clone(&self) -> Self {
         QosZeroSession {
             connect: self.connect.clone(),
+            is_passive: self.is_passive.clone(),
             client_id: self.client_id.clone(),
             is_accepted: self.is_accepted.clone(),
             is_clean: self.is_clean.clone(),
@@ -314,6 +322,14 @@ impl<S: Socket> MqttConnect for QosZeroSession<S> {
         false
     }
 
+    fn is_passive_receive(&self) -> bool {
+        self.is_passive.load(AtomicOrdering::Relaxed)
+    }
+
+    fn passive_receive(&self, b: bool) {
+        self.is_passive.store(b, AtomicOrdering::SeqCst);
+    }
+
     fn wakeup(&self) -> Result<()> {
         if let Some(connect) = &self.connect {
             return connect.wake();
@@ -381,6 +397,7 @@ impl<S: Socket> QosZeroSession<S> {
     pub fn with_client_id(client_id: String) -> Self {
         QosZeroSession {
             connect: None,
+            is_passive: Arc::new(AtomicBool::new(false)),
             client_id,
             is_accepted: Arc::new(AtomicBool::new(false)),
             is_clean: Arc::new(AtomicBool::new(false)),
