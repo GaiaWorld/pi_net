@@ -126,12 +126,12 @@ impl MqttConnectHandle {
     }
 
     //判断是否是被动接收消息
-    fn is_passive(&self) -> bool {
+    pub fn is_passive(&self) -> bool {
         self.connect.is_passive_receive()
     }
 
     //设置是否被动接收消息
-    fn set_passive(&self, b: bool) {
+    pub fn set_passive(&self, b: bool) {
         self.connect.passive_receive(b);
     }
 
