@@ -104,7 +104,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for UploadFile 
             }
 
             let path = self.root.join(file);
-            let resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
+            let resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
             if let Some(dir) = path.parent() {
                 if let Ok(p) = dir.absolutize() {
                     if !p.starts_with(PathBuf::from(&self.root).absolutize().ok().unwrap()) {

@@ -106,7 +106,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for BatchLoad {
                     Ok(Some(false)) => {
                         //验证指定文件的缓存已修改，则立即返回指定错误
                         let mut resp =
-                            HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
+                            HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
                         resp.status(StatusCode::PRECONDITION_FAILED.as_u16());
                         resp.header(CONTENT_LENGTH.as_str(), "0");
                         return MiddlewareResult::Break(resp);
@@ -114,7 +114,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for BatchLoad {
                     Ok(Some(true)) => {
                         //验证指定文件的缓存未修改，则立即返回
                         let mut resp =
-                            HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
+                            HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
                         resp.status(StatusCode::NOT_MODIFIED.as_u16());
                         return MiddlewareResult::Break(resp);
                     }
@@ -128,7 +128,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for BatchLoad {
                     Ok(false) => {
                         //验证指定文件的缓存未修改，则立即返回
                         let mut resp =
-                            HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
+                            HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
                         resp.status(StatusCode::NOT_MODIFIED.as_u16());
                         return MiddlewareResult::Break(resp);
                     }
@@ -146,7 +146,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for BatchLoad {
                                 let mut resp = HttpResponse::new(
                                     req.get_handle().clone(),
                                     req.get_waits().clone(),
-                                    1,
+                                    2,
                                 );
                                 set_cache_resp_headers(
                                     &mut resp,
@@ -234,7 +234,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for BatchLoad {
             let resp = HttpResponse::new(
                 req.get_handle().clone(),
                 req.get_waits().clone(),
-                dir_vec.len(),
+                dir_vec.len() + 1,
             );
 
             //异步加载所有文件
