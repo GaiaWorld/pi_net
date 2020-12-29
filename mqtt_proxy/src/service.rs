@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::net::SocketAddr;
 use std::result::Result as GenResult;
 use std::io::{Error, ErrorKind, Result};
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use log::warn;
 
@@ -35,6 +35,7 @@ pub struct MqttConnectHandle {
     client_id:  String,                 //Mqtt客户端id
     protocol:   MqttBrokerProtocol,     //Mqtt代理
     connect:    Arc<dyn MqttConnect>,   //Mqtt连接
+    is_closed:  AtomicBool,             //Mqtt连接是否已关闭
 }
 
 unsafe impl Send for MqttConnectHandle {}
@@ -76,11 +77,19 @@ impl MqttConnectHandle {
 
     //获取连接的本地地址
     pub fn get_local_addr(&self) -> Option<SocketAddr> {
+        if self.is_closed.load(Ordering::Relaxed) {
+            return None;
+        }
+
         self.connect.get_local_addr()
     }
 
     //获取连接的本地ip
     pub fn get_local_ip(&self) -> Option<String> {
+        if self.is_closed.load(Ordering::Relaxed) {
+            return None;
+        }
+
         if let Some(addr) = self.get_local_addr() {
             return Some(addr.ip().to_string());
         }
@@ -90,6 +99,10 @@ impl MqttConnectHandle {
 
     //获取连接的本地端口
     pub fn get_local_port(&self) -> Option<u16> {
+        if self.is_closed.load(Ordering::Relaxed) {
+            return None;
+        }
+
         if let Some(addr) = self.get_local_addr() {
             return Some(addr.port());
         }
@@ -99,11 +112,19 @@ impl MqttConnectHandle {
 
     //获取连接的对端地址
     pub fn get_remote_addr(&self) -> Option<SocketAddr> {
+        if self.is_closed.load(Ordering::Relaxed) {
+            return None;
+        }
+
         self.connect.get_remote_addr()
     }
 
     //获取连接的对端ip
     pub fn get_remote_ip(&self) -> Option<String> {
+        if self.is_closed.load(Ordering::Relaxed) {
+            return None;
+        }
+
         if let Some(addr) = self.get_remote_addr() {
             return Some(addr.ip().to_string());
         }
@@ -113,6 +134,10 @@ impl MqttConnectHandle {
 
     //获取连接的对端端口
     pub fn get_remote_port(&self) -> Option<u16> {
+        if self.is_closed.load(Ordering::Relaxed) {
+            return None;
+        }
+
         if let Some(addr) = self.get_remote_addr() {
             return Some(addr.port());
         }
@@ -203,6 +228,10 @@ impl MqttConnectHandle {
 
     //关闭当前连接
     pub fn close(&self, reason: Result<()>) -> Result<()> {
+        if self.is_closed.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
         self.connect.close(reason)
     }
 }
@@ -239,6 +268,7 @@ impl MqttBrokerListener for MqttProxyListener {
                         client_id: session.get_client_id().clone(),
                         protocol,
                         connect,
+                        is_closed: AtomicBool::new(false),
                     };
 
                     //异步处理Mqtt连接
@@ -277,6 +307,7 @@ impl MqttBrokerListener for MqttProxyListener {
                 client_id: context.get_client_id().clone(),
                 protocol,
                 connect,
+                is_closed: AtomicBool::new(true),
             };
 
             //异步处理Mqtt连接关闭
@@ -362,6 +393,7 @@ impl MqttBrokerService for MqttProxyService {
                         client_id: session.get_client_id().clone(),
                         protocol,
                         connect,
+                        is_closed: AtomicBool::new(false),
                     };
 
                     //异步处理Mqtt订阅主题
@@ -393,6 +425,7 @@ impl MqttBrokerService for MqttProxyService {
                         client_id: session.get_client_id().clone(),
                         protocol,
                         connect,
+                        is_closed: AtomicBool::new(false),
                     };
 
                     //异步处理Mqtt连接关闭
@@ -423,6 +456,7 @@ impl MqttBrokerService for MqttProxyService {
                         client_id: session.get_client_id().clone(),
                         protocol,
                         connect,
+                        is_closed: AtomicBool::new(false),
                     };
 
                     //异步处理Mqtt连接关闭
