@@ -200,16 +200,6 @@ async fn accept(protocol: WssMqtt311,
     let client_id = packet.client_id.clone();
     let is_exist_session = protocol.is_exist(&client_id); //指定客户端会话是否存在
 
-    if is_exist_session {
-        //当前客户端会话存在
-        if let Some(session) = protocol.broker.get_session(&client_id) {
-            if session.is_accepted() {
-                //当前客户端已连接，则立即返回错误原因
-                return Err(Error::new(ErrorKind::AlreadyExists, "mqtt connect failed, reason: connect already exist"));
-            }
-        }
-    }
-
     //设置当前会话标记
     let mut session_present = true;
     if clean_session {
