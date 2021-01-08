@@ -20,7 +20,7 @@ use ws::{connect::WsSocket,
 
 use crate::{server::MqttBrokerProtocol,
             broker::{Retain, MqttBroker},
-            session::{MqttSession, QosZeroSession},
+            session::{MqttConnect, MqttSession, QosZeroSession},
             util::BrokerSession};
 use futures::FutureExt;
 
@@ -69,7 +69,7 @@ impl ChildProtocol<TlsSocket, AsyncWaitsHandle> for WssMqtt311 {
                             accept(ws_mqtt, connect, waits, packet).await
                         },
                         Packet::Publish(packet) => {
-                            publish(ws_mqtt, connect, packet)
+                            publish(ws_mqtt, connect, waits, packet).await
                         },
                         Packet::Subscribe(packet) => {
                             subscribe(ws_mqtt, connect, waits, packet).await
@@ -200,16 +200,6 @@ async fn accept(protocol: WssMqtt311,
     let client_id = packet.client_id.clone();
     let is_exist_session = protocol.is_exist(&client_id); //指定客户端会话是否存在
 
-    if is_exist_session {
-        //当前客户端会话存在
-        if let Some(session) = protocol.broker.get_session(&client_id) {
-            if session.is_accepted() {
-                //当前客户端已连接，则立即返回错误原因
-                return Err(Error::new(ErrorKind::AlreadyExists, "mqtt connect failed, reason: connect already exist"));
-            }
-        }
-    }
-
     //设置当前会话标记
     let mut session_present = true;
     if clean_session {
@@ -316,9 +306,10 @@ fn get_client_context(connect: &WsSocket<TlsSocket, AsyncWaitsHandle>) -> Result
 }
 
 //发布消息
-fn publish(protocol: WssMqtt311,
-           connect: WsSocket<TlsSocket, AsyncWaitsHandle>,
-           mut packet: Publish) -> Result<()> {
+async fn publish(protocol: WssMqtt311,
+                 connect: WsSocket<TlsSocket, AsyncWaitsHandle>,
+                 waits: AsyncWaitsHandle,
+                 mut packet: Publish) -> Result<()> {
     let (client_id, keep_alive) = match get_client_context(&connect) {
         Err(e) => {
             return Err(e);
@@ -352,7 +343,15 @@ fn publish(protocol: WssMqtt311,
     if let Some(service) = protocol.broker.get_service() {
         //如果有服务，则只执行服务
         if let Some(session) = protocol.broker.get_session(&client_id) {
-            return service.0.publish(MqttBrokerProtocol::WssMqtt311(Arc::new(protocol)), session, packet.topic_name.clone(), packet.payload);
+            let is_passive_receive = session.is_passive_receive();
+            let result = service.0.publish(MqttBrokerProtocol::WssMqtt311(Arc::new(protocol)), session, packet.topic_name.clone(), packet.payload);
+
+            if is_passive_receive {
+                //需要被动接收，则立即挂起连接，并等待服务回应
+                PendSocket::pending(connect.get_token().clone(), waits).await;
+            }
+
+            return result;
         }
     }
 

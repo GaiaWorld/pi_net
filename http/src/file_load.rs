@@ -43,7 +43,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FileLoad {
     fn request<'a>(&'a self, context: &'a mut GatewayContext, req: HttpRequest<S, W>)
                    -> BoxFuture<'a, MiddlewareResult<S, W>> {
         let future = async move {
-            let mut resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
+            let mut resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
 
             //获取Http请求的文件路径
             let mut file_path = self.root.to_path_buf();

@@ -224,7 +224,7 @@ impl WsSession {
 
     //将向量增加到帧缓冲
     pub fn append(&mut self, frame: Vec<u8>) {
-        self.frames.put(frame);
+        self.frames.put(frame.as_slice());
     }
 
     //重置帧类型和帧缓冲

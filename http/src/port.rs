@@ -103,7 +103,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for HttpPort<S>
                 }
             }
 
-            let resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
+            let resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
             if let Some(resp_handler) = resp.get_response_handler() {
                 let http_gray = HttpGray {
                     uid,

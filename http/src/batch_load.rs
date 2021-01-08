@@ -84,14 +84,16 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for BatchLoad {
                     Ok(None) => (), //忽略这个判断
                     Ok(Some(false)) => {
                         //验证指定文件的缓存已修改，则立即返回指定错误
-                        let mut resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
+                        let mut resp =
+                            HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
                         resp.status(StatusCode::PRECONDITION_FAILED.as_u16());
                         resp.header(CONTENT_LENGTH.as_str(), "0");
                         return MiddlewareResult::Break(resp);
                     },
                     Ok(Some(true)) => {
                         //验证指定文件的缓存未修改，则立即返回
-                        let mut resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
+                        let mut resp =
+                            HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
                         resp.status(StatusCode::NOT_MODIFIED.as_u16());
                         return MiddlewareResult::Break(resp);
                     },
@@ -104,7 +106,8 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for BatchLoad {
                     Ok(true) => (), //验证指定文件的缓存已修改，则继续
                     Ok(false) => {
                         //验证指定文件的缓存未修改，则立即返回
-                        let mut resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
+                        let mut resp =
+                            HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
                         resp.status(StatusCode::NOT_MODIFIED.as_u16());
                         return MiddlewareResult::Break(resp);
                     },
@@ -119,9 +122,26 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for BatchLoad {
                         match res {
                             CacheRes::Cache((_last_modified, mime, sign, bin)) => {
                                 //指定文件存在有效的缓存，则设置缓存响应头，响应体文件类型和响应体长度，并立即返回响应
-                                let mut resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
-                                set_cache_resp_headers(&mut resp, false, self.is_cache, is_store, self.is_transform, self.is_only_if_cached, max_age, None, sign);
-                                resp.header(CONTENT_DISPOSITION.as_str(), DEFAULT_CONTENT_DISPOSITION);
+                                let mut resp = HttpResponse::new(
+                                    req.get_handle().clone(),
+                                    req.get_waits().clone(),
+                                    2,
+                                );
+                                set_cache_resp_headers(
+                                    &mut resp,
+                                    false,
+                                    self.is_cache,
+                                    is_store,
+                                    self.is_transform,
+                                    self.is_only_if_cached,
+                                    max_age,
+                                    None,
+                                    sign,
+                                );
+                                resp.header(
+                                    CONTENT_DISPOSITION.as_str(),
+                                    DEFAULT_CONTENT_DISPOSITION,
+                                );
                                 resp.header(CONTENT_TYPE.as_str(), mime.as_ref());
                                 if let Some(body) = resp.as_mut_body() {
                                     //将缓存数据写入响应体
@@ -175,7 +195,11 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for BatchLoad {
 
             //合并解析的所有文件，并根据文件数量构建Http响应
             dir_vec.append(&mut file_vec);
-            let resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), dir_vec.len());
+            let resp = HttpResponse::new(
+                req.get_handle().clone(),
+                req.get_waits().clone(),
+                dir_vec.len() + 1,
+            );
 
             //异步加载所有文件
             match async_load_files(&resp, dir_vec, root.to_str().unwrap().as_bytes().len() + 1) {

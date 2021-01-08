@@ -53,7 +53,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for CORSHandler
         let future = async move {
             if req.method() == &Method::OPTIONS {
                 //处理Options方法的CORS请求
-                let resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
+                let resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
                 handle_options_request(self, req, resp)
             } else {
                 //处理其它Method的简单CORS请求
@@ -292,7 +292,7 @@ fn handle_simple_request<S: Socket, W: AsyncIOWait>(handler: &CORSHandler, req: 
                                 handler.allowed.write().insert(origin.to_string(), None);
                             } else {
                                 //简单验证失败，则不允许客户端指定的源进行指定的跨域访问，则立即返回响应
-                                let mut resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
+                                let mut resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
                                 resp.header(CONTENT_LENGTH.as_str(), "0");
                                 return MiddlewareResult::Break(resp);
                             }
@@ -309,7 +309,7 @@ fn handle_simple_request<S: Socket, W: AsyncIOWait>(handler: &CORSHandler, req: 
                         Ok(elapsed) => {
                             if elapsed.as_secs() > timeout as u64 {
                                 //已过期，则立即返回响应
-                                let mut resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 1);
+                                let mut resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
                                 resp.header(CONTENT_LENGTH.as_str(), "0");
                                 return MiddlewareResult::Break(resp);
                             }

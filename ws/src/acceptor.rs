@@ -470,21 +470,21 @@ fn resp_to_vec(resp: Response<Vec<u8>>) -> Vec<u8> {
         (Vec::with_capacity(HANDSHAKE_RESP_BUFFER_SIZE), vec![])
     };
 
-    buf.put(format!("{:?}", resp.version()));
-    buf.put(" ");
+    buf.put(format!("{:?}", resp.version()).as_bytes());
+    buf.put(" ".as_bytes());
     let status = resp.status();
-    buf.put(status.as_str());
-    buf.put(" ");
-    buf.put(status.canonical_reason().unwrap());
-    buf.put("\r\n");
+    buf.put(status.as_str().as_bytes());
+    buf.put(" ".as_bytes());
+    buf.put(status.canonical_reason().unwrap().as_bytes());
+    buf.put("\r\n".as_bytes());
     for (key, value) in resp.headers() {
-        buf.put(key.as_str());
-        buf.put(":");
+        buf.put(key.as_str().as_bytes());
+        buf.put(":".as_bytes());
         buf.put(value.as_bytes());
-        buf.put("\r\n");
+        buf.put("\r\n".as_bytes());
     }
-    buf.put("\r\n");
-    buf.put(body);
+    buf.put("\r\n".as_bytes());
+    buf.put(body.as_slice());
 
     buf
 }

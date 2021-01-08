@@ -9,7 +9,7 @@ fnv = "1.0"
 futures = "0.3"
 mio = "0.6"
 mqtt311 = "0.2"
-parking_lot = "0.10"
+parking_lot = "0.11"
 lazy_static = "1.4"
 hash = { path = "../../pi_lib/hash", features = ["xxhash"] }
 tcp = { path = "../tcp" }
@@ -19,4 +19,3 @@ atom = { path = "../../pi_lib/atom" }
 
 [dev-dependencies]
 twox-hash = "1.5"
-parking_lot = "0.10"
