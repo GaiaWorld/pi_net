@@ -209,6 +209,10 @@ impl MqttConnectHandle {
 
     //获取连接会话上下文的只读引用
     pub fn get_session(&self) -> Option<ContextHandle<BrokerSession>> {
+        if self.is_closed.load(Ordering::Relaxed) {
+            return None;
+        }
+
         self.connect.get_session()
     }
 
