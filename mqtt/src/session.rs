@@ -340,6 +340,10 @@ impl<S: Socket> MqttConnect for QosZeroSession<S> {
 
     fn get_session(&self) -> Option<ContextHandle<BrokerSession>> {
         if let Some(connect) = &self.connect {
+            if connect.is_closed() {
+                return None;
+            }
+
             if let Some(session) = connect.get_session() {
                 return session.as_ref().get_context().get::<BrokerSession>();
             }
