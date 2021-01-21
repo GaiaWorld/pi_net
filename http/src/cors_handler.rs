@@ -6,6 +6,7 @@ use std::io::{Error, Result, ErrorKind};
 use url::{Host, Origin};
 use https::{Uri, StatusCode, Method,
             header::{HeaderName, HeaderValue,
+                     HOST,
                      ORIGIN,
                      ALLOW,
                      CONTENT_LENGTH,
@@ -17,6 +18,7 @@ use https::{Uri, StatusCode, Method,
                      ACCESS_CONTROL_MAX_AGE}};
 use futures::future::{FutureExt, BoxFuture};
 use parking_lot::RwLock;
+use log::error;
 
 use atom::Atom;
 use hash::XHashMap;
@@ -224,6 +226,8 @@ fn handle_options_request<S: Socket, W: AsyncIOWait>(handler: &CORSHandler,
                                 }
 
                                 //不支持，则不允许当前源跨域访问，并设置响应体长度后立即返回
+                                error!("Http handle CORS failed, host: {:?}, origin: {:?}, reason: not support methods",
+                                       req.headers().get(HOST), key);
                                 resp.header(CONTENT_LENGTH.as_str(), "0");
                                 return MiddlewareResult::Break(resp);
                             }
@@ -252,6 +256,8 @@ fn handle_options_request<S: Socket, W: AsyncIOWait>(handler: &CORSHandler,
                         }
 
                         //不允许客户端请求的源进行跨域访问，则不设置任何允许的跨域访问的请求头，客户端会自动判断为不允许当前源跨域访问
+                        error!("Http handle CORS failed, host: {:?}, origin: {:?}, reason: not allow client cross domain",
+                               req.headers().get(HOST), key);
                     }
 
                     //完成CORS请求处理，则设置响应体长度，并立即返回CORS响应
@@ -292,6 +298,8 @@ fn handle_simple_request<S: Socket, W: AsyncIOWait>(handler: &CORSHandler, req: 
                                 handler.allowed.write().insert(origin.to_string(), None);
                             } else {
                                 //简单验证失败，则不允许客户端指定的源进行指定的跨域访问，则立即返回响应
+                                error!("Http handle CORS failed, host: {:?}, origin: {:?}, reason: simple check error",
+                                       req.headers().get(HOST), key);
                                 let mut resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
                                 resp.header(CONTENT_LENGTH.as_str(), "0");
                                 return MiddlewareResult::Break(resp);
@@ -309,6 +317,8 @@ fn handle_simple_request<S: Socket, W: AsyncIOWait>(handler: &CORSHandler, req: 
                         Ok(elapsed) => {
                             if elapsed.as_secs() > timeout as u64 {
                                 //已过期，则立即返回响应
+                                error!("Http handle CORS failed, host: {:?}, origin: {:?}, reason: auth timeout",
+                                       req.headers().get(HOST), req.headers().get(ORIGIN));
                                 let mut resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
                                 resp.header(CONTENT_LENGTH.as_str(), "0");
                                 return MiddlewareResult::Break(resp);
