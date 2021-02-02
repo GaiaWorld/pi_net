@@ -386,21 +386,26 @@ impl AsyncHttpRequest {
     //发送请求
     pub async fn send(self) -> Result<AsyncHttpResponse> {
         let url = self.url;
+        let url_copy = url.clone();
         let method = self.method;
         let request = self.builder;
         match ASYNC_HTTPC_RUNTIME.spawn(async move {
+            println!("==============> AsyncHttpc send start <==================, url: {:?}", url_copy);
             request.send().await
         }).await {
             Err(e) => {
+                println!("==============> AsyncHttpc send finish <==================, url: {:?}, err: {:?}", url, e);
                 Err(Error::new(ErrorKind::Other, format!("Async http request failed, method: {:?}, url: {:?}, reason: {:?}", method, url, e)))
             },
             Ok(result) => {
                 match result {
                     Err(e) => {
+                        println!("==============> AsyncHttpc send finish <==================, url: {:?}, err: {:?}", url, e);
                         //发送请求失败
                         Err(Error::new(ErrorKind::Other, format!("Async http request failed, method: {:?}, url: {:?}, reason: {:?}", method, url, e)))
                     },
-                    Ok(respone) => {
+                    Ok(mut respone) => {
+                        println!("==============> AsyncHttpc send finish <==================, url: {:?}, status: {:?}, headers: {:#?}", url, respone.status(), respone.headers());
                         //发送请求成功
                         Ok(AsyncHttpResponse(respone))
                     },
