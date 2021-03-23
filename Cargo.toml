@@ -2,7 +2,7 @@
 members = [
   "http",
   "httpc",
-  "net",
+  #"net",
   "mqtt_tmp",
   "rpc_tmp",
   "nodec",
