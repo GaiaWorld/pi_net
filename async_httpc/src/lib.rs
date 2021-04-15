@@ -145,18 +145,18 @@ impl AsyncHttpcBuilder {
         AsyncHttpcBuilder(self.0, self.1.pool_max_idle_per_host(count))
     }
 
-    //设置客户端证书，用于客户端验证
-    pub fn set_client_cert<P: AsRef<Path>>(self, path: P) -> Self {
+    //增加客户端根证书，用于客户端验证
+    pub fn add_client_cert<P: AsRef<Path>>(self, path: P) -> Self {
         let cert = match fs::read(&path) {
             Err(e) => {
-                //读取证书文件失败，则立即抛出异常
+                //读取根证书文件失败，则立即抛出异常
                 panic!("Set client cert failed, path: {:?}, reason: {:?}", path.as_ref(), e);
             },
             Ok(bin) => {
                 match Certificate::from_pem(&bin[..]) {
                     Err(e) => {
-                        //解析证书文件失败，则立即抛出异常
-                        panic!("Set client cert failed, path: {:?}, reason: {:?}", path.as_ref(), e);
+                        //解析根证书文件失败，则立即抛出异常
+                        panic!("Set client root cert failed, path: {:?}, reason: {:?}", path.as_ref(), e);
                     },
                     Ok(cert) => cert,
                 }
@@ -166,18 +166,19 @@ impl AsyncHttpcBuilder {
         AsyncHttpcBuilder(self.0, self.1.add_root_certificate(cert))
     }
 
-    //设置客户端密钥，用于客户端验证
-    pub fn set_client_key<P: AsRef<Path>>(self, path: P) -> Self {
+    //增加客户端身份，用于客户端验证
+    //openssl pkcs12 -export -out identity.pfx -inkey key.pem -in cert.pem -certfile root.pem
+    pub fn add_client_identity<P: AsRef<Path>>(self, path: P, pwd: &str) -> Self {
         let key = match fs::read(&path) {
             Err(e) => {
-                //读取证书文件失败，则立即抛出异常
+                //读取身份文件失败，则立即抛出异常
                 panic!("Set client key failed, path: {:?}, reason: {:?}", path.as_ref(), e);
             },
             Ok(bin) => {
-                match Identity::from_pem(&bin[..]) {
+                match Identity::from_pkcs12_der(&bin[..], pwd) {
                     Err(e) => {
-                        //解析证书文件失败，则立即抛出异常
-                        panic!("Set client key failed, path: {:?}, reason: {:?}", path.as_ref(), e);
+                        //解析身份文件失败，则立即抛出异常
+                        panic!("Set client identity failed, path: {:?}, reason: {:?}", path.as_ref(), e);
                     },
                     Ok(key) => key,
                 }
