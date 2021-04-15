@@ -322,7 +322,7 @@ fn async_save_file<S: Socket, W: AsyncIOWait>(
                 Ok(file) => {
                     // 打开文件成功
                     let file = Arc::new(file);
-                    match file.write(0, Arc::from(content), WriteOptions::Flush).await {
+                    match file.write(0, content, WriteOptions::Flush).await {
                         Ok(_) => {
                             //写文件成功
                             if let Err(e) = resp_handler.finish() {
