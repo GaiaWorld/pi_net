@@ -3,8 +3,8 @@ use std::thread;
 use std::sync::Arc;
 use std::str::FromStr;
 use std::cell::RefCell;
-use std::time::Duration;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use std::io::{ErrorKind, Result, Error};
 use std::net::{Shutdown, SocketAddr, IpAddr, Ipv6Addr};
 
@@ -14,7 +14,7 @@ use mio::{Events, Poll, Token, Ready};
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use log::warn;
 
-use local_timer::LocalTimer;
+use local_timer::local_timer::LocalTimer;
 
 use crate::{driver::{DEFAULT_TCP_IP_V6, Socket, Stream, SocketAdapter, SocketOption, SocketConfig, SocketDriver, SocketWakeup},
             buffer_pool::WriteBufferPool,
@@ -37,7 +37,8 @@ pub struct TcpSocketPool<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
     close_sent:     Sender<(Token, Result<()>)>,                        //关闭事件的发送器
     close_recv:     Receiver<(Token, Result<()>)>,                      //关闭事件的接收器
     wait_close:     Vec<(Token, Result<()>)>,                           //等待关闭队列
-    timer:          LocalTimer<(Token, SocketEvent)>,                   //定时器
+    duration:       Instant,                                            //定时器持续时间
+    timer:          LocalTimer<(Token, SocketEvent), 100, 60, 60, 24>,  //定时器
     timer_sent:     Sender<(Token, Option<(usize, SocketEvent)>)>,      //定时器设置事件的发送器
     timer_recv:     Receiver<(Token, Option<(usize, SocketEvent)>)>,    //定时器设置事件的接收器
     buffer:         WriteBufferPool,                                    //写缓冲池
@@ -79,6 +80,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
         let (close_sent, close_recv) = unbounded();
         let (timer_sent, timer_recv) = unbounded();
         register_close_sender(uid, close_sent.clone()); //注册全局关闭事件发送器
+        let duration = Instant::now();
 
         Ok(TcpSocketPool {
             uid,
@@ -94,7 +96,8 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
             close_sent,
             close_recv,
             wait_close: Vec::new(),
-            timer: LocalTimer::new(),
+            duration,
+            timer: LocalTimer::<(Token, SocketEvent), 100, 60, 60, 24>::new(10, duration.elapsed().as_millis() as u64),
             timer_sent,
             timer_recv,
             buffer,
@@ -412,7 +415,7 @@ fn close_socket<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut Tc
 
     //移除定时器
     if let Some(timer) = socket.borrow_mut().unset_timer_handle() {
-        pool.timer.cancel(timer);
+        let _ = pool.timer.try_remove(timer);
     }
 
     //执行已关闭回调
@@ -445,11 +448,11 @@ fn handle_timer<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut Tc
 
                 if let Some(timer) = socket.borrow_mut().unset_timer_handle() {
                     //连接已设置定时器，则先移除指定句柄的定时器
-                    pool.timer.cancel(timer);
+                    let _ = pool.timer.try_remove(timer);
                 }
 
                 //设置指定事件的定时器，并在连接上设置定时器句柄
-                let timer = pool.timer.set_timeout((token, event), timeout);
+                let timer = pool.timer.insert((token, event), timeout as u64);
                 socket.borrow_mut().set_timer_handle(timer);
             }
         } else {
@@ -462,27 +465,31 @@ fn handle_timer<S: Socket + Stream, A: SocketAdapter<Connect = S>>(pool: &mut Tc
 
                 //移除连接上的定时器句柄，并移除指定句柄的定时器
                 if let Some(timer) = socket.borrow_mut().unset_timer_handle() {
-                    pool.timer.cancel(timer);
+                    let _ = pool.timer.try_remove(timer);
                 }
             }
         }
     }
     
     //轮询所有超时的定时器，执行已超时回调
-    let items = pool.timer.poll();
-    for (token, event) in items {
-        if let Some(socket) = pool.sockets.get_mut(token.0) {
-            if socket.borrow().is_closed() {
-                //连接已关闭，则忽略
-                return;
+    while pool.timer.check_sleep(pool.duration.elapsed().as_millis() as u64) == 0 {
+        //需要继续获取超时的回调
+        if let Some((item, _index)) = pool.timer.pop(pool.duration.elapsed().as_millis() as u64) {
+            //存在超时的回调
+            let (token, event) = item.elem;
+            if let Some(socket) = pool.sockets.get_mut(token.0) {
+                if socket.borrow().is_closed() {
+                    //连接已关闭，则忽略
+                    continue;
+                }
+
+                //移除连接上的定时器句柄
+                socket.borrow_mut().unset_timer_handle();
+
+                //连接已超时
+                let handle = socket.borrow().get_handle();
+                pool.driver.as_ref().unwrap().get_adapter().timeouted(handle, event);
             }
-
-            //移除连接上的定时器句柄
-            socket.borrow_mut().unset_timer_handle();
-
-            //连接已超时
-            let handle = socket.borrow().get_handle();
-            pool.driver.as_ref().unwrap().get_adapter().timeouted(handle, event);
         }
     }
 }
