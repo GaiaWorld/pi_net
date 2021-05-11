@@ -54,7 +54,7 @@ impl AsyncWebsocketBuilder {
 
     //设置连接事件队列容量，默认为5
     pub fn set_queue_size(mut self, size: usize) -> Self {
-        if size * self.configure.max_connections > usize::max_value() {
+        if size * self.configure.max_connections > usize::MAX {
             //连接队列容量过大，则立即抛出异常
             panic!("Set queue size failed, size: {}, reason: out of queue size");
         }
