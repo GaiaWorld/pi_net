@@ -17,7 +17,7 @@ use ws::{Builder, WebSocket, Settings, Factory, Request, Handshake, Handler, Sen
 use url::Url;
 use parking_lot::RwLock;
 
-use r#async::rt::{TaskId, AsyncRuntime};
+use r#async::rt::{TaskId, AsyncTaskPool, AsyncTaskPoolExt, AsyncRuntime};
 
 /*
 * 异步Websocket连接构建器
@@ -118,7 +118,9 @@ impl AsyncWebsocketBuilder {
     }
 
     //构建异步Websocket连接
-    pub fn build(mut self) -> Result<AsyncWebsocket> {
+    pub fn build<
+        P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>
+    >(mut self) -> Result<AsyncWebsocket<P>> {
         let configure = self.configure;
         let ws = AsyncWebsocket::new(AsyncWebsocketHandler::default());
 
@@ -138,16 +140,30 @@ impl AsyncWebsocketBuilder {
 /*
 * 异步Websocket连接
 */
-#[derive(Clone)]
-pub struct AsyncWebsocket(Arc<RwLock<InnerWebsocket>>);
+pub struct AsyncWebsocket<
+    P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>,
+>(Arc<RwLock<InnerWebsocket<P>>>)
+    where AsyncWebsocketHandlerFactory<P>: Factory;
 
-unsafe impl Send for AsyncWebsocket {}
-unsafe impl Sync for AsyncWebsocket {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Send for AsyncWebsocket<P>
+    where AsyncWebsocketHandlerFactory<P>: Factory {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Sync for AsyncWebsocket<P>
+    where AsyncWebsocketHandlerFactory<P>: Factory {}
+
+impl<
+    P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>,
+> Clone for AsyncWebsocket<P> {
+    fn clone(&self) -> Self {
+        AsyncWebsocket(self.0.clone())
+    }
+}
 
 /*
 * 异步Websocket连接同步方法
 */
-impl AsyncWebsocket {
+impl<
+    P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>,
+> AsyncWebsocket<P> {
     //构建异步Websocket连接
     fn new(handler: AsyncWebsocketHandler) -> Self {
         let inner = InnerWebsocket {
@@ -162,7 +178,7 @@ impl AsyncWebsocket {
     }
 
     //设置异步运行时
-    pub fn set_runtime(&self, rt: AsyncRuntime<()>) {
+    pub fn set_runtime(&self, rt: AsyncRuntime<(), P>) {
         self.0.write().rt = Some(rt);
     }
 
@@ -172,7 +188,7 @@ impl AsyncWebsocket {
     }
 
     //绑定异步Websocket连接
-    fn bind(&self, connect: WebSocket<AsyncWebsocketHandlerFactory>) {
+    fn bind(&self, connect: WebSocket<AsyncWebsocketHandlerFactory<P>>) {
         self.0.write().connect = Some(connect);
     }
 
@@ -185,7 +201,9 @@ impl AsyncWebsocket {
 /*
 * 异步Websocket连接异步方法
 */
-impl AsyncWebsocket {
+impl<
+    P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>
+> AsyncWebsocket<P> {
     //打开连接
     pub async fn open(&self,
                       url: &str,
@@ -245,29 +263,35 @@ impl AsyncWebsocket {
 }
 
 //内部Websocket连接
-struct InnerWebsocket {
-    rt:         Option<AsyncRuntime<()>>,                           //异步运行时
+struct InnerWebsocket<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>>
+    where AsyncWebsocketHandlerFactory<P>: Factory {
+    rt:         Option<AsyncRuntime<(), P>>,                        //异步运行时
     task_id:    Option<TaskId>,                                     //异步任务id
     handler:    AsyncWebsocketHandler,                              //处理器
-    connect:    Option<WebSocket<AsyncWebsocketHandlerFactory>>,    //连接
+    connect:    Option<WebSocket<AsyncWebsocketHandlerFactory<P>>>, //连接
     sender:     Option<Sender>,                                     //发送器
 }
 
-unsafe impl Send for InnerWebsocket {}
-unsafe impl Sync for InnerWebsocket {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Send for InnerWebsocket<P>
+    where AsyncWebsocketHandlerFactory<P>: Factory {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Sync for InnerWebsocket<P>
+    where AsyncWebsocketHandlerFactory<P>: Factory {}
 
 //异步打开Websocket连接
-pub struct AsyncOpenWebsocket {
-    rt:         AsyncRuntime<()>,   //异步运行时
-    task_id:    TaskId,             //异步任务id
-    ws:         AsyncWebsocket,     //异步Websocket连接
-    url:        Url,                //url
+pub struct AsyncOpenWebsocket<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>>
+    where AsyncWebsocketHandlerFactory<P>: Factory {
+    rt:         AsyncRuntime<(), P>,    //异步运行时
+    task_id:    TaskId,                 //异步任务id
+    ws:         AsyncWebsocket<P>,      //异步Websocket连接
+    url:        Url,                    //url
 }
 
-unsafe impl Send for AsyncOpenWebsocket {}
-unsafe impl Sync for AsyncOpenWebsocket {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Send for AsyncOpenWebsocket<P>
+    where AsyncWebsocketHandlerFactory<P>: Factory {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Sync for AsyncOpenWebsocket<P>
+    where AsyncWebsocketHandlerFactory<P>: Factory {}
 
-impl Future for AsyncOpenWebsocket {
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Future for AsyncOpenWebsocket<P> {
     type Output = Result<Sender>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -295,11 +319,12 @@ impl Future for AsyncOpenWebsocket {
     }
 }
 
-impl AsyncOpenWebsocket {
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> AsyncOpenWebsocket<P>
+    where AsyncWebsocketHandlerFactory<P>: Factory {
     //创建异步打开Websocket连接
-    pub fn new(rt: AsyncRuntime<()>,
+    pub fn new(rt: AsyncRuntime<(), P>,
                task_id: TaskId,
-               ws: AsyncWebsocket,
+               ws: AsyncWebsocket<P>,
                url: Url) -> Self {
         AsyncOpenWebsocket {
             rt,
@@ -311,11 +336,19 @@ impl AsyncOpenWebsocket {
 }
 
 //异步Websocket连接处理器工厂
-pub struct AsyncWebsocketHandlerFactory(AsyncWebsocket);
+pub struct AsyncWebsocketHandlerFactory<
+    P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>,
+>(AsyncWebsocket<P>)
+    where AsyncWebsocketHandlerFactory<P>: Factory;
 
-unsafe impl Send for AsyncWebsocketHandlerFactory {}
+unsafe impl<
+    P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>,
+> Send for AsyncWebsocketHandlerFactory<P>
+    where AsyncWebsocketHandlerFactory<P>: Factory {}
 
-impl Factory for AsyncWebsocketHandlerFactory {
+impl<
+    P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>,
+> Factory for AsyncWebsocketHandlerFactory<P> {
     type Handler = AsyncWebsocketHandler;
 
     fn connection_made(&mut self, sender: Sender) -> Self::Handler {
