@@ -26,7 +26,7 @@ use parking_lot::RwLock;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use log::{info, error};
 
-use r#async::rt::{TaskId, AsyncRuntime, AsyncWaitResult};
+use r#async::rt::{TaskId, AsyncTaskPool, AsyncTaskPoolExt, AsyncRuntime, AsyncWaitResult};
 
 /*
 * Websocket连接
@@ -38,21 +38,21 @@ thread_local! {
 /*
 * 异步Websocket客户端，客户端同时只允许存在一个Websocket连接，创建新连接时会关闭旧连接
 */
-pub struct AsyncWebsocketClient {
-    rt:             AsyncRuntime<()>,   //外部异步运行时
+pub struct AsyncWebsocketClient<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> {
+    rt:             AsyncRuntime<(), P>,   //外部异步运行时
     arbiter:        Arc<Arbiter>,       //客户端所在异步运行时
 }
 
-unsafe impl Send for AsyncWebsocketClient {}
-unsafe impl Sync for AsyncWebsocketClient {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Send for AsyncWebsocketClient<P> {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Sync for AsyncWebsocketClient<P> {}
 
 /*
 * 异步Websocket客户端同步方法
 */
-impl AsyncWebsocketClient {
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> AsyncWebsocketClient<P> {
     //构建异步Websocket客户端
-    pub fn new(rt: AsyncRuntime<()>,
-               name: String) -> Result<AsyncWebsocketClient> {
+    pub fn new(rt: AsyncRuntime<(), P>,
+               name: String) -> Result<AsyncWebsocketClient<P>> {
         //打开新的线程，来运行异步Websocket客户端
         let (send, recv) = bounded(1);
         thread::spawn(move || {
@@ -79,7 +79,7 @@ impl AsyncWebsocketClient {
     pub fn build(&self,
                  url: &str,
                  protocols: Vec<String>,
-                 handler: AsyncWebsocketHandler) -> Result<AsyncWebsocket> {
+                 handler: AsyncWebsocketHandler) -> Result<AsyncWebsocket<P>> {
         match Url::from_str(url) {
             Err(e) => {
                 Err(Error::new(ErrorKind::Other, format!("Open websocket failed, url: {}, reason: {:?}", url, e)))
@@ -228,18 +228,23 @@ impl AsyncWebsocketStatus {
 /*
 * 异步Websocket连接
 */
-#[derive(Clone)]
-pub struct AsyncWebsocket(Arc<RwLock<InnerWebsocket>>);
+pub struct AsyncWebsocket<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>>(Arc<RwLock<InnerWebsocket<P>>>);
 
-unsafe impl Send for AsyncWebsocket {}
-unsafe impl Sync for AsyncWebsocket {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Send for AsyncWebsocket<P> {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Sync for AsyncWebsocket<P> {}
+
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Clone for AsyncWebsocket<P> {
+    fn clone(&self) -> Self {
+        AsyncWebsocket(self.0.clone())
+    }
+}
 
 /*
 * 异步Websocket连接同步方法
 */
-impl AsyncWebsocket {
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> AsyncWebsocket<P> {
     //构建异步Websocket连接
-    fn new(rt: AsyncRuntime<()>,
+    fn new(rt: AsyncRuntime<(), P>,
            arbiter: Arc<Arbiter>,
            url: Url,
            protocols: Vec<String>,
@@ -335,7 +340,7 @@ impl AsyncWebsocket {
 /*
 * 异步Websocket连接异步方法
 */
-impl AsyncWebsocket {
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> AsyncWebsocket<P> {
     //打开异步Websocket连接
     pub async fn open(&self, timeout: u64) -> Result<()> {
         let rt = self.0.read().rt.clone();
@@ -393,8 +398,8 @@ impl AsyncWebsocket {
 }
 
 //内部Websocket连接
-struct InnerWebsocket {
-    rt:             AsyncRuntime<()>,       //外部异步运行时
+struct InnerWebsocket<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> {
+    rt:             AsyncRuntime<(), P>,    //外部异步运行时
     arbiter:        Arc<Arbiter>,           //连接所在异步运行时
     task_id:        Option<TaskId>,         //异步任务id
     handler:        AsyncWebsocketHandler,  //处理器
@@ -406,8 +411,8 @@ struct InnerWebsocket {
     is_nodelay:     bool,                   //是否立即刷新连接
 }
 
-unsafe impl Send for InnerWebsocket {}
-unsafe impl Sync for InnerWebsocket {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Send for InnerWebsocket<P> {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Sync for InnerWebsocket<P> {}
 
 //发送消息帧
 #[inline]
@@ -623,16 +628,16 @@ fn receive_frames(received: Option<ReceivedMessage>,
 }
 
 //异步打开Websocket连接
-pub struct AsyncOpenWebsocket {
-    rt:         AsyncRuntime<()>,   //异步运行时
-    task_id:    TaskId,             //异步任务id
-    ws:         AsyncWebsocket,     //连接
+pub struct AsyncOpenWebsocket<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> {
+    rt:         AsyncRuntime<(), P>,    //异步运行时
+    task_id:    TaskId,                 //异步任务id
+    ws:         AsyncWebsocket<P>,      //连接
 }
 
-unsafe impl Send for AsyncOpenWebsocket {}
-unsafe impl Sync for AsyncOpenWebsocket {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Send for AsyncOpenWebsocket<P> {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Sync for AsyncOpenWebsocket<P> {}
 
-impl Future for AsyncOpenWebsocket {
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Future for AsyncOpenWebsocket<P> {
     type Output = Result<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -723,11 +728,11 @@ impl Future for AsyncOpenWebsocket {
     }
 }
 
-impl AsyncOpenWebsocket {
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> AsyncOpenWebsocket<P> {
     //创建异步打开Websocket连接
-    pub fn new(rt: AsyncRuntime<()>,
+    pub fn new(rt: AsyncRuntime<(), P>,
                task_id: TaskId,
-               ws: AsyncWebsocket) -> Self {
+               ws: AsyncWebsocket<P>) -> Self {
         AsyncOpenWebsocket {
             rt,
             task_id,
@@ -737,18 +742,18 @@ impl AsyncOpenWebsocket {
 }
 
 //Websocket异步发送消息
-pub struct AsyncWebsocketSend {
-    rt:         AsyncRuntime<()>,       //异步运行时
+pub struct AsyncWebsocketSend<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> {
+    rt:         AsyncRuntime<(), P>,    //异步运行时
     task_id:    TaskId,                 //异步任务id
-    ws:         AsyncWebsocket,         //连接
+    ws:         AsyncWebsocket<P>,      //连接
     msg:        Option<Message>,        //消息
     result:     AsyncWaitResult<()>,    //异步发送消息的结果
 }
 
-unsafe impl Send for AsyncWebsocketSend {}
-unsafe impl Sync for AsyncWebsocketSend {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Send for AsyncWebsocketSend<P> {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Sync for AsyncWebsocketSend<P> {}
 
-impl Future for AsyncWebsocketSend {
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Future for AsyncWebsocketSend<P> {
     type Output = Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -812,11 +817,11 @@ impl Future for AsyncWebsocketSend {
     }
 }
 
-impl AsyncWebsocketSend {
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> AsyncWebsocketSend<P> {
     //创建异步打开Websocket连接
-    pub fn new(rt: AsyncRuntime<()>,
+    pub fn new(rt: AsyncRuntime<(), P>,
                task_id: TaskId,
-               ws: AsyncWebsocket,
+               ws: AsyncWebsocket<P>,
                msg: Message) -> Self {
         AsyncWebsocketSend {
             rt,
@@ -829,18 +834,18 @@ impl AsyncWebsocketSend {
 }
 
 //Websocket异步接收消息
-pub struct AsyncWebsocketReceive {
-    rt:         AsyncRuntime<()>,       //异步运行时
+pub struct AsyncWebsocketReceive<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> {
+    rt:         AsyncRuntime<(), P>,    //异步运行时
     task_id:    TaskId,                 //异步任务id
-    ws:         AsyncWebsocket,         //连接
+    ws:         AsyncWebsocket<P>,      //连接
     limit:      Option<usize>,          //一次最多可以接收多少消息
     result:     AsyncWaitResult<()>,    //异步接收消息的结果
 }
 
-unsafe impl Send for AsyncWebsocketReceive {}
-unsafe impl Sync for AsyncWebsocketReceive {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Send for AsyncWebsocketReceive<P> {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Sync for AsyncWebsocketReceive<P> {}
 
-impl Future for AsyncWebsocketReceive {
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Future for AsyncWebsocketReceive<P> {
     type Output = Result<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -863,13 +868,13 @@ impl Future for AsyncWebsocketReceive {
 }
 
 //接收Webscoket消息
-fn receive_message(task_id: TaskId,
-                   arbiter: Arc<Arbiter>,
-                   ws: AsyncWebsocket,
-                   require_count: Option<usize>,
-                   received_count: usize,
-                   result: AsyncWaitResult<()>,
-                   mut received_message: Option<ReceivedMessage>) {
+fn receive_message<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>>(task_id: TaskId,
+                                                                          arbiter: Arc<Arbiter>,
+                                                                          ws: AsyncWebsocket<P>,
+                                                                          require_count: Option<usize>,
+                                                                          received_count: usize,
+                                                                          result: AsyncWaitResult<()>,
+                                                                          mut received_message: Option<ReceivedMessage>) {
     let arbiter_copy = arbiter.clone();
     arbiter.send(Box::pin(async move {
         Arbiter::spawn(async move {
@@ -1044,11 +1049,11 @@ fn receive_message(task_id: TaskId,
     }));
 }
 
-impl AsyncWebsocketReceive {
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> AsyncWebsocketReceive<P> {
     //创建异步打开Websocket连接
-    pub fn new(rt: AsyncRuntime<()>,
+    pub fn new(rt: AsyncRuntime<(), P>,
                task_id: TaskId,
-               ws: AsyncWebsocket,
+               ws: AsyncWebsocket<P>,
                limit: Option<usize>) -> Self {
         AsyncWebsocketReceive {
             rt,
@@ -1061,18 +1066,18 @@ impl AsyncWebsocketReceive {
 }
 
 //异步关闭Websocket连接
-pub struct AsyncCloseWebsocket {
-    rt:         AsyncRuntime<()>,       //异步运行时
+pub struct AsyncCloseWebsocket<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> {
+    rt:         AsyncRuntime<(), P>,    //异步运行时
     task_id:    TaskId,                 //异步任务id
-    ws:         AsyncWebsocket,         //连接
+    ws:         AsyncWebsocket<P>,      //连接
     close_code: Option<CloseCode>,      //关闭状态码
     result:     AsyncWaitResult<()>,    //异步关闭连接的结果
 }
 
-unsafe impl Send for AsyncCloseWebsocket {}
-unsafe impl Sync for AsyncCloseWebsocket {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Send for AsyncCloseWebsocket<P> {}
+unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Sync for AsyncCloseWebsocket<P> {}
 
-impl Future for AsyncCloseWebsocket {
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Future for AsyncCloseWebsocket<P> {
     type Output = Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -1132,11 +1137,11 @@ impl Future for AsyncCloseWebsocket {
     }
 }
 
-impl AsyncCloseWebsocket {
+impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> AsyncCloseWebsocket<P> {
     //创建异步打开Websocket连接
-    pub fn new(rt: AsyncRuntime<()>,
+    pub fn new(rt: AsyncRuntime<(), P>,
                task_id: TaskId,
-               ws: AsyncWebsocket,
+               ws: AsyncWebsocket<P>,
                close_code: Option<CloseCode>) -> Self {
         AsyncCloseWebsocket {
             rt,
