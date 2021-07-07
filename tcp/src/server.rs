@@ -14,8 +14,8 @@ use mio::Token;
 use fnv::FnvBuildHasher;
 use crossbeam_channel::{Sender, unbounded};
 use futures::future::BoxFuture;
+use num_cpus;
 
-use apm::common::SysStat;
 use r#async::{AsyncSpawner, AsyncExecutor,
               local_queue::{LocalQueueSpawner, LocalQueue}, task::LocalTask};
 
@@ -433,8 +433,7 @@ impl<S, F> SocketListener<S, F>
         }).collect();
 
         let acceptor;
-        let sys = SysStat::new();
-        let processor = sys.processor_count();
+        let processor = num_cpus::get();
         let mut pools = Vec::with_capacity(processor);
         let mut driver = SocketDriver::new(&binds[..]);
         match Acceptor::bind(&addrs[..], &driver) {
