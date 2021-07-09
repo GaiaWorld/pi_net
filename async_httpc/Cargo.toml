@@ -1,14 +1,14 @@
 [package]
 name = "async_httpc"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2018"
 
 [dependencies]
-tokio = { version = "0.2", features = ["rt-core", "rt-threaded"] }
+tokio = { version = "1", features = ["full"] }
 percent-encoding = "2.1"
-reqwest = { version = "0.10", features = ["native-tls", "rustls-tls", "cookies", "gzip", "json", "socks"] }
-bytes = "0.5"
+reqwest = { version = "0.11", features = ["native-tls", "rustls-tls", "cookies", "gzip", "json", "socks", "multipart"] }
+bytes = { version = "1.0", features = ["serde"]}
 lazy_static = "1.4"
 async = { path = "../../pi_lib/async" }
 hash = { path = "../../pi_lib/hash" }

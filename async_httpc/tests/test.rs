@@ -5,8 +5,9 @@ use std::time::Duration;
 
 use env_logger;
 use tokio;
+use bytes::{Buf, BufMut};
 
-use r#async::rt::{AsyncRuntime, multi_thread::{MultiTaskPool, MultiTaskRuntime}};
+use r#async::rt::{AsyncRuntime, multi_thread::{MultiTaskRuntimeBuilder, MultiTaskRuntime}};
 use worker::{impls::{STORE_TASK_POOL, STORE_WORKER_WALKER},
              worker::WorkerType,
              worker_pool::WorkerPool};
@@ -42,6 +43,10 @@ fn test_http_request() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
+    //初始异步运行时
+    let builder = MultiTaskRuntimeBuilder::default();
+    let rt = builder.build();
+
     //启动存储运行时
     let worker_pool = Box::new(WorkerPool::new("test http hosts".to_string(), WorkerType::Store, 8, 1024 * 1024, 10000, STORE_WORKER_WALKER.clone()));
     worker_pool.run(STORE_TASK_POOL.clone());
@@ -58,10 +63,10 @@ fn test_http_request() {
     let parser = Arc::new(DefaultParser::with(128, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
-    let file_load = Arc::new(FileLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let files_load = Arc::new(FilesLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let batch_load = Arc::new(BatchLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let upload = Arc::new(UploadFile::new("../upload"));
+    let file_load = Arc::new(FileLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let files_load = Arc::new(FilesLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let batch_load = Arc::new(BatchLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let upload = Arc::new(UploadFile::new(rt.clone(), "../upload"));
 
     //构建处理CORS的Options方法的请求的中间件链
     let mut chain = MiddlewareChain::new();
@@ -143,10 +148,6 @@ fn test_http_request() {
         }
     }
 
-    //初始异步运行时
-    let pool = MultiTaskPool::new("Test-Async-Httpc".to_string(), 2, 1024 * 1024, 10, None);
-    let rt = pool.startup(false);
-
     //初始化异步Http客户端
     let httpc =
         AsyncHttpcBuilder::new()
@@ -217,6 +218,7 @@ fn test_http_request() {
                 println!("!!!!!!headers: {:#?}", resp.to_headers());
                 println!("!!!!!!body len: {:?}", resp.get_body_len());
 
+                let mut b = Vec::new();
                 loop {
                     match resp.get_body().await {
                         Err(e) => {
@@ -225,10 +227,12 @@ fn test_http_request() {
                         },
                         Ok(Some(body)) => {
                             println!("!!!!!!get body ok, len: {}", body.len());
+                            b.copy_from_slice(body.as_ref());
                         },
                         Ok(None) => break,
                     }
                 }
+                println!("!!!!!!body: {}", String::from_utf8(b).unwrap());
             },
         }
     });
@@ -321,6 +325,10 @@ fn test_https_request() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
+    //初始异步运行时
+    let builder = MultiTaskRuntimeBuilder::default();
+    let rt = builder.build();
+
     //启动存储运行时
     let worker_pool = Box::new(WorkerPool::new("test http hosts".to_string(), WorkerType::Store, 8, 1024 * 1024, 10000, STORE_WORKER_WALKER.clone()));
     worker_pool.run(STORE_TASK_POOL.clone());
@@ -337,10 +345,10 @@ fn test_https_request() {
     let parser = Arc::new(DefaultParser::with(128, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
-    let file_load = Arc::new(FileLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let files_load = Arc::new(FilesLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let batch_load = Arc::new(BatchLoad::new("../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let upload = Arc::new(UploadFile::new("../upload"));
+    let file_load = Arc::new(FileLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let files_load = Arc::new(FilesLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let batch_load = Arc::new(BatchLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let upload = Arc::new(UploadFile::new(rt.clone(), "../upload"));
 
     //构建处理CORS的Options方法的请求的中间件链
     let mut chain = MiddlewareChain::new();
@@ -430,10 +438,6 @@ fn test_https_request() {
             println!("===> Https Listener Bind Ok");
         }
     }
-
-    //初始异步运行时
-    let pool = MultiTaskPool::new("Test-Async-Httpc".to_string(), 2, 1024 * 1024, 10, None);
-    let rt = pool.startup(false);
 
     //初始化异步Http客户端
     let httpc =

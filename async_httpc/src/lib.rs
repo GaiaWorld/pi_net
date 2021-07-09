@@ -25,7 +25,7 @@ use r#async::rt::{AsyncRuntime, AsyncValue};
 * 异步Http客户端运行时
 */
 lazy_static! {
-    static ref ASYNC_HTTPC_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new().thread_name("ASYNC-HTTPC").core_threads(2).max_threads(16).threaded_scheduler().enable_all().build().unwrap();
+    static ref ASYNC_HTTPC_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread().thread_name("ASYNC-HTTPC").worker_threads(2).max_blocking_threads(16).enable_all().build().unwrap();
 }
 
 /*
