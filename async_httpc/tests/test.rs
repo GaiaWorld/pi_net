@@ -227,7 +227,7 @@ fn test_http_request() {
                         },
                         Ok(Some(body)) => {
                             println!("!!!!!!get body ok, len: {}", body.len());
-                            b.copy_from_slice(body.as_ref());
+                            b.put_slice(body.as_ref());
                         },
                         Ok(None) => break,
                     }

@@ -16,6 +16,7 @@ use reqwest::{ClientBuilder, Client, Proxy, Certificate, Identity, RequestBuilde
               redirect::Policy,
               multipart::{Part, Form}};
 use bytes::{Buf, BufMut, Bytes};
+use flume::{Sender, Receiver, bounded};
 
 use hash::XHashMap;
 
@@ -389,9 +390,13 @@ impl AsyncHttpRequest {
         let url = self.url;
         let method = self.method;
         let request = self.builder;
-        match ASYNC_HTTPC_RUNTIME.spawn(async move {
-            request.send().await
-        }).await {
+        let(sender, receiver) = bounded(1);
+        ASYNC_HTTPC_RUNTIME.spawn(async move {
+            let result = request.send().await;
+            sender.send(result);
+        });
+
+        match receiver.recv_async().await {
             Err(e) => {
                 Err(Error::new(ErrorKind::Other, format!("Async http request failed, method: {:?}, url: {:?}, reason: {:?}", method, url, e)))
             },
