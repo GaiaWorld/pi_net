@@ -100,7 +100,9 @@ impl<S: Socket, W: AsyncIOWait> HttpRequest<S, W> {
                         content_len = Some(0);
                     } else {
                         //设置本次请求的未读取到的请求体长度
-                        content_len = Some(len - body_len);
+                        content_len = Some(len
+                            .checked_sub(body_len)
+                            .unwrap_or(0));
                     }
                 }
             }
@@ -222,7 +224,9 @@ impl<S: Socket, W: AsyncIOWait> HttpRequest<S, W> {
         //检查是否需要返回已读取的到缓冲区内的请求体
         if self.body_len > 0 {
             //当前有部分Http体的流数据，则返回
-            let offset = self.body.len() - self.body_len; //获取本次从缓冲区内读数据的偏移
+            let offset = self.body.len()
+                .checked_sub(self.body_len)
+                .unwrap_or(0); //获取本次从缓冲区内读数据的偏移
 
             let len;
             if self.body.len() <= block_size {
@@ -232,7 +236,9 @@ impl<S: Socket, W: AsyncIOWait> HttpRequest<S, W> {
             } else {
                 //当前请求体缓冲区内的数据长度大于块大小
                 len = block_size; //本次从缓冲区内读取的数据长度
-                self.body_len -= block_size; //减去块长度，防止下次重复读取当前体数据
+                self.body_len = body_len
+                    .checked_sub(block_size)
+                    .unwrap_or(0); //减去块长度，防止下次重复读取当前体数据
             }
 
             return Some(&self.body[offset..len]);
@@ -248,7 +254,10 @@ impl<S: Socket, W: AsyncIOWait> HttpRequest<S, W> {
             } else if content_len > block_size {
                 //待读取的请求体长度大于块大小
                 read_size = block_size;
-                self.content_len = Some(content_len - block_size);
+                self.content_len = Some(content_len
+                    .checked_sub(block_size)
+                    .unwrap_or(0)
+                );
             } else {
                 //待读取的请求体长度小于块大小
                 read_size = content_len;
