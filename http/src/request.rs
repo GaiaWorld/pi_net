@@ -236,7 +236,7 @@ impl<S: Socket, W: AsyncIOWait> HttpRequest<S, W> {
             } else {
                 //当前请求体缓冲区内的数据长度大于块大小
                 len = block_size; //本次从缓冲区内读取的数据长度
-                self.body_len = body_len
+                self.body_len = self.body_len
                     .checked_sub(block_size)
                     .unwrap_or(0); //减去块长度，防止下次重复读取当前体数据
             }
