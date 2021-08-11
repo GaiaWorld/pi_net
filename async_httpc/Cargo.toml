@@ -15,6 +15,5 @@ hash = { path = "../../pi_lib/hash" }
 
 [dev-dependencies]
 env_logger = "0.7"
-worker = { path = "../../pi_lib/worker" }
 tcp = { path = "../../pi_net/tcp" }
 http = { path = "../../pi_net/http" }

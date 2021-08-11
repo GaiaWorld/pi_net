@@ -1,15 +1,16 @@
 [workspace]
 members = [
   "http",
-  "httpc",
+  #"httpc",
   #"net",
   #"mqtt_tmp",
   #"rpc_tmp",
-  "nodec",
+  #"nodec",
   "tcp",
   "ws",
   "mqtt",
   "mqtt_proxy",
+  "rpc",
   "async_httpc",
   "async_wsc",
 ]
