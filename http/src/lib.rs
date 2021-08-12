@@ -30,7 +30,6 @@ extern crate tcp;
 extern crate handler;
 extern crate hash;
 extern crate gray;
-extern crate file;
 extern crate atom;
 extern crate adler32;
 
