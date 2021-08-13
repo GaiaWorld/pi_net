@@ -315,6 +315,15 @@ impl<S: Socket, W: AsyncIOWait> HttpResponse<S, W> {
         self.headers.lock().contains_key(key)
     }
 
+    //获取指定的Http响应头
+    pub fn get_header(&self, key: HeaderName) -> Option<HeaderValue> {
+        if let Some(value) = self.headers.lock().get(key) {
+            Some(value.clone())
+        } else {
+            None
+        }
+    }
+
     //增加Http响应头
     pub fn header(&mut self, key: &str, value: &str) -> &mut Self {
         if let Ok(key) = HeaderName::from_str(key) {

@@ -22,7 +22,7 @@ use twoway::{find_bytes, rfind_bytes};
 use parking_lot::RwLock;
 use env_logger;
 
-use r#async::rt::{multi_thread::{MultiTaskPool, MultiTaskRuntime}};
+use r#async::rt::{multi_thread::{MultiTaskRuntimeBuilder, MultiTaskRuntime}};
 use hash::XHashMap;
 use atom::Atom;
 use gray::GrayVersion;
@@ -410,8 +410,8 @@ fn test_http_hosts() {
     env_logger::builder().format_timestamp_millis().init();
 
     //启动文件异步运行时
-    let mut pool = MultiTaskPool::new("Http-Files-Runtime".to_string(), 8, 1 * 1024 * 1024, 10, None);
-    let rt = pool.startup(false);
+    let mut builder = MultiTaskRuntimeBuilder::default();
+    let rt = builder.build();
 
     //构建请求处理器
     let handler = Arc::new(TestHttpGatewayHandler);
@@ -538,8 +538,8 @@ fn test_https_hosts() {
     env_logger::builder().format_timestamp_millis().init();
 
     //启动文件异步运行时
-    let mut pool = MultiTaskPool::new("Http-Files-Runtime".to_string(), 8, 1 * 1024 * 1024, 10, None);
-    let rt = pool.startup(false);
+    let mut builder = MultiTaskRuntimeBuilder::default();
+    let rt = builder.build();
 
     //构建请求处理器
     let handler = Arc::new(TestHttpsGatewayHandler);
