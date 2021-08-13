@@ -3,7 +3,7 @@ use std::result::Result as GenResult;
 use std::io::{Error, Result, ErrorKind, Write};
 
 use url::form_urlencoded;
-use mime::{APPLICATION, WWW_FORM_URLENCODED, JSON, OCTET_STREAM, TEXT, CHARSET, UTF_8, Mime};
+use mime::{APPLICATION, WWW_FORM_URLENCODED, JSON, OCTET_STREAM, PDF, TEXT, CHARSET, UTF_8, IMAGE, AUDIO, VIDEO, Mime};
 use https::{Method, header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, CONTENT_LENGTH}, StatusCode};
 use flate2::{Compression, FlushCompress, Compress, Status, write::GzEncoder};
 use serde_json::{Result as JsonResult, Map, Value};
@@ -115,123 +115,148 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for DefaultPars
                 return MiddlewareResult::ContinueResponse((req, response));
             }
 
-            if let Some(accept_encoding) = req.headers().get(ACCEPT_ENCODING) {
-                if let Ok(value) = accept_encoding.to_str() {
-                    for val in value.split(',') {
-                        if let Some(encoding) = val.trim().split(';').next() {
-                            match encoding.trim() {
-                                DEFLATE_ENCODING => {
-                                    //接受deflate编码
-                                    if let Some(body) = response.as_mut_body() {
-                                        if body.len().is_none() || body.len().unwrap() < self.min_plain_limit {
-                                            //响应体明文数据过小，则忽略编码
-                                            break;
-                                        }
+            let mut is_codable = true; //响应体是否可编码
+            if let Some(content_type) = response.get_header(CONTENT_TYPE) {
+                //当前请求有表单数据
+                if let Ok(str) = content_type.to_str() {
+                    if let Ok(mime) = Mime::from_str(str) {
+                        if mime.type_() == APPLICATION && (mime.subtype() == OCTET_STREAM || mime.subtype() == PDF) {
+                            //当前响应体使用了二进制类型，则不可编码
+                            is_codable = false;
+                        } else if mime.type_() == IMAGE {
+                            //当前响应体是图片，则不可编码
+                            is_codable = false;
+                        } else if mime.type_() == AUDIO {
+                            //当前响应体是音频，则不可编码
+                            is_codable = false;
+                        } else if mime.type_() == VIDEO {
+                            //当前响应体是视频，则不可编码
+                            is_codable = false;
+                        }
+                    }
+                }
+            }
 
-                                        match self.deflate_consumer.try_recv() {
-                                            Err(ref e) if e.is_disconnected() => {
-                                                //编码器通道错误，则立即抛出错误
-                                                return MiddlewareResult::Throw(Error::new(ErrorKind::Other, format!("http response body deflate encode failed, reason: {:?}", e)));
-                                            },
-                                            Err(_) => {
-                                                //没有空闲编码器，则创建新的编码器
-                                                if let Some(input) = body.as_slice() {
-                                                    let mut deflate = new_deflate(self.level);
-                                                    let mut output = Vec::with_capacity(input.len());
-                                                    unsafe { output.set_len(output.capacity()); }
-                                                    if let Err(e) = encode_deflate(&mut deflate, input, &mut output, self.flush) {
-                                                        //编码错误，则立即抛出错误
-                                                        return MiddlewareResult::Throw(e);
-                                                    }
+            if is_codable {
+                //响应体可编码
+                if let Some(accept_encoding) = req.headers().get(ACCEPT_ENCODING) {
+                    if let Ok(value) = accept_encoding.to_str() {
+                        for val in value.split(',') {
+                            if let Some(encoding) = val.trim().split(';').next() {
+                                match encoding.trim() {
+                                    DEFLATE_ENCODING => {
+                                        //接受deflate编码
+                                        if let Some(body) = response.as_mut_body() {
+                                            if body.len().is_none() || body.len().unwrap() < self.min_plain_limit {
+                                                //响应体明文数据过小，则忽略编码
+                                                break;
+                                            }
 
-                                                    //编码成功
-                                                    if req.method() == &Method::HEAD {
-                                                        //是HEAD方法请求的响应，则忽略响应体
-                                                        body.reset(&[]);
-                                                    } else {
-                                                        //非HEAD方法请求的响应，则替换为编码成功后的响应体
-                                                        body.reset(output.as_slice());
-                                                    }
-
-                                                    //设置响应头，并将创建的编码器加入空闲编码器队列中
-                                                    response.header(CONTENT_ENCODING.as_str(), DEFLATE_ENCODING);
-                                                    response.header(CONTENT_LENGTH.as_str(), deflate.total_out().to_string().as_str());
-                                                    deflate.reset();
-                                                    produce_deflate(self.deflate_producor.clone(), deflate);
-                                                }
-                                            },
-                                            Ok(mut deflate) => {
-                                                //有空闲编码器，则开始编码
-                                                if let Some(input) = body.as_slice() {
-                                                    let cap = (input.len() as f64 * 0.75) as usize;
-                                                    let mut output = Vec::with_capacity(input.len());
-                                                    unsafe { output.set_len(output.capacity()); }
-                                                    if let Err(e) = encode_deflate(&mut deflate, input, &mut output, self.flush) {
-                                                        //编码错误，则立即抛出错误
-                                                        return MiddlewareResult::Throw(e);
-                                                    }
-
-                                                    //编码成功
-                                                    if req.method() == &Method::HEAD {
-                                                        //是HEAD方法请求的响应，则忽略响应体
-                                                        body.reset(&[]);
-                                                    } else {
-                                                        //非HEAD方法请求的响应，则替换为编码成功后的响应体
-                                                        body.reset(output.as_slice());
-                                                    }
-
-                                                    //设置响应头，并将使用后的编码器放入空闲编码器队列中
-                                                    response.header(CONTENT_ENCODING.as_str(), DEFLATE_ENCODING);
-                                                    response.header(CONTENT_LENGTH.as_str(), deflate.total_out().to_string().as_str());
-                                                    deflate.reset();
-                                                    produce_deflate(self.deflate_producor.clone(), deflate);
-                                                }
-                                            },
-                                        }
-                                    }
-
-                                    //已编码，则中止其它类型的编码
-                                    break;
-                                },
-                                GZIP_ENCODING => {
-                                    //接受gzip编码
-                                    if let Some(body) = response.as_mut_body() {
-                                        if body.len().is_none() || body.len().unwrap() < self.min_plain_limit {
-                                            //响应体明文数据过小，则忽略编码
-                                            break;
-                                        }
-
-                                        if let Some(input) = body.as_slice() {
-                                            let gzip = new_gzip(Vec::new(), self.level);
-                                            match encode_gzip(gzip, input) {
-                                                Err(e) => {
-                                                    //编码错误，则立即抛出错误
-                                                    return MiddlewareResult::Throw(e);
+                                            match self.deflate_consumer.try_recv() {
+                                                Err(ref e) if e.is_disconnected() => {
+                                                    //编码器通道错误，则立即抛出错误
+                                                    return MiddlewareResult::Throw(Error::new(ErrorKind::Other, format!("http response body deflate encode failed, reason: {:?}", e)));
                                                 },
-                                                Ok(output) => {
-                                                    //编码成功
-                                                    if req.method() == &Method::HEAD {
-                                                        //是HEAD方法请求的响应，则忽略响应体
-                                                        body.reset(&[]);
-                                                    } else {
-                                                        //非HEAD方法请求的响应，则替换为编码成功后的响应体
-                                                        body.reset(output.as_slice());
-                                                    }
+                                                Err(_) => {
+                                                    //没有空闲编码器，则创建新的编码器
+                                                    if let Some(input) = body.as_slice() {
+                                                        let mut deflate = new_deflate(self.level);
+                                                        let mut output = Vec::with_capacity(input.len());
+                                                        unsafe { output.set_len(output.capacity()); }
+                                                        if let Err(e) = encode_deflate(&mut deflate, input, &mut output, self.flush) {
+                                                            //编码错误，则立即抛出错误
+                                                            return MiddlewareResult::Throw(e);
+                                                        }
 
-                                                    //设置响应头
-                                                    response.header(CONTENT_ENCODING.as_str(), GZIP_ENCODING);
-                                                    response.header(CONTENT_LENGTH.as_str(), output.len().to_string().as_str());
+                                                        //编码成功
+                                                        if req.method() == &Method::HEAD {
+                                                            //是HEAD方法请求的响应，则忽略响应体
+                                                            body.reset(&[]);
+                                                        } else {
+                                                            //非HEAD方法请求的响应，则替换为编码成功后的响应体
+                                                            body.reset(output.as_slice());
+                                                        }
+
+                                                        //设置响应头，并将创建的编码器加入空闲编码器队列中
+                                                        response.header(CONTENT_ENCODING.as_str(), DEFLATE_ENCODING);
+                                                        response.header(CONTENT_LENGTH.as_str(), deflate.total_out().to_string().as_str());
+                                                        deflate.reset();
+                                                        produce_deflate(self.deflate_producor.clone(), deflate);
+                                                    }
+                                                },
+                                                Ok(mut deflate) => {
+                                                    //有空闲编码器，则开始编码
+                                                    if let Some(input) = body.as_slice() {
+                                                        let cap = (input.len() as f64 * 0.75) as usize;
+                                                        let mut output = Vec::with_capacity(input.len());
+                                                        unsafe { output.set_len(output.capacity()); }
+                                                        if let Err(e) = encode_deflate(&mut deflate, input, &mut output, self.flush) {
+                                                            //编码错误，则立即抛出错误
+                                                            return MiddlewareResult::Throw(e);
+                                                        }
+
+                                                        //编码成功
+                                                        if req.method() == &Method::HEAD {
+                                                            //是HEAD方法请求的响应，则忽略响应体
+                                                            body.reset(&[]);
+                                                        } else {
+                                                            //非HEAD方法请求的响应，则替换为编码成功后的响应体
+                                                            body.reset(output.as_slice());
+                                                        }
+
+                                                        //设置响应头，并将使用后的编码器放入空闲编码器队列中
+                                                        response.header(CONTENT_ENCODING.as_str(), DEFLATE_ENCODING);
+                                                        response.header(CONTENT_LENGTH.as_str(), deflate.total_out().to_string().as_str());
+                                                        deflate.reset();
+                                                        produce_deflate(self.deflate_producor.clone(), deflate);
+                                                    }
                                                 },
                                             }
                                         }
-                                    }
 
-                                    //已编码，则中止其它类型的编码
-                                    break;
-                                },
-                                _ => {
-                                    //服务器不支持客户端接受的编码，则继续
-                                    continue;
+                                        //已编码，则中止其它类型的编码
+                                        break;
+                                    },
+                                    GZIP_ENCODING => {
+                                        //接受gzip编码
+                                        if let Some(body) = response.as_mut_body() {
+                                            if body.len().is_none() || body.len().unwrap() < self.min_plain_limit {
+                                                //响应体明文数据过小，则忽略编码
+                                                break;
+                                            }
+
+                                            if let Some(input) = body.as_slice() {
+                                                let gzip = new_gzip(Vec::new(), self.level);
+                                                match encode_gzip(gzip, input) {
+                                                    Err(e) => {
+                                                        //编码错误，则立即抛出错误
+                                                        return MiddlewareResult::Throw(e);
+                                                    },
+                                                    Ok(output) => {
+                                                        //编码成功
+                                                        if req.method() == &Method::HEAD {
+                                                            //是HEAD方法请求的响应，则忽略响应体
+                                                            body.reset(&[]);
+                                                        } else {
+                                                            //非HEAD方法请求的响应，则替换为编码成功后的响应体
+                                                            body.reset(output.as_slice());
+                                                        }
+
+                                                        //设置响应头
+                                                        response.header(CONTENT_ENCODING.as_str(), GZIP_ENCODING);
+                                                        response.header(CONTENT_LENGTH.as_str(), output.len().to_string().as_str());
+                                                    },
+                                                }
+                                            }
+                                        }
+
+                                        //已编码，则中止其它类型的编码
+                                        break;
+                                    },
+                                    _ => {
+                                        //服务器不支持客户端接受的编码，则继续
+                                        continue;
+                                    }
                                 }
                             }
                         }
