@@ -11,11 +11,12 @@ use std::io::{Error, Result, ErrorKind};
 
 use tokio;
 use percent_encoding::{CONTROLS, percent_encode};
-use reqwest::{ClientBuilder, Client, Proxy, Certificate, Identity, RequestBuilder, Request, Body, Response,
+use reqwest::{ClientBuilder, Client, Proxy, Certificate, Identity, Method, RequestBuilder, Request, Body, Response,
               header::{HeaderMap, HeaderName, HeaderValue},
               redirect::Policy,
               multipart::{Part, Form}};
 use bytes::{Buf, BufMut, Bytes};
+use flume::bounded;
 
 use hash::XHashMap;
 
@@ -25,7 +26,7 @@ use r#async::rt::{AsyncRuntime, AsyncValue};
 * 异步Http客户端运行时
 */
 lazy_static! {
-    static ref ASYNC_HTTPC_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new().thread_name("ASYNC-HTTPC").core_threads(2).max_threads(16).threaded_scheduler().enable_all().build().unwrap();
+    static ref ASYNC_HTTPC_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread().thread_name("ASYNC-HTTPC").worker_threads(2).max_blocking_threads(16).enable_all().build().unwrap();
 }
 
 /*
@@ -216,11 +217,26 @@ impl AsyncHttpc {
                          url: &str,
                          method: AsyncHttpRequestMethod) -> AsyncHttpRequest {
         let builder = match method {
+            AsyncHttpRequestMethod::Optinos => {
+                self.0.request(Method::OPTIONS, url)
+            },
+            AsyncHttpRequestMethod::Head => {
+                self.0.head(url)
+            },
             AsyncHttpRequestMethod::Get => {
                 self.0.get(url)
             },
             AsyncHttpRequestMethod::Post => {
                 self.0.post(url)
+            },
+            AsyncHttpRequestMethod::Put => {
+                self.0.put(url)
+            },
+            AsyncHttpRequestMethod::Patch => {
+                self.0.patch(url)
+            },
+            AsyncHttpRequestMethod::Delete => {
+                self.0.delete(url)
             },
         };
 
@@ -237,8 +253,13 @@ impl AsyncHttpc {
 */
 #[derive(Debug, Clone)]
 pub enum AsyncHttpRequestMethod {
-    Get,    //get请求
-    Post,   //post请求
+    Optinos,    //OPTIONS请求
+    Head,       //HEAD请求
+    Get,        //GET请求
+    Post,       //POST请求
+    Put,        //PUT请求
+    Patch,      //PATCH请求
+    Delete,     //DELETE请求
 }
 
 /*
@@ -389,9 +410,13 @@ impl AsyncHttpRequest {
         let url = self.url;
         let method = self.method;
         let request = self.builder;
-        match ASYNC_HTTPC_RUNTIME.spawn(async move {
-            request.send().await
-        }).await {
+        let(sender, receiver) = bounded(1);
+        ASYNC_HTTPC_RUNTIME.spawn(async move {
+            let result = request.send().await;
+            sender.send(result);
+        });
+
+        match receiver.recv_async().await {
             Err(e) => {
                 Err(Error::new(ErrorKind::Other, format!("Async http request failed, method: {:?}, url: {:?}, reason: {:?}", method, url, e)))
             },
