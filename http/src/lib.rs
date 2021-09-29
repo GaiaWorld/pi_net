@@ -2,7 +2,6 @@
 #![feature(never_type)]
 #![feature(async_await)]
 #![feature(entry_insert)]
-#![feature(const_generics)]
 #![feature(map_first_last)]
 #![feature(associated_type_defaults)]
 

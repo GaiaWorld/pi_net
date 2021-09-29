@@ -8,9 +8,6 @@ use tokio;
 use bytes::{Buf, BufMut};
 
 use r#async::rt::{AsyncRuntime, multi_thread::{MultiTaskRuntimeBuilder, MultiTaskRuntime}};
-use worker::{impls::{STORE_TASK_POOL, STORE_WORKER_WALKER},
-             worker::WorkerType,
-             worker_pool::WorkerPool};
 use tcp::driver::SocketConfig;
 use tcp::buffer_pool::WriteBufferPool;
 use tcp::util::TlsConfig;
@@ -46,10 +43,6 @@ fn test_http_request() {
     //初始异步运行时
     let builder = MultiTaskRuntimeBuilder::default();
     let rt = builder.build();
-
-    //启动存储运行时
-    let worker_pool = Box::new(WorkerPool::new("test http hosts".to_string(), WorkerType::Store, 8, 1024 * 1024, 10000, STORE_WORKER_WALKER.clone()));
-    worker_pool.run(STORE_TASK_POOL.clone());
 
     //构建全局静态资源缓存，并启动缓存的整理
     let cache = Arc::new(StaticCache::new(1024 * 1024 * 1024, 99999));
@@ -165,6 +158,39 @@ fn test_http_request() {
             .set_connection_timeout(Some(60000))
             .set_host_connection_limit(10)
             .build().unwrap();
+
+    //Optinos测试
+    let httpc_copy = httpc.clone();
+    rt.spawn(rt.alloc(), async move {
+        match httpc_copy
+            .build_request("http://127.0.0.1/fs", AsyncHttpRequestMethod::Optinos)
+            .set_pairs(&[("d", "d=:bi(:client((js()png()tpl()):app((js()png()tpl()):res((js()png()tpl()):images(js()png()tpl())))))"), ("f", ":pi(:widget(js(util:widget:painter:forelet:style:frame_mgr:event:virtual_node):)util(js(html:util:tpl:task_mgr:res_mgr:log:hash:math:match:task_pool:event):)gui_virtual(js(frame_mgr):)lang(js(type:mod:time):))")])
+            .send().await {
+            Err(e) => println!("!!!!!!test request failed, e: {:?}", e),
+            Ok(mut resp) => {
+                println!("!!!!!!peer address: {:?}", resp.get_peer_addr());
+                println!("!!!!!!url: {}", resp.get_url());
+                println!("!!!!!!status: {}", resp.get_status());
+                println!("!!!!!!version: {}", resp.get_version());
+                println!("!!!!!!headers: {:#?}", resp.to_headers());
+                println!("!!!!!!body len: {:?}", resp.get_body_len());
+
+                loop {
+                    match resp.get_body().await {
+                        Err(e) => {
+                            println!("!!!!!!get body failed, reason: {:?}", e);
+                            break;
+                        },
+                        Ok(Some(body)) => {
+                            println!("!!!!!!get body ok, body: {:?}", body.as_ref());
+                        },
+                        Ok(None) => break,
+                    }
+                }
+            },
+        }
+    });
+    thread::sleep(Duration::from_millis(5000));
 
     //批量获取文件
     let httpc_copy = httpc.clone();
@@ -329,10 +355,6 @@ fn test_https_request() {
     let builder = MultiTaskRuntimeBuilder::default();
     let rt = builder.build();
 
-    //启动存储运行时
-    let worker_pool = Box::new(WorkerPool::new("test http hosts".to_string(), WorkerType::Store, 8, 1024 * 1024, 10000, STORE_WORKER_WALKER.clone()));
-    worker_pool.run(STORE_TASK_POOL.clone());
-
     //构建全局静态资源缓存，并启动缓存的整理
     let cache = Arc::new(StaticCache::new(1024 * 1024 * 1024, 99999));
     StaticCache::run_collect(cache.clone(), "test http cache".to_string(), 10000);
@@ -456,6 +478,39 @@ fn test_https_request() {
             .set_connection_timeout(Some(60000))
             .set_host_connection_limit(10)
             .build().unwrap();
+
+    //Options测试
+    let httpc_copy = httpc.clone();
+    rt.spawn(rt.alloc(), async move {
+        match httpc_copy
+            .build_request("https://msg.highapp.com/fs", AsyncHttpRequestMethod::Optinos)
+            .set_pairs(&[("d", "d=:bi(:client((js()png()tpl()):app((js()png()tpl()):res((js()png()tpl()):images(js()png()tpl())))))"), ("f", ":pi(:widget(js(util:widget:painter:forelet:style:frame_mgr:event:virtual_node):)util(js(html:util:tpl:task_mgr:res_mgr:log:hash:math:match:task_pool:event):)gui_virtual(js(frame_mgr):)lang(js(type:mod:time):))")])
+            .send().await {
+            Err(e) => println!("!!!!!!test request failed, e: {:?}", e),
+            Ok(mut resp) => {
+                println!("!!!!!!peer address: {:?}", resp.get_peer_addr());
+                println!("!!!!!!url: {}", resp.get_url());
+                println!("!!!!!!status: {}", resp.get_status());
+                println!("!!!!!!version: {}", resp.get_version());
+                println!("!!!!!!headers: {:#?}", resp.to_headers());
+                println!("!!!!!!body len: {:?}", resp.get_headers("content-length"));
+
+                loop {
+                    match resp.get_body().await {
+                        Err(e) => {
+                            println!("!!!!!!get body failed, reason: {:?}", e);
+                            break;
+                        },
+                        Ok(Some(body)) => {
+                            println!("!!!!!!get body ok, body: {:?}", body.as_ref());
+                        },
+                        Ok(None) => break,
+                    }
+                }
+            },
+        }
+    });
+    thread::sleep(Duration::from_millis(5000));
 
     //批量获取文件
     let httpc_copy = httpc.clone();

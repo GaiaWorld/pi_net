@@ -1,7 +1,6 @@
 #![allow(warnings)]
 #![feature(async_await)]
 #![feature(range_is_empty)]
-#![feature(const_generics)]
 #![feature(no_more_cas)]
 
 extern crate mio;

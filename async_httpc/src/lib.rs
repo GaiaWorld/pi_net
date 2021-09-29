@@ -11,12 +11,12 @@ use std::io::{Error, Result, ErrorKind};
 
 use tokio;
 use percent_encoding::{CONTROLS, percent_encode};
-use reqwest::{ClientBuilder, Client, Proxy, Certificate, Identity, RequestBuilder, Request, Body, Response,
+use reqwest::{ClientBuilder, Client, Proxy, Certificate, Identity, Method, RequestBuilder, Request, Body, Response,
               header::{HeaderMap, HeaderName, HeaderValue},
               redirect::Policy,
               multipart::{Part, Form}};
 use bytes::{Buf, BufMut, Bytes};
-use flume::{Sender, Receiver, bounded};
+use flume::bounded;
 
 use hash::XHashMap;
 
@@ -217,11 +217,26 @@ impl AsyncHttpc {
                          url: &str,
                          method: AsyncHttpRequestMethod) -> AsyncHttpRequest {
         let builder = match method {
+            AsyncHttpRequestMethod::Optinos => {
+                self.0.request(Method::OPTIONS, url)
+            },
+            AsyncHttpRequestMethod::Head => {
+                self.0.head(url)
+            },
             AsyncHttpRequestMethod::Get => {
                 self.0.get(url)
             },
             AsyncHttpRequestMethod::Post => {
                 self.0.post(url)
+            },
+            AsyncHttpRequestMethod::Put => {
+                self.0.put(url)
+            },
+            AsyncHttpRequestMethod::Patch => {
+                self.0.patch(url)
+            },
+            AsyncHttpRequestMethod::Delete => {
+                self.0.delete(url)
             },
         };
 
@@ -238,8 +253,13 @@ impl AsyncHttpc {
 */
 #[derive(Debug, Clone)]
 pub enum AsyncHttpRequestMethod {
-    Get,    //get请求
-    Post,   //post请求
+    Optinos,    //OPTIONS请求
+    Head,       //HEAD请求
+    Get,        //GET请求
+    Post,       //POST请求
+    Put,        //PUT请求
+    Patch,      //PATCH请求
+    Delete,     //DELETE请求
 }
 
 /*
