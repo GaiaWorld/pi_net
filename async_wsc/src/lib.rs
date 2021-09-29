@@ -658,9 +658,7 @@ impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Future for AsyncOpen
         let ws = self.ws.clone();
 
         arbiter.send(Box::pin(async move {
-            println!("######0");
             Arbiter::spawn(async move {
-                println!("######1");
                 //建立指定url的连接
                 let mut ws_req = Client::new()
                     .ws(url.as_str())
@@ -679,10 +677,8 @@ impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Future for AsyncOpen
                     ws_req = ws_req.server_mode();
                 }
 
-                println!("######2");
                 match ws_req.connect().await {
                     Err(e) => {
-                        println!("######3");
                         let reason = format!("Open websocket failed, url: {}, protocols: {:?}, reason: {:?}", url, protocols, e);
                         ws.0.write().status = AsyncWebsocketStatus::Error(url, protocols, None, Some(Error::new(ErrorKind::ConnectionAborted, reason.clone()))); //设置连接状态
                         ws.0.read().handler.on_error(reason.clone()); //通知处理器连接错误
@@ -690,10 +686,8 @@ impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Future for AsyncOpen
                         error!("{}", reason);
                     },
                     Ok((resp, connection)) => {
-                        println!("######4");
                         //打开Websocket连接成功
                         match ASYNC_WEBSOCKET_CONNECTION.try_with(move |shared| {
-                            println!("######5");
                             let mut last_ws_con = None;
                             if unsafe { (&mut *shared.get()) }.is_some() {
                                 //当前客户端有连接
@@ -705,7 +699,6 @@ impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Future for AsyncOpen
                             last_ws_con
                         }) {
                             Err(e) => {
-                                println!("######6");
                                 //设置当前客户端的连接失败
                                 let reason = format!("Open websocket failed, url: {}, protocols: {:?}, reason: {:?}", url, protocols, e);
                                 ws.0.write().status = AsyncWebsocketStatus::Error(url, protocols, None, Some(Error::new(ErrorKind::ConnectionAborted, reason.clone()))); //设置连接状态
@@ -714,13 +707,11 @@ impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Future for AsyncOpen
                                 error!("{}", reason);
                             },
                             Ok(last_ws_con) => {
-                                println!("######7");
                                 if let Some(mut last_ws_con) = last_ws_con {
                                     //立即关闭旧连接
                                     last_ws_con.send(ws::Message::Close(None)).await;
                                 }
 
-                                println!("######8");
                                 ws.0.write().status = AsyncWebsocketStatus::Connected(url.clone(), protocols.clone()); //设置连接状态
                                 ws.0.read().handler.on_open(); //通知处理器连接成功
                                 ws.0.read().rt.wakeup(&task_id); //唤醒外部运行时的异步打开连接的任务
