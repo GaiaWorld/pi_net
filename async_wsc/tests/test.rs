@@ -5,19 +5,23 @@ use std::sync::Arc;
 use std::str::FromStr;
 use std::cell::RefCell;
 use std::time::Duration;
+use std::ops::{DerefMut, Deref};
+use std::result::Result as GenRuest;
 use std::io::{ErrorKind, Result, Error};
 
 use futures::future::{FutureExt, BoxFuture};
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use url::Url;
-use actix_rt::{System, Arbiter};
+use actix_rt::{Arbiter, System};
 use actix_codec::Framed;
-use actix_http::ws::Codec;
-use awc::{Client, BoxedSocket, ws::{self, CloseReason}};
+use actix_http::ws::{Codec, Frame, ProtocolError};
+use awc::{Client, ClientResponse, BoxedSocket, ws::{self, CloseReason}, error::WsClientError};
 use crossbeam_channel::unbounded;
 use bytes::Bytes;
 
-use r#async::rt::{AsyncRuntime, single_thread::{SingleTaskRunner, SingleTaskRuntime}};
+use r#async::rt::{AsyncRuntime,
+                  single_thread::{SingleTaskRunner, SingleTaskRuntime},
+                  multi_thread::{StealableTaskPool, MultiTaskRuntimeBuilder, MultiTaskRuntime}};
 use tcp::connect::TcpSocket;
 use tcp::tls_connect::TlsSocket;
 use tcp::server::{AsyncWaitsHandle, AsyncPortsFactory, SocketListener};
@@ -114,128 +118,126 @@ fn test_awc() {
         }
     }
 
-    let (send, recv) = unbounded();
+    let (sender, receiver) = unbounded();
     thread::spawn(move || {
-        let mut runner = System::new("test_awc");
-        println!("Connection thread: {:?}", thread::current().id());
-        send.send(Arc::new(System::current().arbiter().clone()));
+        let mut runner = System::new("asdfasdf");
+        runner.block_on(async move {
+            loop {
+                match receiver.recv() {
+                    Err(e) => panic!("Receive websocket request failed, reason: {:?}", e),
+                    Ok(req) => {
+                        match req {
+                            0 => {
+                                //连接
+                                match Client::new()
+                                    .ws("ws://127.0.0.1:38080")
+                                    .protocols(&["echo"])
+                                    .connect()
+                                    .await {
+                                    Err(e) => {
+                                        println!("!!!!!!connect failed, reason: {:?}", e);
+                                    },
+                                    Ok((resp, connection)) => {
+                                        match ASYNC_WEBSOCKET_CONNECTION.try_with(move |shared| {
+                                            let mut last_ws_con = None;
+                                            if shared.borrow().is_some() {
+                                                //当前运行时有连接
+                                                last_ws_con = shared.borrow_mut().take();
+                                            }
 
-        runner.run();
-    });
+                                            //重置当前运行时的连接
+                                            *shared.borrow_mut() = Some(connection);
+                                            last_ws_con
+                                        }) {
+                                            Err(_) => (),
+                                            Ok(last_ws_con) => {
+                                                if let Some(mut last_ws_con) = last_ws_con {
+                                                    //立即关闭旧连接
+                                                    last_ws_con.send(ws::Message::Close(None)).await;
+                                                }
+                                                println!("!!!!!!connect ok, resp: {:?}", resp);
+                                            },
+                                        }
+                                    }
+                                }
+                            },
+                            1 => {
+                                //发送消息
+                                match ASYNC_WEBSOCKET_CONNECTION.try_with(move |shared| {
+                                    shared.clone()
+                                }) {
+                                    Err(_) => (),
+                                    Ok(shared) => {
+                                        if let Some(ws_con) = shared.borrow_mut().as_mut() {
+                                            let r = ws_con.send(ws::Message::Binary(Bytes::copy_from_slice(b"Hello awc!"))).await;
+                                            if let Err(e) = r {
+                                                println!("!!!!!!Send failed, reason: {:?}", e);
+                                            } else {
+                                                println!("!!!!!!Send ok");
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                            2 => {
+                                //接收消息
+                                match ASYNC_WEBSOCKET_CONNECTION.try_with(move |shared| {
+                                    shared.clone()
+                                }) {
+                                    Err(_) => (),
+                                    Ok(shared) => {
+                                        if let Some(ws_con) = shared.borrow_mut().as_mut() {
+                                            let r = ws_con.next().await;
+                                            if let Some(resp) = r {
+                                                match resp {
+                                                    Err(e) => {
+                                                        println!("!!!!!!response failed, reason: {:?}", e);
+                                                    },
+                                                    Ok(frame) => {
+                                                        println!("!!!!!!response ok, msg: {:?}", frame);
+                                                    },
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                            _ => {
+                                //关闭连接
+                                match ASYNC_WEBSOCKET_CONNECTION.try_with(move |shared| {
+                                    shared.clone()
+                                }) {
+                                    Err(_) => (),
+                                    Ok(shared) => {
+                                        if let Some(ws_con) = shared.borrow_mut().as_mut() {
+                                            ws_con.send(ws::Message::Close(None)).await;
+                                        }
+                                    },
+                                }
 
-    println!("Main thread: {:?}", thread::current().id());
-
-    let rt = recv.recv().unwrap();
-
-    rt.send(Box::pin(async move {
-        //连接
-        Arbiter::spawn(async move {
-            //建立指定url的连接
-            match Client::new()
-                .ws("ws://127.0.0.1:38080")
-                .protocols(&["echo"])
-                .connect()
-                .await {
-                Err(e) => {
-                    println!("!!!!!!connect failed, reason: {:?}", e);
-                },
-                Ok((resp, connection)) => {
-                    match ASYNC_WEBSOCKET_CONNECTION.try_with(move |shared| {
-                        let mut last_ws_con = None;
-                        if shared.borrow().is_some() {
-                            //当前运行时有连接
-                            last_ws_con = shared.borrow_mut().take();
+                                //关闭运行时
+                                break;
+                            },
                         }
-
-                        //重置当前运行时的连接
-                        *shared.borrow_mut() = Some(connection);
-                        last_ws_con
-                    }) {
-                        Err(_) => (),
-                        Ok(last_ws_con) => {
-                            if let Some(mut last_ws_con) = last_ws_con {
-                                //立即关闭旧连接
-                                last_ws_con.send(ws::Message::Close(None)).await;
-                            }
-                            println!("!!!!!!connect ok, resp: {:?}", resp);
-                        },
-                    }
+                    },
                 }
             }
         });
-    }));
+    });
+
+    sender.send(0);
 
     thread::sleep(Duration::from_millis(1000));
 
-    rt.send(Box::pin(async move {
-        //发送消息
-        Arbiter::spawn(async move {
-            match ASYNC_WEBSOCKET_CONNECTION.try_with(move |shared| {
-                shared.clone()
-            }) {
-                Err(_) => (),
-                Ok(shared) => {
-                    if let Some(ws_con) = shared.borrow_mut().as_mut() {
-                        let r = ws_con.send(ws::Message::Binary(Bytes::copy_from_slice(b"Hello awc!"))).await;
-                        if let Err(e) = r {
-                            println!("!!!!!!Send failed, reason: {:?}", e);
-                        } else {
-                            println!("!!!!!!Send ok");
-                        }
-                    }
-                },
-            }
-        });
-    }));
+    sender.send(1);
 
     thread::sleep(Duration::from_millis(1000));
 
-    rt.send(Box::pin(async move {
-        //接收消息
-        Arbiter::spawn(async move {
-            match ASYNC_WEBSOCKET_CONNECTION.try_with(move |shared| {
-                shared.clone()
-            }) {
-                Err(_) => (),
-                Ok(shared) => {
-                    if let Some(ws_con) = shared.borrow_mut().as_mut() {
-                        let r = ws_con.next().await;
-                        if let Some(resp) = r {
-                            match resp {
-                                Err(e) => {
-                                    println!("!!!!!!response failed, reason: {:?}", e);
-                                },
-                                Ok(frame) => {
-                                    println!("!!!!!!response ok, msg: {:?}", frame);
-                                },
-                            }
-                        }
-                    }
-                },
-            }
-        });
-    }));
+    sender.send(2);
 
     thread::sleep(Duration::from_millis(1000));
 
-    rt.send(Box::pin(async move {
-        //关闭连接
-        Arbiter::spawn(async move {
-            match ASYNC_WEBSOCKET_CONNECTION.try_with(move |shared| {
-                shared.clone()
-            }) {
-                Err(_) => (),
-                Ok(shared) => {
-                    if let Some(ws_con) = shared.borrow_mut().as_mut() {
-                        ws_con.send(ws::Message::Close(None)).await;
-                    }
-                },
-            }
-        });
-
-        //关闭运行时
-        System::current().arbiter().stop();
-    }));
+    sender.send(3);
 
     thread::sleep(Duration::from_millis(10000000000));
 }
@@ -264,18 +266,11 @@ fn test_wsc() {
     }
 
     //初始化异步运行时
-    let runner = SingleTaskRunner::new();
-    let rt = runner.startup().unwrap();
-
-    thread::spawn(move || {
-        loop {
-            runner.run();
-            thread::sleep(Duration::from_millis(1));
-        }
-    });
+    let builder = MultiTaskRuntimeBuilder::default();
+    let rt = builder.build();
 
     //创建客户端
-    let client = AsyncWebsocketClient::new(AsyncRuntime::Local(rt.clone()), "test_wsc".to_string()).unwrap();
+    let client = AsyncWebsocketClient::new(AsyncRuntime::Multi(rt.clone()), "test-wsc-runtime".to_string(), 32).unwrap();
 
     //设置Websocket协议，并绑定当前连接的事件处理回调函数
     let mut handler = AsyncWebsocketHandler::default();
@@ -318,7 +313,8 @@ fn test_wsc() {
                 println!("!!!!!!Websocket status: {:?}", ws.get_status());
                 receive(rt_copy.clone(), ws.clone());
 
-                for _ in 0..10 {
+                for index in 0..10 {
+                    println!("!!!!!!index: {}", index);
                     ws.send(AsyncWebsocketMessage::Text("Hello Ws!".to_string())).await;
                     ws.send(AsyncWebsocketMessage::Binary(Bytes::from("Hello Ws!"))).await;
                     ws.send(AsyncWebsocketMessage::Binary(Bytes::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))).await;
@@ -354,8 +350,8 @@ fn test_tls_wsc() {
                      Arc::new(TestTlsChildProtocolFactory))));
     let tls_config = TlsConfig::new_server("",
                                            false,
-                                           "./17youx.cn.pem",
-                                           "./17youx.cn.key",
+                                           "./fullchain.pem",
+                                           "./key.pem",
                                            "",
                                            "",
                                            "",
@@ -375,18 +371,11 @@ fn test_tls_wsc() {
     }
 
     //初始化异步运行时
-    let runner = SingleTaskRunner::new();
-    let rt = runner.startup().unwrap();
-
-    thread::spawn(move || {
-        loop {
-            runner.run();
-            thread::sleep(Duration::from_millis(1));
-        }
-    });
+    let builder = MultiTaskRuntimeBuilder::default();
+    let rt = builder.build();
 
     //创建客户端
-    let client = AsyncWebsocketClient::new(AsyncRuntime::Local(rt.clone()), "test_tls_wsc".to_string()).unwrap();
+    let client = AsyncWebsocketClient::new(AsyncRuntime::Multi(rt.clone()), "test-tls-wsc-runtime".to_string(), 32).unwrap();
 
     //设置Websocket协议，并绑定当前连接的事件处理回调函数
     let mut handler = AsyncWebsocketHandler::default();
@@ -443,11 +432,12 @@ fn test_tls_wsc() {
     thread::sleep(Duration::from_millis(10000000));
 }
 
-fn receive(rt: SingleTaskRuntime<()>, ws: AsyncWebsocket) {
+fn receive(rt: MultiTaskRuntime<()>, ws: AsyncWebsocket<StealableTaskPool<()>>) {
     let rt_copy = rt.clone();
     rt.spawn(rt.alloc(), async move {
         if ws.get_status() > 0 && ws.get_status() < 3 {
             if let Ok(_) = ws.receive_once(None).await {
+                rt_copy.wait_timeout(1000).await;
                 println!("!!!!!!Websocket status: {:?}", ws.get_status());
                 receive(rt_copy, ws);
             }

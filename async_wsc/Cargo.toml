@@ -7,6 +7,7 @@ edition = "2018"
 [dependencies]
 futures = "0.3"
 futures-util = "0.3"
+flume = "0.10"
 bytes = "0.5"
 actix-rt = "1.1"
 actix-codec = "0.3"
@@ -15,12 +16,12 @@ awc = { version = "2.0", features = ["rustls"] }
 ws = "0.9"
 url = "2.1"
 lazy_static = "1.4"
-crossbeam-channel = "0.5"
 parking_lot = "0.11"
 log = "0.4"
 async = { path = "../../pi_lib/async" }
 
 [dev-dependencies]
 env_logger = "0.7"
+crossbeam-channel = "0.5"
 tcp = { path = "../../pi_net/tcp" }
 wss = { package = "ws", path = "../../pi_net/ws" }
