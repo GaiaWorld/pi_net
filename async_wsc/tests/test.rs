@@ -437,7 +437,6 @@ fn receive(rt: MultiTaskRuntime<()>, ws: AsyncWebsocket<StealableTaskPool<()>>) 
     rt.spawn(rt.alloc(), async move {
         if ws.get_status() > 0 && ws.get_status() < 3 {
             if let Ok(_) = ws.receive_once(None, 1).await {
-                rt_copy.wait_timeout(1000).await;
                 println!("!!!!!!Websocket status: {:?}", ws.get_status());
                 receive(rt_copy, ws);
             }
