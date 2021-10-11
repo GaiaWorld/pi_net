@@ -220,6 +220,7 @@ async fn event_loop<
                                                require_count,
                                                received_count,
                                                mut received_message,
+                                               receive_timeout,
                                                result) => {
                         //接收服务器端发送的消息
                         if let Some(ws_con) = current_connection.as_mut() {
@@ -242,6 +243,7 @@ async fn event_loop<
                                             require_count,
                                             received_count,
                                             received_message,
+                                            receive_timeout,
                                             result)).await;
                                     } else {
                                         //无本次接收的最大消息数限制，且当前缓冲区没有可接收的消息帧，则立即退出本次消息接收
@@ -250,7 +252,10 @@ async fn event_loop<
                                     }
                                 } else {
                                     //还未接收至少一条消息，或连接的缓冲区不为空
-                                    if let Ok(r) = actix_rt::time::timeout(Duration::from_millis(10), ws_con.next()).await {
+                                    if let Ok(r) = actix_rt::time::timeout(
+                                        Duration::from_millis(receive_timeout),
+                                        ws_con.next()
+                                    ).await {
                                         if let Some(respone) = r {
                                             match respone {
                                                 Err(e) => {
@@ -276,6 +281,7 @@ async fn event_loop<
                                                             require_count,
                                                             received_count,
                                                             received_message,
+                                                            receive_timeout,
                                                             result)).await;
                                                     } else {
                                                         match received_message {
@@ -324,6 +330,7 @@ async fn event_loop<
                                                                         Some(count - 1),
                                                                         received_count + 1,
                                                                         None,
+                                                                        receive_timeout,
                                                                         result)).await;
                                                                 } else {
                                                                     sender.send_async(AsyncWebsocketCmd::Receive(
@@ -332,6 +339,7 @@ async fn event_loop<
                                                                         None,
                                                                         received_count + 1,
                                                                         None,
+                                                                        receive_timeout,
                                                                         result)).await;
                                                                 }
                                                             },
@@ -415,7 +423,7 @@ enum AsyncWebsocketCmd<
 > {
     Open(AsyncWebsocket<P>, TaskId),
     Send(AsyncWebsocket<P>, TaskId, Message, AsyncWaitResult<()>),
-    Receive(AsyncWebsocket<P>, TaskId, Option<usize>, usize, Option<ReceivedMessage>, AsyncWaitResult<()>),
+    Receive(AsyncWebsocket<P>, TaskId, Option<usize>, usize, Option<ReceivedMessage>, u64, AsyncWaitResult<()>),
     Close(AsyncWebsocket<P>, TaskId, Option<CloseCode>, AsyncWaitResult<()>),
     Stop(Option<CloseReason>),
 }
@@ -427,7 +435,7 @@ impl<
         match self {
             AsyncWebsocketCmd::Open(_, _) => write!(f, "AsyncWebsocketCmd::Open"),
             AsyncWebsocketCmd::Send(_, _, _, _) => write!(f, "AsyncWebsocketCmd::Send"),
-            AsyncWebsocketCmd::Receive(_, _, _, _, _, _) => write!(f, "AsyncWebsocketCmd::Receive"),
+            AsyncWebsocketCmd::Receive(_, _, _, _, _, _, _) => write!(f, "AsyncWebsocketCmd::Receive"),
             AsyncWebsocketCmd::Close(_, _, _, _) => write!(f, "AsyncWebsocketCmd::Close"),
             AsyncWebsocketCmd::Stop(_) => write!(f, "AsyncWebsocketCmd::Stop"),
         }
@@ -696,7 +704,9 @@ impl<
     }
 
     //接收一次消息，可以限制一次最多接收多少消息，None表示将接收缓冲区中所有的消息
-    pub async fn receive_once(&self, mut limit: Option<usize>) -> Result<()> {
+    pub async fn receive_once(&self,
+                              mut limit: Option<usize>,
+                              receive_timeout: u64) -> Result<()> {
         limit = match limit {
             Some(0) => {
                 //至少需要接收一个消息
@@ -709,7 +719,7 @@ impl<
         let ws = self.clone();
         let task_id = rt.alloc();
 
-        AsyncWebsocketReceive::new(rt, task_id, ws, limit).await
+        AsyncWebsocketReceive::new(rt, task_id, ws, limit, receive_timeout).await
     }
 
     //关闭异步WebSocket连接
@@ -1084,11 +1094,12 @@ impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> AsyncWebsocketSend<P
 
 //Websocket异步接收消息
 pub struct AsyncWebsocketReceive<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> {
-    rt:         AsyncRuntime<(), P>,    //异步运行时
-    task_id:    TaskId,                 //异步任务id
-    ws:         AsyncWebsocket<P>,      //连接
-    limit:      Option<usize>,          //一次最多可以接收多少消息
-    result:     AsyncWaitResult<()>,    //异步接收消息的结果
+    rt:                 AsyncRuntime<(), P>,    //异步运行时
+    task_id:            TaskId,                 //异步任务id
+    ws:                 AsyncWebsocket<P>,      //连接
+    limit:              Option<usize>,          //一次最多可以接收多少消息
+    receive_timeout:    u64,                    //接收超时时长
+    result:             AsyncWaitResult<()>,    //异步接收消息的结果
 }
 
 unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Send for AsyncWebsocketReceive<P> {}
@@ -1106,8 +1117,9 @@ impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Future for AsyncWebs
         let task_id = self.task_id.clone();
         let ws = self.ws.clone();
         let limit = self.limit.clone();
+        let receive_timeout = self.receive_timeout;
         let result = self.result.clone();
-        let cmd = AsyncWebsocketCmd::Receive(ws.clone(), task_id, limit, 0, None, result);
+        let cmd = AsyncWebsocketCmd::Receive(ws.clone(), task_id, limit, 0, None, receive_timeout, result);
 
         //挂起接收消息的异步任务
         let result = self.ws.0.rt.pending(&self.task_id, cx.waker().clone());
@@ -1128,12 +1140,18 @@ impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> AsyncWebsocketReceiv
     pub fn new(rt: AsyncRuntime<(), P>,
                task_id: TaskId,
                ws: AsyncWebsocket<P>,
-               limit: Option<usize>) -> Self {
+               limit: Option<usize>,
+               mut receive_timeout: u64) -> Self {
+        if receive_timeout < 1 || receive_timeout > 10 {
+            receive_timeout = 1;
+        }
+
         AsyncWebsocketReceive {
             rt,
             task_id,
             ws,
             limit,
+            receive_timeout,
             result: AsyncWaitResult(Arc::new(RefCell::new(None))),
         }
     }
