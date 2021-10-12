@@ -88,11 +88,11 @@ impl AsyncHttpcBuilder {
         AsyncHttpcBuilder(self.0, self.1.referer(b))
     }
 
-    //是否允许严格模式，默认不允许
+    //是否允许严格模式，默认允许
     pub fn enable_strict(self, b: bool) -> Self {
         AsyncHttpcBuilder(self.0,
-                          ClientBuilder::danger_accept_invalid_certs(self.1, b)
-                              .danger_accept_invalid_certs(b))
+                          ClientBuilder::danger_accept_invalid_hostnames(self.1, !b)
+                              .danger_accept_invalid_certs(!b))
     }
 
     //设置允许的最大重定向次数，默认为0次
