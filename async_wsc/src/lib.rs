@@ -23,7 +23,7 @@ use url::Url;
 use actix_rt::{self, System};
 use actix_codec::Framed;
 use actix_http::ws::{Codec, Item};
-use awc::{Client, BoxedSocket, ws::{self, Frame, Message, CloseCode, CloseReason}};
+use awc::{ClientBuilder, Client, BoxedSocket, ws::{self, Frame, Message, CloseCode, CloseReason}};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use log::{info, warn, error};
 
@@ -145,7 +145,9 @@ async fn event_loop<
                         //建立指定url的连接
                         let url = ws.0.status.read().get_url().clone();
                         let protocols = ws.0.status.read().get_protocols().to_vec();
-                        let mut ws_req = Client::new()
+                        let mut client = ClientBuilder::default()
+                            .timeout(Duration::from_millis(10000)).finish();
+                        let mut ws_req = client
                             .ws(url.as_str())
                             .protocols(protocols.clone());
 
