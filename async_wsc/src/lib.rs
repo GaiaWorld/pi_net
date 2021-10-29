@@ -23,7 +23,7 @@ use url::Url;
 use actix_rt::{self, System};
 use actix_codec::Framed;
 use actix_http::ws::{Codec, Item};
-use awc::{ClientBuilder, Client, BoxedSocket, ws::{self, Frame, Message, CloseCode, CloseReason}};
+use awc::{Client, Connector, BoxedSocket, ws::{self, Frame, Message, CloseCode, CloseReason}};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use log::{info, warn, error};
 
@@ -141,12 +141,17 @@ async fn event_loop<
             Ok(cmd) => {
                 match cmd {
                     AsyncWebsocketCmd::Open(ws,
-                                            task_id) => {
+                                            task_id,
+                                            timeout) => {
                         //建立指定url的连接
                         let url = ws.0.status.read().get_url().clone();
                         let protocols = ws.0.status.read().get_protocols().to_vec();
-                        let mut client = ClientBuilder::default()
-                            .timeout(Duration::from_millis(10000)).finish();
+                        let connector = Connector::new()
+                            .timeout(Duration::from_millis(timeout))
+                            .finish();
+                        let mut client = Client::builder()
+                            .connector(connector)
+                            .finish();
                         let mut ws_req = client
                             .ws(url.as_str())
                             .protocols(protocols.clone());
@@ -423,7 +428,7 @@ async fn event_loop<
 enum AsyncWebsocketCmd<
     P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>,
 > {
-    Open(AsyncWebsocket<P>, TaskId),
+    Open(AsyncWebsocket<P>, TaskId, u64),
     Send(AsyncWebsocket<P>, TaskId, Message, AsyncWaitResult<()>),
     Receive(AsyncWebsocket<P>, TaskId, Option<usize>, usize, Option<ReceivedMessage>, u64, AsyncWaitResult<()>),
     Close(AsyncWebsocket<P>, TaskId, Option<CloseCode>, AsyncWaitResult<()>),
@@ -435,7 +440,7 @@ impl<
 > Debug for AsyncWebsocketCmd<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AsyncWebsocketCmd::Open(_, _) => write!(f, "AsyncWebsocketCmd::Open"),
+            AsyncWebsocketCmd::Open(_, _, _) => write!(f, "AsyncWebsocketCmd::Open"),
             AsyncWebsocketCmd::Send(_, _, _, _) => write!(f, "AsyncWebsocketCmd::Send"),
             AsyncWebsocketCmd::Receive(_, _, _, _, _, _, _) => write!(f, "AsyncWebsocketCmd::Receive"),
             AsyncWebsocketCmd::Close(_, _, _, _) => write!(f, "AsyncWebsocketCmd::Close"),
@@ -688,7 +693,8 @@ impl<
             (rt.clone(),
              AsyncOpenWebsocket::new(rt.clone(),
                                      task_id,
-                                     ws).boxed()),
+                                     ws,
+                                     timeout).boxed()),
             (rt.clone(),
              async move {
                  rt.wait_timeout(timeout as usize).await;
@@ -984,6 +990,7 @@ pub struct AsyncOpenWebsocket<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> {
     rt:         AsyncRuntime<(), P>,    //异步运行时
     task_id:    TaskId,                 //异步任务id
     ws:         AsyncWebsocket<P>,      //连接
+    timeout:    u64,                    //连接超时时长
 }
 
 unsafe impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> Send for AsyncOpenWebsocket<P> {}
@@ -1005,7 +1012,10 @@ impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Future for AsyncOpen
 
         let task_id = self.task_id.clone();
         let ws = self.ws.clone();
-        let cmd = AsyncWebsocketCmd::Open(ws.clone(), task_id);
+        let timeout = self.timeout;
+        let cmd = AsyncWebsocketCmd::Open(ws.clone(),
+                                          task_id,
+                                          timeout);
 
         //挂起打开连接的异步任务
         let result = self.ws.0.rt.pending(&self.task_id, cx.waker().clone());
@@ -1025,11 +1035,13 @@ impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> AsyncOpenWebsocket<P
     //创建异步打开Websocket连接
     pub fn new(rt: AsyncRuntime<(), P>,
                task_id: TaskId,
-               ws: AsyncWebsocket<P>) -> Self {
+               ws: AsyncWebsocket<P>,
+               timeout: u64) -> Self {
         AsyncOpenWebsocket {
             rt,
             task_id,
             ws,
+            timeout,
         }
     }
 }
