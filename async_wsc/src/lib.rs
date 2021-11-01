@@ -9,17 +9,20 @@ use std::str::FromStr;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::fmt::{self, Debug};
-use std::time::{Instant, Duration};
+use std::result::Result as GenResult;
 use std::cell::{UnsafeCell, RefCell};
 use std::task::{Context, Poll, Waker};
 use std::io::{Error, Result, ErrorKind};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Instant, Duration, SystemTime};
 
 use parking_lot::RwLock;
 use futures::future::{FutureExt, BoxFuture};
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use flume::{Sender, Receiver, SendError, bounded};
 use url::Url;
+use webpki;
+use rustls::{ClientConfig, RootCertStore, Certificate, ServerCertVerifier, ServerCertVerified, TLSError};
 use actix_rt::{self, System};
 use actix_codec::Framed;
 use actix_http::ws::{Codec, Item};
@@ -142,15 +145,36 @@ async fn event_loop<
                 match cmd {
                     AsyncWebsocketCmd::Open(ws,
                                             task_id,
+                                            is_strict,
                                             timeout) => {
                         //建立指定url的连接
                         let url = ws.0.status.read().get_url().clone();
                         let protocols = ws.0.status.read().get_protocols().to_vec();
-                        let connector = Connector::new()
-                            .timeout(Duration::from_millis(timeout))
-                            .finish();
+
+                        let connector = if is_strict {
+                            //严格模式
+                            Connector::new()
+                                .timeout(Duration::from_millis(timeout))
+                                .finish()
+                        } else {
+                            //非严格模式
+                            let mut config = ClientConfig::default();
+
+                            let protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+                            config.alpn_protocols = protos;
+
+                            config
+                                .dangerous()
+                                .set_certificate_verifier(Arc::new(NoCertificateVerification));
+
+                            Connector::new()
+                                .rustls(Arc::new(config))
+                                .timeout(Duration::from_millis(timeout))
+                                .finish()
+                        };
                         let mut client = Client::builder()
                             .connector(connector)
+                            .timeout(Duration::from_millis(timeout))
                             .finish();
                         let mut ws_req = client
                             .ws(url.as_str())
@@ -428,7 +452,7 @@ async fn event_loop<
 enum AsyncWebsocketCmd<
     P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>,
 > {
-    Open(AsyncWebsocket<P>, TaskId, u64),
+    Open(AsyncWebsocket<P>, TaskId, bool, u64),
     Send(AsyncWebsocket<P>, TaskId, Message, AsyncWaitResult<()>),
     Receive(AsyncWebsocket<P>, TaskId, Option<usize>, usize, Option<ReceivedMessage>, u64, AsyncWaitResult<()>),
     Close(AsyncWebsocket<P>, TaskId, Option<CloseCode>, AsyncWaitResult<()>),
@@ -440,7 +464,7 @@ impl<
 > Debug for AsyncWebsocketCmd<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AsyncWebsocketCmd::Open(_, _, _) => write!(f, "AsyncWebsocketCmd::Open"),
+            AsyncWebsocketCmd::Open(_, _, _, _) => write!(f, "AsyncWebsocketCmd::Open"),
             AsyncWebsocketCmd::Send(_, _, _, _) => write!(f, "AsyncWebsocketCmd::Send"),
             AsyncWebsocketCmd::Receive(_, _, _, _, _, _, _) => write!(f, "AsyncWebsocketCmd::Receive"),
             AsyncWebsocketCmd::Close(_, _, _, _) => write!(f, "AsyncWebsocketCmd::Close"),
@@ -682,7 +706,9 @@ impl<
     P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>,
 > AsyncWebsocket<P> {
     //打开异步Websocket连接
-    pub async fn open(&self, timeout: u64) -> Result<()> {
+    pub async fn open(&self,
+                      is_strict: bool,
+                      timeout: u64) -> Result<()> {
         let rt = self.0.rt.clone();
         let url = self.0.status.read().get_url().clone();
         let protocols = self.0.status.read().get_protocols().to_vec();
@@ -694,6 +720,7 @@ impl<
              AsyncOpenWebsocket::new(rt.clone(),
                                      task_id,
                                      ws,
+                                     is_strict,
                                      timeout).boxed()),
             (rt.clone(),
              async move {
@@ -990,6 +1017,7 @@ pub struct AsyncOpenWebsocket<P: AsyncTaskPoolExt<()> + AsyncTaskPool<()>> {
     rt:         AsyncRuntime<(), P>,    //异步运行时
     task_id:    TaskId,                 //异步任务id
     ws:         AsyncWebsocket<P>,      //连接
+    is_strict:  bool,                   //是否严格模式
     timeout:    u64,                    //连接超时时长
 }
 
@@ -1012,9 +1040,11 @@ impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> Future for AsyncOpen
 
         let task_id = self.task_id.clone();
         let ws = self.ws.clone();
+        let is_strict = self.is_strict;
         let timeout = self.timeout;
         let cmd = AsyncWebsocketCmd::Open(ws.clone(),
                                           task_id,
+                                          is_strict,
                                           timeout);
 
         //挂起打开连接的异步任务
@@ -1036,11 +1066,13 @@ impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> AsyncOpenWebsocket<P
     pub fn new(rt: AsyncRuntime<(), P>,
                task_id: TaskId,
                ws: AsyncWebsocket<P>,
+               is_strict: bool,
                timeout: u64) -> Self {
         AsyncOpenWebsocket {
             rt,
             task_id,
             ws,
+            is_strict,
             timeout,
         }
     }
@@ -1319,4 +1351,19 @@ struct InnerHandler {
     on_message_handler: Option<Arc<dyn Fn(AsyncWebsocketMessage)>>, //接收到消息的回调函数
     on_close_handler:   Option<Arc<dyn Fn(u16, String)>>,           //关闭的回调函数
     on_error_handler:   Option<Arc<dyn Fn(String)>>,                //错误的回调函数
+}
+
+//不验证证书
+struct NoCertificateVerification;
+
+impl ServerCertVerifier for NoCertificateVerification {
+    fn verify_server_cert(
+        &self,
+        _roots: &RootCertStore,
+        _presented_certs: &[Certificate],
+        _dns_name: webpki::DNSNameRef,
+        _ocsp_response: &[u8]
+    ) -> GenResult<ServerCertVerified, TLSError> {
+        Ok(ServerCertVerified::assertion())
+    }
 }

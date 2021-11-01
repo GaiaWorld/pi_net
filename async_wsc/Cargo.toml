@@ -9,6 +9,8 @@ futures = "0.3"
 futures-util = "0.3"
 flume = "0.10"
 bytes = "0.5"
+webpki = "0.21"
+rustls = { version = "0.18", features = ["dangerous_configuration"] }
 actix-rt = "1.1"
 actix-codec = "0.3"
 actix-http = "2.2"
