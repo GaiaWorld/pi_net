@@ -223,6 +223,7 @@ async fn event_loop<
                         //向服务器端发送消息
                         if let Some(ws_con) = current_connection.as_mut() {
                             //当前客户端有连接，则立即发送消息
+                            let mut is_sended = true;
                             for msg in send_frames(msg, *ws.0.send_size.read()) {
                                 //发送单帧或多帧消息
                                 if let Err(e) = ws_con.send(msg).await {
@@ -233,6 +234,7 @@ async fn event_loop<
                                     *result.0.borrow_mut() = Some(Err(error)); //设置发送消息的结果
                                     ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
                                     ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步发送消息的任务
+                                    is_sended = false; //设置状态为发送失败
                                     break;
                                 }
 
@@ -241,9 +243,11 @@ async fn event_loop<
                                 }
                             }
 
-                            //发送消息成功
-                            *result.0.borrow_mut() = Some(Ok(())); //设置发送消息的结果
-                            ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步发送消息的任务
+                            if is_sended {
+                                //发送消息成功
+                                *result.0.borrow_mut() = Some(Ok(())); //设置发送消息的结果
+                                ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步发送消息的任务
+                            }
                         }
                     },
                     AsyncWebsocketCmd::Receive(ws,
