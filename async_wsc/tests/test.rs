@@ -4,10 +4,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::str::FromStr;
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::time::Duration;
 use std::ops::{DerefMut, Deref};
 use std::result::Result as GenRuest;
 use std::io::{ErrorKind, Result, Error};
+use std::sync::atomic::AtomicUsize;
 
 use futures::future::{FutureExt, BoxFuture};
 use futures_util::{sink::SinkExt, stream::StreamExt};
@@ -305,7 +307,7 @@ fn test_wsc() {
     ws.set_send_frame_limit(127);
     rt.spawn(task_id.clone(), async move {
         println!("!!!!!!Websocket status: {:?}", ws.get_status());
-        match ws.open(5000).await {
+        match ws.open(true, 5000).await {
             Err(e) => {
                 println!("!!!!!!Test open websocket failed, reason: {:?}", e);
             },
@@ -401,33 +403,55 @@ fn test_tls_wsc() {
     }));
 
     //创建连接
-    let ws = client.build("wss://test.17youx.cn:38080", vec!["echo".to_string()], handler).unwrap();
+    // let ws = client.build("wss://test.17youx.cn:38080", vec!["mqttv3.1".to_string()], handler).unwrap();
+    let ws = client.build("wss://meligame.meli.games:2234/mqtt", vec!["mqttv3.1".to_string()], handler).unwrap();
+    // let ws = client.build("ws://16.163.41.96:1234/mqtt", vec!["mqttv3.1".to_string()], handler).unwrap();
+    // let ws = client.build("wss://meliws.17youx.cn:443", vec!["mqttv3.1".to_string()], handler).unwrap();
 
     //开始连接，并获取连接的发送器
-    let rt_copy = rt.clone();
-    let task_id = rt.alloc();
-    ws.set_task_id(task_id.clone());
-    ws.set_send_frame_limit(127);
-    rt.spawn(task_id.clone(), async move {
-        println!("!!!!!!Websocket status: {:?}", ws.get_status());
-        match ws.open(5000).await {
-            Err(e) => {
-                println!("!!!!!!Test open websocket failed, reason: {:?}", e);
-            },
-            Ok(_) => {
-                println!("!!!!!!Websocket status: {:?}", ws.get_status());
-                receive(rt_copy.clone(), ws.clone());
+    let mut err_count = Arc::new(AtomicUsize::new(0));
+    let mut ok_count = Arc::new(AtomicUsize::new(0));
 
-                for _ in 0..10 {
-                    ws.send(AsyncWebsocketMessage::Text("Hello Ws!".to_string())).await;
-                    ws.send(AsyncWebsocketMessage::Binary(Bytes::from("Hello Ws!"))).await;
-                    ws.send(AsyncWebsocketMessage::Binary(Bytes::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))).await;
-                    rt_copy.wait_timeout(1000).await;
-                }
-                ws.close(AsyncWebsocketCloseCode::Normal).await;
-            },
-        }
-    });
+    for _ in 0..10 {
+        let rt_copy = rt.clone();
+        let task_id = rt.alloc();
+        let ws_copy = ws.clone();
+        ws_copy.set_task_id(task_id.clone());
+        ws_copy.set_send_frame_limit(127);
+        let err_count_copy = err_count.clone();
+        let ok_count_copy = ok_count.clone();
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        rt.spawn(task_id.clone(), async move {
+            println!("!!!!!!Websocket status: {:?}", ws_copy.get_status());
+            let now = std::time::Instant::now();
+            match ws_copy.open(true, 30000).await {
+                Err(e) => {
+                    err_count_copy.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    println!("!!!!!!Test open websocket failed, time: {:?}, reason: {:?}", now.elapsed(), e);
+                },
+                Ok(_) => {
+                    ok_count_copy.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    println!("!!!!!!Websocket status: {:?}, time: {:?}", ws_copy.get_status(), now.elapsed());
+                    receive(rt_copy.clone(), ws_copy.clone());
+
+                    // for _ in 0..10 {
+                    //     ws.send(AsyncWebsocketMessage::Text("Hello Ws!".to_string())).await;
+                    //     ws.send(AsyncWebsocketMessage::Binary(Bytes::from("Hello Ws!"))).await;
+                    //     ws.send(AsyncWebsocketMessage::Binary(Bytes::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))).await;
+                    //     rt_copy.wait_timeout(1000).await;
+                    // }
+                    ws_copy.close(AsyncWebsocketCloseCode::Normal).await;
+                },
+            }
+
+            sender.send(());
+        });
+
+        receiver.recv().is_ok();
+    }
+
+    println!("!!!!!!test finish, ok: {}, error: {}", ok_count.load(std::sync::atomic::Ordering::Relaxed), err_count.load(std::sync::atomic::Ordering::Relaxed));
 
     thread::sleep(Duration::from_millis(10000000));
 }
@@ -437,7 +461,7 @@ fn receive(rt: MultiTaskRuntime<()>, ws: AsyncWebsocket<StealableTaskPool<()>>) 
     rt.spawn(rt.alloc(), async move {
         if ws.get_status() > 0 && ws.get_status() < 3 {
             if let Ok(_) = ws.receive_once(None, 1).await {
-                println!("!!!!!!Websocket status: {:?}", ws.get_status());
+                // println!("!!!!!!Websocket status: {:?}", ws.get_status());
                 receive(rt_copy, ws);
             }
         }

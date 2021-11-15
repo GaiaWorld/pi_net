@@ -198,7 +198,9 @@ fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(mut acceptor: 
                         Ok(socket) => {
                             //连接成功，则路由连接到连接池
                             if let Err(e) = context.driver.route(socket) {
+                                //严重错误，则输出日志后，立即退出进程
                                 warn!("!!!> Tcp Acceptor Listen Failed, port: {:?}, token: {:?}, reason: {:?}", context.listener.local_addr(), token, e);
+                                std::process::exit(1);
                             }
                         },
                         Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
