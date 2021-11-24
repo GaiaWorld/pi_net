@@ -11,7 +11,7 @@ use std::io::{Error, Result, ErrorKind};
 
 use tokio;
 use percent_encoding::{CONTROLS, percent_encode};
-use reqwest::{ClientBuilder, Client, Proxy, Certificate, Identity, Method, RequestBuilder, Request, Body, Response,
+use reqwest::{ClientBuilder, Client, Proxy, Certificate, Identity, Method, RequestBuilder, Request, Body, Response, Version,
               header::{HeaderMap, HeaderName, HeaderValue},
               redirect::Policy,
               multipart::{Part, Form}};
@@ -371,6 +371,18 @@ impl AsyncHttpRequest {
     //设置请求参数对
     pub fn set_pairs(mut self, pairs: &[(&str, &str)]) -> AsyncHttpRequest {
         self.builder = self.builder.query(pairs);
+        self
+    }
+
+    //设置请求版本
+    pub fn set_version(mut self, version: f64) -> AsyncHttpRequest {
+        match version {
+            0.9 => self.builder = self.builder.version(Version::HTTP_09),
+            1.0 => self.builder = self.builder.version(Version::HTTP_10),
+            2.0 => self.builder = self.builder.version(Version::HTTP_2),
+            3.0 => self.builder = self.builder.version(Version::HTTP_3),
+            _ => self.builder = self.builder.version(Version::HTTP_11),
+        }
         self
     }
 
