@@ -4,20 +4,19 @@ version = "0.2.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2018"
 
+[features]
+default = ["reqwest/native-tls", "reqwest/rustls-tls", "reqwest/cookies", "reqwest/deflate", "reqwest/gzip", "reqwest/brotli", "reqwest/json", "reqwest/socks", "reqwest/multipart"]
+frontend = ["reqwest/native-tls", "reqwest/rustls-tls", "reqwest/cookies", "reqwest/deflate", "reqwest/gzip", "reqwest/json", "reqwest/socks", "reqwest/multipart"]
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 percent-encoding = "2.1"
+reqwest = { version = "0.11", optional = true }
 bytes = { version = "1.0", features = ["serde"]}
 flume = "0.10"
 lazy_static = "1.4"
 async = { path = "../../pi_lib/async" }
 hash = { path = "../../pi_lib/hash" }
-
-[target.'cfg(all(not(target_arch = "aarch64"), not(target_os = "android")))'.dependencies]
-reqwest = { version = "0.11", features = ["native-tls", "rustls-tls", "cookies", "deflate", "gzip", "brotli", "json", "socks", "multipart"] }
-
-[target.'cfg(all(target_arch = "aarch64", target_os = "android"))'.dependencies]
-reqwest = { version = "0.11", features = ["native-tls", "rustls-tls", "cookies", "deflate", "gzip", "json", "socks", "multipart"] }
 
 [dev-dependencies]
 env_logger = "0.7"
