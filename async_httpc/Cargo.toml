@@ -5,8 +5,9 @@ authors = ["vmos <vmos@fairblock.io>"]
 edition = "2018"
 
 [features]
-default = ["frontend", "reqwest/deflate", "reqwest/brotli"]
+default = []
 frontend = ["reqwest/native-tls", "reqwest/rustls-tls", "reqwest/cookies", "reqwest/gzip", "reqwest/json", "reqwest/socks", "reqwest/multipart"]
+backend = ["frontend", "reqwest/deflate", "reqwest/brotli"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
