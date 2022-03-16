@@ -18,9 +18,9 @@ use reqwest::{ClientBuilder, Client, Proxy, Certificate, Identity, Method, Reque
 use bytes::{Buf, BufMut, Bytes};
 use flume::bounded;
 
-use hash::XHashMap;
+use pi_hash::XHashMap;
 
-use r#async::rt::{AsyncRuntime, AsyncValue};
+use pi_async::rt::{AsyncRuntime, AsyncValue};
 
 /*
 * 异步Http客户端运行时
