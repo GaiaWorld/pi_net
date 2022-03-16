@@ -5,11 +5,11 @@ authors = ["vmos <vmos@fairblock.io>"]
 edition = "2018"
 
 [dependencies]
-handler = { path = "../../pi_lib/handler" }
+pi_handler = "0.1"
 tcp = { path = "../tcp" }
 mqtt = { path = "../mqtt" }
-gray = { path = "../../pi_lib/gray" }
-atom = { path = "../../pi_lib/atom" }
+pi_gray = "0.1"
+pi_atom = "0.1"
 log = "0.4"
 
 [dev-dependencies]

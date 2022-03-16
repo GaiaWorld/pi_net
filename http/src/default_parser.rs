@@ -10,7 +10,7 @@ use serde_json::{Result as JsonResult, Map, Value};
 use futures::future::{FutureExt, BoxFuture};
 use crossbeam_channel::{Sender, Receiver, unbounded, TryRecvError};
 
-use handler::SGenType;
+use pi_handler::SGenType;
 use tcp::driver::{Socket, AsyncIOWait};
 
 use crate::{gateway::GatewayContext,
@@ -18,7 +18,7 @@ use crate::{gateway::GatewayContext,
             request::HttpRequest,
             response::HttpResponse,
             util::HttpRecvResult};
-use hash::XHashMap;
+use pi_hash::XHashMap;
 
 /*
 * 默认支持的压缩算法

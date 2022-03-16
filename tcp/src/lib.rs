@@ -17,10 +17,10 @@ extern crate futures;
 extern crate log;
 extern crate parking_lot;
 
-extern crate local_timer;
-extern crate r#async;
-extern crate hash;
-extern crate atom;
+extern crate pi_local_timer;
+extern crate pi_async;
+extern crate pi_hash;
+extern crate pi_atom;
 
 pub mod server;
 pub mod driver;

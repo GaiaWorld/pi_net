@@ -19,7 +19,7 @@ use rustls::internal::pemfile;
 use crossbeam_channel::Sender;
 use parking_lot::RwLock;
 
-use hash::XHashMap;
+use pi_hash::XHashMap;
 
 /*
 * Tcp连接池发送器表

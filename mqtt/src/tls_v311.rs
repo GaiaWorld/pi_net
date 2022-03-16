@@ -11,8 +11,8 @@ use mqtt311::{MqttWrite, MqttRead, Protocol, ConnectReturnCode, Packet, Connect,
               Subscribe, Suback, Unsubscribe, TopicPath};
 use log::warn;
 
-use atom::Atom;
-use hash::XHashMap;
+use pi_atom::Atom;
+use pi_hash::XHashMap;
 
 use tcp::{server::AsyncWaitsHandle, driver::{Socket, PendSocket}, tls_connect::TlsSocket, util::SocketEvent};
 use ws::{connect::WsSocket,

@@ -5,9 +5,9 @@ use std::mem::transmute;
 use std::time::Duration;
 use std::net::SocketAddr;
 
-use atom::Atom;
-use gray::GrayVersion;
-use handler::{Args, Handler};
+use pi_atom::Atom;
+use pi_gray::GrayVersion;
+use pi_handler::{Args, Handler};
 
 use tcp::connect::TcpSocket;
 use tcp::tls_connect::TlsSocket;

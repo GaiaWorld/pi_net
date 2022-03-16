@@ -6,10 +6,10 @@ use std::io::{Error, Result, ErrorKind};
 use https::Method;
 use regex::{RegexSetBuilder, RegexSet, RegexBuilder, Regex};
 
-use hash::XHashMap;
-use atom::Atom;
-use gray::GrayVersion;
-use handler::{Args, Handler, SGenType};
+use pi_hash::XHashMap;
+use pi_atom::Atom;
+use pi_gray::GrayVersion;
+use pi_handler::{Args, Handler, SGenType};
 use tcp::driver::{Socket, AsyncIOWait};
 
 use crate::{service::HttpService,

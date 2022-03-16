@@ -26,11 +26,11 @@ extern crate log;
 extern crate env_logger;
 
 extern crate tcp;
-extern crate handler;
-extern crate hash;
-extern crate gray;
-extern crate atom;
-extern crate adler32;
+extern crate pi_handler;
+extern crate pi_hash;
+extern crate pi_gray;
+extern crate pi_atom;
+extern crate pi_adler32;
 
 pub mod server;
 pub mod acceptor;

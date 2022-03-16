@@ -4,8 +4,8 @@ use std::cell::RefCell;
 
 use mqtt311::{Topic, TopicPath};
 
-use atom::Atom;
-use hash::XHashMap;
+use pi_atom::Atom;
+use pi_hash::XHashMap;
 
 use tcp::util::SocketContext;
 

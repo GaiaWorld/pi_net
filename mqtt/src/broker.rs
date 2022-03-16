@@ -4,7 +4,7 @@ use std::io::Result;
 use parking_lot::RwLock;
 use mqtt311::{TopicPath, Publish};
 
-use hash::XHashMap;
+use pi_hash::XHashMap;
 
 use tcp::driver::Socket;
 

@@ -21,7 +21,7 @@ use http::{Result as HttpResult,
 use base64;
 use log::warn;
 
-use atom::Atom;
+use pi_atom::Atom;
 use pi_crypto::digest::{DigestAlgorithm, digest};
 
 use tcp::driver::{Socket, AsyncIOWait, SocketHandle, AsyncReadTask, AsyncWriteTask};

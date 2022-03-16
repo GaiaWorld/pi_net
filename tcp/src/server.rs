@@ -16,7 +16,7 @@ use crossbeam_channel::{Sender, unbounded};
 use futures::future::BoxFuture;
 use num_cpus;
 
-use r#async::{AsyncSpawner, AsyncExecutor,
+use pi_async::{AsyncSpawner, AsyncExecutor,
               local_queue::{LocalQueueSpawner, LocalQueue}, task::LocalTask};
 
 use crate::acceptor::Acceptor;

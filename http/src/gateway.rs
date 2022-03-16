@@ -8,8 +8,8 @@ use mime::Mime;
 use bytes::BufMut;
 use futures::future::{FutureExt, BoxFuture};
 
-use hash::XHashMap;
-use handler::SGenType;
+use pi_hash::XHashMap;
+use pi_handler::SGenType;
 use tcp::driver::{Socket, AsyncIOWait};
 
 use crate::{service::{HttpService, ServiceFactory},

@@ -4,7 +4,7 @@ use std::io::{Error, Result, ErrorKind};
 use mqtt311::{QoS, Packet, Publish};
 use parking_lot::RwLock;
 
-use hash::XHashMap;
+use pi_hash::XHashMap;
 
 use tcp::{server::AsyncWaitsHandle, connect::TcpSocket, tls_connect::TlsSocket};
 use ws::{connect::WsSocket, util::{ChildProtocol, ChildProtocolFactory}};

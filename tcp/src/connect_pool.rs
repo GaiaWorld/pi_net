@@ -14,7 +14,7 @@ use mio::{Events, Poll, Token, Ready};
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use log::warn;
 
-use local_timer::local_timer::LocalTimer;
+use pi_local_timer::local_timer::LocalTimer;
 
 use crate::{driver::{DEFAULT_TCP_IP_V6, Socket, Stream, SocketAdapter, SocketOption, SocketConfig, SocketDriver, SocketWakeup},
             buffer_pool::WriteBufferPool,

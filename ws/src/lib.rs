@@ -13,7 +13,7 @@ extern crate fnv;
 extern crate mio;
 extern crate log;
 
-extern crate atom;
+extern crate pi_atom;
 extern crate pi_crypto;
 
 extern crate tcp;

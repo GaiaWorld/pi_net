@@ -17,7 +17,7 @@ use awc::{Client, BoxedSocket, ws::{self, CloseReason}};
 use crossbeam_channel::unbounded;
 use bytes::Bytes;
 
-use r#async::rt::{AsyncRuntime, single_thread::{SingleTaskRunner, SingleTaskRuntime}};
+use pi_async::rt::{AsyncRuntime, single_thread::{SingleTaskRunner, SingleTaskRuntime}};
 use tcp::connect::TcpSocket;
 use tcp::tls_connect::TlsSocket;
 use tcp::server::{AsyncWaitsHandle, AsyncPortsFactory, SocketListener};

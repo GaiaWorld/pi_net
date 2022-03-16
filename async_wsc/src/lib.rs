@@ -26,7 +26,7 @@ use parking_lot::RwLock;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use log::{info, error};
 
-use r#async::rt::{TaskId, AsyncTaskPool, AsyncTaskPoolExt, AsyncRuntime, AsyncWaitResult};
+use pi_async::rt::{TaskId, AsyncTaskPool, AsyncTaskPoolExt, AsyncRuntime, AsyncWaitResult};
 
 /*
 * Websocket连接

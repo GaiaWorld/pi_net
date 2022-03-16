@@ -8,15 +8,15 @@ edition = "2018"
 mio = "0.6"
 slab = "0.4"
 lazy_static = "1.3"
-atom = { path = "../../pi_lib/atom" }
-local_timer = { path = "../../pi_lib/local_timer" }
+pi_atom = "0.1"
+pi_local_timer = "0.1"
 rustls = "0.16"
 crossbeam-channel = "0.5"
 iovec = "0.1"
 fnv = "1.0"
 num_cpus = "1.13"
-async = { path = "../../pi_lib/async" }
+pi_async = "0.1"
 futures = "0.3"
 log = "0.4"
-hash = { path = "../../pi_lib/hash" }
+pi_hash = "0.1"
 parking_lot = "0.11"

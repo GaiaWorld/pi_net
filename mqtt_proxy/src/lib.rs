@@ -1,7 +1,7 @@
-extern crate handler;
+extern crate pi_handler;
 extern crate mqtt;
-extern crate gray;
-extern crate atom;
+extern crate pi_gray;
+extern crate pi_atom;
 extern crate tcp;
 
 #[macro_use]
