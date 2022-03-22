@@ -22,12 +22,14 @@ use futures_util::{sink::SinkExt, stream::StreamExt};
 use flume::{Sender, Receiver, SendError, bounded};
 use url::Url;
 use webpki;
-use rustls::{ClientConfig, RootCertStore, Certificate, ServerCertVerifier, ServerCertVerified, TLSError};
+use rustls::{ClientConfig, RootCertStore, Certificate, ServerName, Error as TLSError,
+             client::{ServerCertVerifier, ServerCertVerified}};
 use actix_rt::{self, System};
 use actix_codec::Framed;
 use actix_http::ws::{Codec, Item};
 use awc::{Client, Connector, BoxedSocket, ws::{self, Frame, Message, CloseCode, CloseReason}};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytestring::ByteString;
 use log::{info, warn, error};
 
 use r#async::rt::{TaskId, AsyncTaskPool, AsyncTaskPoolExt, AsyncRuntime, AsyncWaitResult};
@@ -67,7 +69,7 @@ impl<P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>> AsyncWebsocketClient
         let sender_copy = sender.clone();
         let (send, recv) = bounded(1);
         thread::spawn(move || {
-            let mut runner = System::new(name.clone());
+            let mut runner = System::new();
             send.send(());
             info!("Websocket client {:?} running...", name);
             runner.block_on(async move {
@@ -155,10 +157,15 @@ async fn event_loop<
                             //严格模式
                             Connector::new()
                                 .timeout(Duration::from_millis(timeout))
-                                .finish()
                         } else {
                             //非严格模式
-                            let mut config = ClientConfig::default();
+                            let mut config = ClientConfig::builder()
+                                .with_safe_default_cipher_suites()
+                                .with_safe_default_kx_groups()
+                                .with_safe_default_protocol_versions()
+                                .expect("Build ClientConfig failed")
+                                .with_root_certificates(RootCertStore::empty())
+                                .with_no_client_auth();
 
                             let protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
                             config.alpn_protocols = protos;
@@ -170,7 +177,6 @@ async fn event_loop<
                             Connector::new()
                                 .rustls(Arc::new(config))
                                 .timeout(Duration::from_millis(timeout))
-                                .finish()
                         };
                         let mut client = Client::builder()
                             .connector(connector)
@@ -965,7 +971,7 @@ fn receive_frames(received: Option<ReceivedMessage>,
                         buf.put(bytes);
                         if is_binary {
                             //二进制消息
-                            ReceivedMessage::Completed(Message::Binary(buf.to_bytes()))
+                            ReceivedMessage::Completed(Message::Binary(Bytes::from(buf.to_vec())))
                         } else {
                             //文本消息
                             match String::from_utf8(buf.to_vec()) {
@@ -974,7 +980,7 @@ fn receive_frames(received: Option<ReceivedMessage>,
                                     ReceivedMessage::Err(Error::new(ErrorKind::InvalidData, format!("Receive websocket tail frame failed, reason: {:?}", e)))
                                 },
                                 Ok(str) => {
-                                    ReceivedMessage::Completed(Message::Text(str))
+                                    ReceivedMessage::Completed(Message::Text(ByteString::from(str)))
                                 }
                             }
                         }
@@ -993,7 +999,7 @@ fn receive_frames(received: Option<ReceivedMessage>,
                     ReceivedMessage::Err(Error::new(ErrorKind::InvalidData, format!("Receive websocket single text frame failed, reason: {:?}", e)))
                 },
                 Ok(str) => {
-                    ReceivedMessage::Completed(Message::Text(str))
+                    ReceivedMessage::Completed(Message::Text(ByteString::from(str)))
                 }
             }
         },
@@ -1363,10 +1369,12 @@ struct NoCertificateVerification;
 impl ServerCertVerifier for NoCertificateVerification {
     fn verify_server_cert(
         &self,
-        _roots: &RootCertStore,
-        _presented_certs: &[Certificate],
-        _dns_name: webpki::DNSNameRef,
-        _ocsp_response: &[u8]
+        _end_entity: &Certificate,
+        _intermediates: &[Certificate],
+        _server_name: &ServerName,
+        _scts: &mut dyn Iterator<Item = &[u8]>,
+        _ocsp_response: &[u8],
+        _now: SystemTime,
     ) -> GenResult<ServerCertVerified, TLSError> {
         Ok(ServerCertVerified::assertion())
     }

@@ -8,18 +8,20 @@ edition = "2018"
 futures = "0.3"
 futures-util = "0.3"
 flume = "0.10"
-bytes = "0.5"
-webpki = "0.21"
-rustls = { version = "0.18", features = ["dangerous_configuration"] }
-actix-rt = "1.1"
-actix-codec = "0.3"
-actix-http = "2.2"
-awc = { version = "2.0", features = ["rustls"] }
+bytes = "1.0"
+webpki = "0.22"
+rustls = { version = "0.20", features = ["dangerous_configuration", "tls12"] }
+actix-rt = "2.1"
+actix-codec = "0.5"
+actix-http = "3.0"
+awc = { version = "3.0", features = ["default", "rustls"] }
 ws = "0.9"
 url = "2.1"
 lazy_static = "1.4"
 parking_lot = "0.11"
 log = "0.4"
+pi_async = "0.1"
+bytestring = "1.0"
 async = { path = "../../pi_lib/async" }
 
 [dev-dependencies]

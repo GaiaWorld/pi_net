@@ -20,6 +20,7 @@ use actix_http::ws::{Codec, Frame, ProtocolError};
 use awc::{Client, ClientResponse, BoxedSocket, ws::{self, CloseReason}, error::WsClientError};
 use crossbeam_channel::unbounded;
 use bytes::Bytes;
+use bytestring::ByteString;
 
 use r#async::rt::{AsyncRuntime,
                   single_thread::{SingleTaskRunner, SingleTaskRuntime},
@@ -122,7 +123,7 @@ fn test_awc() {
 
     let (sender, receiver) = unbounded();
     thread::spawn(move || {
-        let mut runner = System::new("asdfasdf");
+        let mut runner = System::new();
         runner.block_on(async move {
             loop {
                 match receiver.recv() {
@@ -317,7 +318,7 @@ fn test_wsc() {
 
                 for index in 0..10 {
                     println!("!!!!!!index: {}", index);
-                    ws.send(AsyncWebsocketMessage::Text("Hello Ws!".to_string())).await;
+                    ws.send(AsyncWebsocketMessage::Text(ByteString::from("Hello Ws!".to_string()))).await;
                     ws.send(AsyncWebsocketMessage::Binary(Bytes::from("Hello Ws!"))).await;
                     ws.send(AsyncWebsocketMessage::Binary(Bytes::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))).await;
                     rt_copy.wait_timeout(1000).await;
@@ -436,9 +437,9 @@ fn test_tls_wsc() {
                     receive(rt_copy.clone(), ws_copy.clone());
 
                     // for _ in 0..10 {
-                    //     ws.send(AsyncWebsocketMessage::Text("Hello Ws!".to_string())).await;
-                    //     ws.send(AsyncWebsocketMessage::Binary(Bytes::from("Hello Ws!"))).await;
-                    //     ws.send(AsyncWebsocketMessage::Binary(Bytes::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))).await;
+                    //     ws_copy.send(AsyncWebsocketMessage::Text(ByteString::from("Hello Ws!".to_string()))).await;
+                    //     ws_copy.send(AsyncWebsocketMessage::Binary(Bytes::from("Hello Ws!"))).await;
+                    //     ws_copy.send(AsyncWebsocketMessage::Binary(Bytes::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))).await;
                     //     rt_copy.wait_timeout(1000).await;
                     // }
                     ws_copy.close(AsyncWebsocketCloseCode::Normal).await;
