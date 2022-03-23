@@ -14,7 +14,7 @@ rustls = { version = "0.20", features = ["dangerous_configuration", "tls12"] }
 actix-rt = "2.1"
 actix-codec = "0.5"
 actix-http = "3.0"
-awc = { version = "3.0", features = ["default", "rustls"] }
+awc = { path = "../../awc", features = ["rustls"] }
 ws = "0.9"
 url = "2.1"
 lazy_static = "1.4"
