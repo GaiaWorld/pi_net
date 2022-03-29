@@ -16,3 +16,6 @@ log = "0.4"
 pi_atom = "0.1"
 tcp = { path = "../tcp" }
 pi_crypto = { path = "../../pi_crypto" }
+
+[dev-dependencies]
+env_logger = "0.9"

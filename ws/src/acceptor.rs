@@ -364,9 +364,18 @@ fn match_header_value(key: &str, value: &[u8], rhs: &str) -> Result<String> {
         },
         Ok(val) => {
             let lower = val.to_lowercase();
-            if lower.as_str() == rhs {
+            let lower_str = lower.as_str();
+            if lower_str == rhs {
                 Ok(lower)
             } else {
+                //如果快速匹配失败，则进行模糊匹配
+                for part in lower_str.split(",") {
+                    if part.trim() == rhs {
+                        //匹配则退出模糊匹配，并返回匹配成功的值
+                        return Ok(lower);
+                    }
+                }
+
                 Err(Error::new(ErrorKind::Other, format!("match failed, key: {}, val: {}, reason: invalid connect header", key, val)))
             }
         },
