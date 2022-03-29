@@ -4,6 +4,7 @@ use std::time::Duration;
 use std::io::{ErrorKind, Result, Error};
 
 use futures::future::{FutureExt, BoxFuture};
+use env_logger;
 
 use tcp::connect::TcpSocket;
 use tcp::tls_connect::TlsSocket;
@@ -25,11 +26,14 @@ impl<S: Socket, H: AsyncIOWait> ChildProtocol<S, H> for TestChildProtocol {
     }
 
     fn decode_protocol(&self, connect: WsSocket<S, H>, waits: H, context: &mut WsSession) -> BoxFuture<'static, Result<()>> {
+        let msg = context.to_vec();
+        let msg_type = context.get_type();
+
         async move {
             for _ in 0..3 {
                 if let Some(mut buf) = connect.alloc() {
-                    buf.get_iolist_mut().push_back(context.to_vec().into());
-                    if let Err(e) = connect.send(context.get_type(), buf) {
+                    buf.get_iolist_mut().push_back(msg.clone().into());
+                    if let Err(e) = connect.send(msg_type.clone(), buf) {
                         return Err(e);
                     }
                 } else {
@@ -69,6 +73,8 @@ impl ChildProtocolFactory for TestChildProtocolFactory {
 
 #[test]
 fn test_websocket_listener() {
+    env_logger::init();
+
     let mut factory = AsyncPortsFactory::<TcpSocket>::new();
     factory.bind(38080,
                  Box::new(WebsocketListenerFactory::<TcpSocket>::with_protocol_factory(
