@@ -5,7 +5,7 @@ authors = ["vmos <vmos@fairblock.io>"]
 edition = "2018"
 
 [features]
-default = ["frontend", "reqwest/brotli"]
+default = ["reqwest/native-tls", "reqwest/rustls-tls", "reqwest/cookies", "reqwest/deflate", "reqwest/gzip", "reqwest/brotli", "reqwest/json", "reqwest/socks", "reqwest/multipart"]
 frontend = ["reqwest/native-tls", "reqwest/native-tls-alpn", "reqwest/rustls-tls", "reqwest/cookies", "reqwest/deflate", "reqwest/gzip", "reqwest/json", "reqwest/socks", "reqwest/multipart"]
 
 [dependencies]
