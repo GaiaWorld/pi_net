@@ -336,7 +336,13 @@ async fn publish(protocol: WssMqtt311,
         return Err(Error::new(ErrorKind::InvalidData, "mqtt publish failed, reason: invalid qos"));
     }
 
-    let topic_path = TopicPath::from(packet.topic_name.as_str());
+    let topic_path = if let Ok(path) = TopicPath::from_str(packet.topic_name.as_str()) {
+        //解析发布的主题成功
+        path
+    } else {
+        //解析发布的主题失败，则立即返回错误原因
+        return Err(Error::new(ErrorKind::InvalidData, format!("mqtt publish failed, topic: {:?}, reason: parse topic error", packet.topic_name)));
+    };
     if topic_path.wildcards || topic_path.path.is_empty() {
         //发布消息的主题为空，或者有通匹符，则立即返回错误原因
         return Err(Error::new(ErrorKind::InvalidData, "mqtt publish failed, reason: invalid topic"));
