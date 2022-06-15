@@ -30,7 +30,7 @@ pi_handler = "0.1"
 pi_hash = { version = "0.1", features = ["xxhash"] }
 pi_gray = "0.1"
 pi_adler32 = "0.1"
-pi_async_file = "0.1"
+pi_async_file = "0.1.5"
 pi_async = "0.1"
 
 [dev-dependencies]
