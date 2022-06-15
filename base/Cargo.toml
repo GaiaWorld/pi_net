@@ -6,8 +6,8 @@ edition = "2018"
 
 [dependencies]
 bytes = "0.4"
-handler = { path = "../../pi_lib/handler" }
-compress = { path = "../../pi_lib/compress" }
+pi_handler = "0.1"
+pi_compress = "0.1"
 tcp = { path = "../tcp" }
 ws = { path = "../ws" }
 mqtt = { path = "../mqtt" }

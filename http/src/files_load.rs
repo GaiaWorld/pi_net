@@ -31,7 +31,7 @@ use crate::{
 use pi_async_file::file::{AsyncFile, AsyncFileOptions};
 use pi_atom::Atom;
 use pi_handler::SGenType;
-use pi_async::rt::multi_thread::MultiTaskRuntime;
+use pi_async::rt::{AsyncRuntime, multi_thread::MultiTaskRuntime};
 use std::time::SystemTime;
 use tcp::driver::{AsyncIOWait, Socket};
 
