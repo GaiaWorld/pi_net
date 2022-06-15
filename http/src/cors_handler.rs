@@ -20,8 +20,8 @@ use futures::future::{FutureExt, BoxFuture};
 use parking_lot::RwLock;
 use log::error;
 
-use atom::Atom;
-use hash::XHashMap;
+use pi_atom::Atom;
+use pi_hash::XHashMap;
 use tcp::driver::{Socket, AsyncIOWait};
 
 use crate::{gateway::GatewayContext,

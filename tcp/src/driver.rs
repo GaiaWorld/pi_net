@@ -19,7 +19,7 @@ use mio::{
     net::TcpStream
 };
 
-use atom::Atom;
+use pi_atom::Atom;
 
 use crate::{buffer_pool::{WriteBufferHandle, WriteBuffer, WriteBufferPool},
             util::{SocketContext, SocketEvent, TlsConfig}};

@@ -25,7 +25,7 @@ use https::{header::{CONTENT_TYPE, CONTENT_DISPOSITION, HeaderName, HeaderValue}
 use futures::future::{FutureExt, BoxFuture};
 
 use tcp::driver::{Socket, AsyncIOWait};
-use handler::SGenType;
+use pi_handler::SGenType;
 
 use crate::{gateway::GatewayContext,
             middleware::{MiddlewareResult, Middleware},

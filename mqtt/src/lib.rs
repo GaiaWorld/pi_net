@@ -9,8 +9,8 @@ extern crate lazy_static;
 
 extern crate log;
 
-extern crate hash;
-extern crate atom;
+extern crate pi_hash;
+extern crate pi_atom;
 
 extern crate tcp;
 extern crate ws;

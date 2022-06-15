@@ -7,7 +7,7 @@ use env_logger;
 use tokio;
 use bytes::{Buf, BufMut};
 
-use r#async::rt::{AsyncRuntime, multi_thread::{MultiTaskRuntimeBuilder, MultiTaskRuntime}};
+use pi_async::rt::{AsyncRuntime, multi_thread::{MultiTaskRuntimeBuilder, MultiTaskRuntime}};
 use tcp::driver::SocketConfig;
 use tcp::buffer_pool::WriteBufferPool;
 use tcp::util::TlsConfig;

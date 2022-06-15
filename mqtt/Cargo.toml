@@ -11,11 +11,11 @@ mio = "0.6"
 mqtt311 = "0.2"
 parking_lot = "0.11"
 lazy_static = "1.4"
-hash = { path = "../../pi_lib/hash", features = ["xxhash"] }
+pi_hash = { version = "0.1", features = ["xxhash"] }
 tcp = { path = "../tcp" }
 ws = { path = "../ws" }
 log = "0.4"
-atom = { path = "../../pi_lib/atom" }
+pi_atom = "0.1"
 
 [dev-dependencies]
 twox-hash = "1.5"

@@ -6,6 +6,7 @@ members = [
   #"mqtt_tmp",
   #"rpc_tmp",
   #"nodec",
+  "new_tcp",
   "tcp",
   "ws",
   "mqtt",

@@ -1,16 +1,14 @@
 [package]
-name = "tcp"
+name = "new_tcp"
 version = "0.1.0"
-authors = ["vmos <vmos@fairblock.io>"]
 edition = "2018"
 
 [dependencies]
 mio = "0.6"
-slab = "0.4"
-lazy_static = "1.3"
+slotmap = "1.0"
+lazy_static = "1.4"
 pi_atom = "0.1"
-pi_local_timer = "0.1"
-rustls = "0.16"
+rustls = "0.20"
 crossbeam-channel = "0.5"
 iovec = "0.1"
 fnv = "1.0"
@@ -19,5 +17,4 @@ pi_async = "0.1"
 futures = "0.3"
 log = "0.4"
 pi_hash = "0.1"
-parking_lot = "0.11"
-minstant = "0.1"
+parking_lot = "0.12"

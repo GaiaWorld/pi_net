@@ -12,10 +12,10 @@ use parking_lot::RwLock;
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use log::warn;
 
-use atom::Atom;
+use pi_atom::Atom;
 use tcp::driver::{Socket, AsyncIOWait};
-use hash::XHashMap;
-use adler32::adler32 as encode_adler32;
+use pi_hash::XHashMap;
+use pi_adler32::adler32 as encode_adler32;
 
 use crate::{request::HttpRequest, response::HttpResponse};
 use crate::static_cache::CacheRes::Cache;

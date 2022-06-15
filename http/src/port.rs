@@ -8,12 +8,12 @@ use std::io::{Error, Result, ErrorKind};
 use https::{StatusCode, header::CONTENT_LENGTH, HeaderMap};
 use futures::future::{FutureExt, BoxFuture};
 
-use gray::GrayVersion;
+use pi_gray::GrayVersion;
 use parking_lot::RwLock;
 use tcp::driver::{Socket, AsyncIOWait};
-use handler::{Args, Handler, SGenType};
-use atom::Atom;
-use hash::XHashMap;
+use pi_handler::{Args, Handler, SGenType};
+use pi_atom::Atom;
+use pi_hash::XHashMap;
 
 use crate::{gateway::GatewayContext,
             middleware::{MiddlewareResult, Middleware},

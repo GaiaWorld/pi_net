@@ -22,9 +22,9 @@ use crossbeam_channel::unbounded;
 use bytes::Bytes;
 use bytestring::ByteString;
 
-use r#async::rt::{AsyncRuntime,
-                  single_thread::{SingleTaskRunner, SingleTaskRuntime},
-                  multi_thread::{StealableTaskPool, MultiTaskRuntimeBuilder, MultiTaskRuntime}};
+use pi_async::rt::{AsyncRuntime,
+                   single_thread::{SingleTaskRunner, SingleTaskRuntime},
+                   multi_thread::{StealableTaskPool, MultiTaskRuntimeBuilder, MultiTaskRuntime}};
 use tcp::connect::TcpSocket;
 use tcp::tls_connect::TlsSocket;
 use tcp::server::{AsyncWaitsHandle, AsyncPortsFactory, SocketListener};
