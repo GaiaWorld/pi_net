@@ -239,9 +239,13 @@ impl<S: Socket> MqttBroker<S> {
             }
         }
 
-        if self.sub_tab.read().get(topic).is_some() {
+        let cache = if let Some(cache) = self.sub_tab.read().get(topic) {
+            Some(cache.clone())
+        } else {
+            None
+        };
+        if let Some(cache) = cache {
             //如果在订阅表中，则返回会话
-            let cache = self.sub_tab.read().get(topic).unwrap().clone();
             if let Some(publish) = &retain {
                 //如果当前主题需要缓存最新的发布消息，则缓存
                 cache.write().retain = Some(publish.clone());
