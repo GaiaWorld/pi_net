@@ -1,12 +1,14 @@
 [package]
 name = "async_httpc"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2018"
 
 [features]
 default = ["reqwest/native-tls", "reqwest/rustls-tls", "reqwest/cookies", "reqwest/deflate", "reqwest/gzip", "reqwest/brotli", "reqwest/json", "reqwest/socks", "reqwest/multipart"]
 frontend = ["reqwest/native-tls", "reqwest/native-tls-alpn", "reqwest/rustls-tls", "reqwest/cookies", "reqwest/deflate", "reqwest/gzip", "reqwest/json", "reqwest/socks", "reqwest/multipart"]
+not_compression = ["reqwest/native-tls", "reqwest/rustls-tls", "reqwest/cookies", "reqwest/json", "reqwest/socks", "reqwest/multipart"]
+not_compression_frontend = ["reqwest/native-tls", "reqwest/native-tls-alpn", "reqwest/rustls-tls", "reqwest/cookies", "reqwest/json", "reqwest/socks", "reqwest/multipart"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
