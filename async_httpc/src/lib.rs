@@ -81,6 +81,16 @@ impl AsyncHttpcBuilder {
         AsyncHttpcBuilder(self.0, self.1.gzip(b))
     }
 
+    //是否允许根据响应头进行brotli解压缩，默认允许
+    pub fn enable_brotli(self, b: bool) -> Self {
+        AsyncHttpcBuilder(self.0, self.1.brotli(b))
+    }
+
+    //是否允许根据响应头进行deflate解压缩，默认允许
+    pub fn enable_deflate(self, b: bool) -> Self {
+        AsyncHttpcBuilder(self.0, self.1.deflate(b))
+    }
+
     //是否允许自动设置页面推荐，默认允许
     pub fn enable_auto_referer(self, b: bool) -> Self {
         AsyncHttpcBuilder(self.0, self.1.referer(b))
