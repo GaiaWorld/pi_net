@@ -5,12 +5,15 @@ authors = ["vmos <vmos@fairblock.io>"]
 edition = "2018"
 
 [dependencies]
-pi_handler = "0.1"
-tcp = { path = "../tcp" }
+futures = "0.3"
+tcp = { package = "new_tcp", path = "../new_tcp" }
 mqtt = { path = "../mqtt" }
+pi_async = "0.5"
+pi_handler = "0.1"
 pi_gray = "0.1"
 pi_atom = "0.1"
 log = "0.4"
 
 [dev-dependencies]
 ws = { path = "../ws" }
+env_logger = "0.9"

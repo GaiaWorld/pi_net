@@ -1,51 +1,91 @@
 use std::thread;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::io::{ErrorKind, Result, Error};
 
 use futures::future::{FutureExt, BoxFuture};
+use httparse::{EMPTY_HEADER, Request};
+use bytes::{Buf, BufMut, BytesMut};
 use env_logger;
 
-use tcp::connect::TcpSocket;
-use tcp::tls_connect::TlsSocket;
-use tcp::server::{AsyncWaitsHandle, AsyncPortsFactory, SocketListener};
-use tcp::driver::{Socket, SocketConfig, AsyncIOWait, AsyncServiceFactory};
-use tcp::buffer_pool::WriteBufferPool;
-use tcp::util::{SocketEvent, TlsConfig};
+use pi_async::rt::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue};
 
-use ws::{server::WebsocketListenerFactory,
+use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
+          connect::TcpSocket,
+          tls_connect::TlsSocket,
+          server::{PortsAdapterFactory, SocketListener},
+          utils::{TlsConfig, Ready}};
+use ws::{server::WebsocketListener,
          connect::WsSocket,
          frame::WsHead,
-         util::{ChildProtocol, ChildProtocolFactory, WsSession}};
+         utils::{ChildProtocol, WsSession}};
+
+#[test]
+fn test_parse_http_header() {
+    let part0 = b"GET /index.html HTTP/1.1";
+    let part1 = b"\r\nHost: example.domain\r\n\r\n";
+
+    let mut bytes = BytesMut::new();
+    bytes.put_slice(part0);
+    bytes.put_slice(part1);
+    let mut headers = [EMPTY_HEADER; 16];
+    let mut req = Request::new(&mut headers);
+    if let Ok(status) = req.parse(bytes.as_ref()) {
+        if status.is_partial() {
+            match req.parse(part1) {
+                Err(e) => panic!(e),
+                Ok(status) => {
+                    println!("{}", status.is_partial());
+                },
+            }
+        } else {
+            println!("!!!!!!{:?}", req);
+        }
+    }
+}
 
 struct TestChildProtocol;
 
-impl<S: Socket, H: AsyncIOWait> ChildProtocol<S, H> for TestChildProtocol {
+impl<S: Socket> ChildProtocol<S> for TestChildProtocol {
     fn protocol_name(&self) -> &str {
         "echo"
     }
 
-    fn decode_protocol(&self, connect: WsSocket<S, H>, waits: H, context: &mut WsSession) -> BoxFuture<'static, Result<()>> {
-        let msg = context.to_vec();
+    fn decode_protocol(&self, connect: WsSocket<S>, context: &mut WsSession) -> BoxFuture<'static, Result<()>> {
+        let msg = context.pop_msg();
         let msg_type = context.get_type();
+        println!("!!!!!!receive ok, msg: {:?}", String::from_utf8(msg.clone()));
 
         async move {
-            for _ in 0..3 {
-                if let Some(mut buf) = connect.alloc() {
-                    buf.get_iolist_mut().push_back(msg.clone().into());
-                    if let Err(e) = connect.send(msg_type.clone(), buf) {
-                        return Err(e);
+            if let Some(hibernate) = connect.hibernate(Ready::Writable) {
+                let connect_copy = connect.clone();
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(1000));
+                    while !connect_copy.wakeup(Ok(())) {
+                        //唤醒被阻塞，则休眠指定时间后继续尝试唤醒
+                        thread::sleep(Duration::from_millis(15));
                     }
-                } else {
-                    return Err(Error::new(ErrorKind::Other, "test mqtt response failed, reason: alloc write buffer failed"));
+                });
+                let start = Instant::now();
+                if let Err(e) = hibernate.await {
+                    //唤醒后返回错误，则立即返回错误原因
+                    return Err(e);
+                }
+                println!("!!!!!!wakeup hibernate ok, time: {:?}", start.elapsed());
+            }
+
+            for _ in 0..3 {
+                if let Err(e) = connect.send(msg_type.clone(), msg.clone()) {
+                    return Err(e);
                 }
             }
 
+            println!("reply msg ok");
             Ok(())
         }.boxed()
     }
 
-    fn close_protocol(&self, connect: WsSocket<S, H>, context: WsSession, reason: Result<()>) {
+    fn close_protocol(&self, connect: WsSocket<S>, context: WsSession, reason: Result<()>) {
         if let Err(e) = reason {
             return println!("websocket closed, reason: {:?}", e);
         }
@@ -53,37 +93,39 @@ impl<S: Socket, H: AsyncIOWait> ChildProtocol<S, H> for TestChildProtocol {
         println!("websocket closed");
     }
 
-    fn protocol_timeout(&self, connect: WsSocket<S, H>, context: &mut WsSession, event: SocketEvent) -> Result<()> {
+    fn protocol_timeout(&self, connect: WsSocket<S>, context: &mut WsSession, event: SocketEvent) -> Result<()> {
         println!("websocket timeout");
 
         Ok(())
     }
 }
 
-struct TestChildProtocolFactory;
-
-impl ChildProtocolFactory for TestChildProtocolFactory {
-    type Connect = TcpSocket;
-    type Waits = AsyncWaitsHandle;
-
-    fn new_protocol(&self) -> Arc<dyn ChildProtocol<Self::Connect, Self::Waits>> {
-        Arc::new(TestChildProtocol)
-    }
-}
-
 #[test]
 fn test_websocket_listener() {
-    env_logger::init();
+    //启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
 
-    let mut factory = AsyncPortsFactory::<TcpSocket>::new();
+    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
+                                                        None,
+                                                        None,
+                                                        None);
+
+    let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(38080,
-                 Box::new(WebsocketListenerFactory::<TcpSocket>::with_protocol_factory(
-                     Arc::new(TestChildProtocolFactory))));
-    let mut config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
+                 Box::new(WebsocketListener::with_protocol(Arc::new(TestChildProtocol))));
+    let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
-    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(vec![rt],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               4096,
+                               4096,
+                               Some(10)) {
         Err(e) => {
             println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
         },
@@ -95,27 +137,23 @@ fn test_websocket_listener() {
     thread::sleep(Duration::from_millis(10000000));
 }
 
-struct TestTlsChildProtocolFactory;
-
-impl ChildProtocolFactory for TestTlsChildProtocolFactory {
-    type Connect = TlsSocket;
-    type Waits = AsyncWaitsHandle;
-
-    fn new_protocol(&self) -> Arc<dyn ChildProtocol<Self::Connect, Self::Waits>> {
-        Arc::new(TestChildProtocol)
-    }
-}
-
 #[test]
 fn test_tls_websocket_listener() {
-    let mut factory = AsyncPortsFactory::<TlsSocket>::new();
+    //启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
+
+    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
+                                                        None,
+                                                        None,
+                                                        None);
+
+    let mut factory = PortsAdapterFactory::<TlsSocket>::new();
     factory.bind(38080,
-                 Box::new(WebsocketListenerFactory::<TlsSocket>::with_protocol_factory(
-                     Arc::new(TestTlsChildProtocolFactory))));
+                 Box::new(WebsocketListener::with_protocol(Arc::new(TestChildProtocol))));
     let tls_config = TlsConfig::new_server("",
                                            false,
-                                           "./3376363_msg.highapp.com.pem",
-                                           "./3376363_msg.highapp.com.key",
+                                           "./tests/7285407__17youx.cn.pem",
+                                           "./tests/7285407__17youx.cn.key",
                                            "",
                                            "",
                                            "",
@@ -124,8 +162,17 @@ fn test_tls_websocket_listener() {
                                            "").unwrap();
     let mut config = SocketConfig::with_tls("0.0.0.0", &[(38080, tls_config)]);
     config.set_option(16384, 16384, 16384, 16);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
-    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
+
+    match SocketListener::bind(vec![rt],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               4096,
+                               4096,
+                               Some(10)) {
         Err(e) => {
             println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
         },

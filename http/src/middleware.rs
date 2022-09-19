@@ -5,45 +5,52 @@ use std::collections::VecDeque;
 use futures::future::{FutureExt, BoxFuture};
 use https::{StatusCode, header::CONTENT_LENGTH};
 
-use tcp::driver::{Socket, AsyncIOWait};
+use tcp::Socket;
 
 use crate::{request::HttpRequest, response::HttpResponse};
 
-/*
-* Http中间件处理结果
-*/
-pub enum MiddlewareResult<S: Socket, W: AsyncIOWait> {
-    ContinueRequest(HttpRequest<S, W>),                         //继续请求中间件的处理
-    ContinueResponse((HttpRequest<S, W>, HttpResponse<S, W>)),  //继续响应中间件的处理
-    Break(HttpResponse<S, W>),                                  //退出请求或响应中间件的处理，并立即返回Http响应，退出会跳过剩余中间件的处理，由用户创建响应
-    Finish((HttpRequest<S, W>, HttpResponse<S, W>)),            //完成请求或响应中间件的处理
-    Throw(Error),                                               //中止请求或响应中间件的处理，并抛出错误，抛出错误会跳过剩余中间件的处理，但会根据错误自动创建响应
+///
+/// Http中间件处理结果
+///
+pub enum MiddlewareResult<S: Socket> {
+    ContinueRequest(HttpRequest<S>),                    //继续请求中间件的处理
+    ContinueResponse((HttpRequest<S>, HttpResponse)),   //继续响应中间件的处理
+    Break(HttpResponse),                                //退出请求或响应中间件的处理，并立即返回Http响应，退出会跳过剩余中间件的处理，由用户创建响应
+    Finish((HttpRequest<S>, HttpResponse)),             //完成请求或响应中间件的处理
+    Throw(Error),                                       //中止请求或响应中间件的处理，并抛出错误，抛出错误会跳过剩余中间件的处理，但会根据错误自动创建响应
 }
 
-/*
-* Http中间件
-*/
-pub trait Middleware<S: Socket, W: AsyncIOWait, Context: Send + Sync + 'static>: Send + Sync + 'static {
+///
+/// Http中间件
+///
+pub trait Middleware<S: Socket, Context: Send + Sync + 'static>: Send + Sync + 'static {
     //处理指定请求，需要继续处理请求，则返回Http请求，需要需要中止处理请求，则返回Http响应
-    fn request<'a>(&'a self, context: &'a mut Context, req: HttpRequest<S, W>)
-        -> BoxFuture<'a, MiddlewareResult<S, W>>;
+    fn request<'a>(&'a self,
+                   context: &'a mut Context,
+                   req: HttpRequest<S>)
+        -> BoxFuture<'a, MiddlewareResult<S>>;
 
     //处理指定响应
-    fn response<'a>(&'a self, context: &'a mut Context, req: HttpRequest<S, W>, resp: HttpResponse<S, W>)
-        -> BoxFuture<'a, MiddlewareResult<S, W>>;
+    fn response<'a>(&'a self,
+                    context: &'a mut Context,
+                    req: HttpRequest<S>,
+                    resp: HttpResponse)
+        -> BoxFuture<'a, MiddlewareResult<S>>;
 }
 
-/*
-* Http中间件链
-*/
-pub struct MiddlewareChain<S: Socket, W: AsyncIOWait, Context: Send + Sync + 'static> {
-    buf:    Option<VecDeque<Arc<dyn Middleware<S, W, Context>>>>,   //中间件缓冲
-    chain:  Vec<Arc<dyn Middleware<S, W, Context>>>,                //处理链
+///
+/// Http中间件链
+///
+pub struct MiddlewareChain<S: Socket, Context: Send + Sync + 'static> {
+    buf:    Option<VecDeque<Arc<dyn Middleware<S, Context>>>>,   //中间件缓冲
+    chain:  Vec<Arc<dyn Middleware<S, Context>>>,                //处理链
 }
 
-impl<S: Socket, W: AsyncIOWait, Context: Send + Sync + 'static> Middleware<S, W, Context> for Arc<MiddlewareChain<S, W, Context>> {
-    fn request<'a>(&'a self, context: &'a mut Context, req: HttpRequest<S, W>)
-               -> BoxFuture<'a, MiddlewareResult<S, W>> {
+impl<S: Socket, Context: Send + Sync + 'static> Middleware<S, Context> for Arc<MiddlewareChain<S, Context>> {
+    fn request<'a>(&'a self,
+                   context: &'a mut Context,
+                   req: HttpRequest<S>)
+               -> BoxFuture<'a, MiddlewareResult<S>> {
         let chain = &self.chain;
         let future = async move {
             let mut request = req; //请求缓冲
@@ -69,14 +76,17 @@ impl<S: Socket, W: AsyncIOWait, Context: Send + Sync + 'static> Middleware<S, W,
             }
 
             //所有请求中间件没有返回完成请求处理，则强制完成并返回
-            let response = HttpResponse::empty(request.get_handle().clone(), request.get_waits().clone());
+            let response = HttpResponse::empty();
             MiddlewareResult::Finish((request, response))
         };
         future.boxed()
     }
 
-    fn response<'a>(&'a self, context: &'a mut Context, req: HttpRequest<S, W>, resp: HttpResponse<S, W>)
-                -> BoxFuture<'a, MiddlewareResult<S, W>> {
+    fn response<'a>(&'a self,
+                    context: &'a mut Context,
+                    req: HttpRequest<S>,
+                    resp: HttpResponse)
+                -> BoxFuture<'a, MiddlewareResult<S>> {
         let chain = &self.chain;
         let future  = async move {
             let mut request = req; //请求缓冲
@@ -112,8 +122,8 @@ impl<S: Socket, W: AsyncIOWait, Context: Send + Sync + 'static> Middleware<S, W,
     }
 }
 
-impl<S: Socket, W: AsyncIOWait, Context: Send + Sync + 'static> MiddlewareChain<S, W, Context> {
-    //构建Http中间件链
+impl<S: Socket, Context: Send + Sync + 'static> MiddlewareChain<S, Context> {
+    /// 构建Http中间件链
     pub fn new() -> Self {
         MiddlewareChain {
             buf: Some(VecDeque::new()),
@@ -121,15 +131,15 @@ impl<S: Socket, W: AsyncIOWait, Context: Send + Sync + 'static> MiddlewareChain<
         }
     }
 
-    //在链头增加中间件，靠前的中间件，将在处理请求时先执行，并在处理响应时后执行
-    pub fn push_front(&mut self, ware: Arc<dyn Middleware<S, W, Context>>) {
+    /// 在链头增加中间件，靠前的中间件，将在处理请求时先执行，并在处理响应时后执行
+    pub fn push_front(&mut self, ware: Arc<dyn Middleware<S, Context>>) {
         if let Some(buf) = &mut self.buf {
             buf.push_front(ware);
         }
     }
 
-    //在链尾增加中间件，靠后的中间件，将在处理请求时后执行，并在处理响应时先执行
-    pub fn push_back(&mut self, ware: Arc<dyn Middleware<S, W, Context>>) {
+    /// 在链尾增加中间件，靠后的中间件，将在处理请求时后执行，并在处理响应时先执行
+    pub fn push_back(&mut self, ware: Arc<dyn Middleware<S, Context>>) {
         if let Some(buf) = &mut self.buf {
             buf.push_back(ware);
         }

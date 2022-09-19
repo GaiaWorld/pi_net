@@ -24,59 +24,59 @@ use httparse::{EMPTY_HEADER, Result as ParseResult, Status, parse_headers};
 use https::{header::{CONTENT_TYPE, CONTENT_DISPOSITION, HeaderName, HeaderValue}, StatusCode};
 use futures::future::{FutureExt, BoxFuture};
 
-use tcp::driver::{Socket, AsyncIOWait};
+use tcp::Socket;
 use pi_handler::SGenType;
 
 use crate::{gateway::GatewayContext,
             middleware::{MiddlewareResult, Middleware},
             request::HttpRequest,
             response::HttpResponse,
-            util::HttpRecvResult};
+            utils::HttpRecvResult};
 
-/*
-* 多部分请求分隔符通用前后缀
-*/
+///
+/// 多部分请求分隔符通用前后缀
+///
 const MULTI_PARTS_COMMON_PREFIX_SUFFIX_BIN: &str = "--";
 
-/*
-* 多部分请求换行符
-*/
+///
+/// 多部分请求换行符
+///
 const MULTI_PARTS_LINE_BREAK: &str = "\r\n";
 
-/*
-* 多部分的参数分隔符
-*/
+///
+/// 多部分的参数分隔符
+///
 const MULTI_PARTS_PARAM_SPILT_CHAR: &str = ";";
 
-/*
-* 多部分的键值对分隔符
-*/
+///
+/// 多部分的键值对分隔符
+///
 const MULTI_PARTS_PAIR_SPILT_CHAR: &str = "=";
 
-/*
-* 需要过滤的无效字符集
-*/
+///
+/// 需要过滤的无效字符集
+///
 const MULTI_PARTS_FILTER_CHARS: &[char] = &[' ', '\t', '\"'];
 
-/*
-* 多部分请求时允许的最大Http头数量
-*/
+///
+/// 多部分请求时允许的最大Http头数量
+///
 const MAX_MUTIL_PARTS_HTTP_HEADER_LIMIT: usize = 8;
 
-/*
-* 特殊的Mime子类型
-*/
+///
+/// 特殊的Mime子类型
+///
 const X_MSDOWNLOAD_MIME_SUBTYPE: &str = "x-msdownload";
 
-/*
-* 多部分请求的表单参数名
-*/
+///
+/// 多部分请求的表单参数名
+///
 const MULTI_PARTS_NAME_PARAM: &str = "name";
 const MULTI_PARTS_FILE_NAME_PARAM: &str = "filename";
 
-/*
-* Http请求的多部分请求体分析器
-*/
+///
+/// Http请求的多部分请求体分析器
+///
 pub struct MutilParts {
     block_size: usize,  //每次读取的请求体块大小
 }
@@ -84,9 +84,9 @@ pub struct MutilParts {
 unsafe impl Send for MutilParts {}
 unsafe impl Sync for MutilParts {}
 
-impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for MutilParts {
-    fn request<'a>(&'a self, context: &'a mut GatewayContext, req: HttpRequest<S, W>)
-                   -> BoxFuture<'a, MiddlewareResult<S, W>> {
+impl<S: Socket> Middleware<S, GatewayContext> for MutilParts {
+    fn request<'a>(&'a self, context: &'a mut GatewayContext, req: HttpRequest<S>)
+                   -> BoxFuture<'a, MiddlewareResult<S>> {
         let block_size = self.block_size;
         let mut request = req;
         let future = async move {
@@ -99,17 +99,26 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for MutilParts 
                                 //获取本次Http多部分请求体的分隔符
                                 let boundary_str = (MULTI_PARTS_COMMON_PREFIX_SUFFIX_BIN.to_string() + param.as_str() + MULTI_PARTS_LINE_BREAK);
                                 let boundary = boundary_str.as_bytes();
+                                let boundary_end_bin = [MULTI_PARTS_COMMON_PREFIX_SUFFIX_BIN.as_bytes(),
+                                    param.as_str().as_bytes(), MULTI_PARTS_COMMON_PREFIX_SUFFIX_BIN.as_bytes(), MULTI_PARTS_LINE_BREAK.as_bytes()].concat();
+                                let boundary_end = boundary_end_bin.as_slice();
                                 loop {
-                                    if let Some(bin) = request.next_body(block_size).await {
+                                    if let Some(part) = request.next_body(block_size).await {
                                         //读取到指定块大小的下个部分的请求体
-                                        match parse_part(context, boundary, bin) {
+                                        let bin = part.as_ref();
+                                        match parse_part(context, boundary, bin.as_ref()) {
                                             Err(e) => {
                                                 //解析部分数据时错误，则抛出错误
                                                 return MiddlewareResult::Throw(e);
                                             },
-                                            _ => {
-                                                //继续读取请求体
-                                                continue;
+                                            Ok(_) => {
+                                                if check_part_end(bin, boundary_end).is_some() {
+                                                    //已读取到所有多部分请求体，则退出多部分的读取
+                                                    break;
+                                                } else {
+                                                    //继续读取请求体
+                                                    continue;
+                                                }
                                             },
                                         }
                                     }
@@ -119,7 +128,9 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for MutilParts 
                                 }
 
                                 //完成请求体的剩余部分的处理
-                                if let Err(e) = parse_part_end(context, param.as_str().as_bytes()) {
+                                if let Err(e) = parse_part_end(context,
+                                                               param.as_str().as_bytes(),
+                                                               boundary_end) {
                                     //解析部分数据时错误，则抛出错误
                                     return MiddlewareResult::Throw(e);
                                 }
@@ -135,8 +146,11 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for MutilParts 
         future.boxed()
     }
 
-    fn response<'a>(&'a self, context: &'a mut GatewayContext, req: HttpRequest<S, W>, resp: HttpResponse<S, W>)
-                    -> BoxFuture<'a, MiddlewareResult<S, W>> {
+    fn response<'a>(&'a self,
+                    context: &'a mut GatewayContext,
+                    req: HttpRequest<S>,
+                    resp: HttpResponse)
+                    -> BoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             //继续响应处理
             MiddlewareResult::ContinueResponse((req, resp))
@@ -146,7 +160,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for MutilParts 
 }
 
 impl MutilParts {
-    //构建指定块大小的Http多部分请求体分析器
+    /// 构建指定块大小的Http多部分请求体分析器
     pub fn with(block_size: usize) -> Self {
         MutilParts {
             block_size,
@@ -154,8 +168,16 @@ impl MutilParts {
     }
 }
 
-//解析二进制数据，从中分析出多部分请求中的部分，中间数据存储在当前Http连接的网关上下文中，返回false，表示没有分析到完整的部分，需要继续读取数据后再次解析，否则返回已解析的部分
-fn parse_part<'a>(context: &'a mut GatewayContext, boundary: &'a [u8], mut bin: &'a [u8]) -> Result<bool> {
+// 检查指定的请求体数据中是否有多部分请求的结尾部分，如果有则返回结尾标记的位置
+fn check_part_end<'a>(buf: &'a [u8],
+                      boundary_end: &'a [u8]) -> Option<usize> {
+    rfind_bytes(buf, boundary_end)
+}
+
+// 解析二进制数据，从中分析出多部分请求中的部分，中间数据存储在当前Http连接的网关上下文中，返回false，表示没有分析到完整的部分，需要继续读取数据后再次解析，否则返回已解析的部分
+fn parse_part<'a>(context: &'a mut GatewayContext,
+                  boundary: &'a [u8],
+                  mut bin: &'a [u8]) -> Result<bool> {
     if let Some(mut part_buf) = context.take_part_buf() {
         //上次有未解析完的部分数据，则与本次的部分数据合并，并继续解析
         part_buf.put(bin);
@@ -189,8 +211,10 @@ fn parse_part<'a>(context: &'a mut GatewayContext, boundary: &'a [u8], mut bin: 
     }
 }
 
-//解析二进制数据，从中分析出多部分请求的结尾部分
-fn parse_part_end<'a>(context: &'a mut GatewayContext, boundary: &'a [u8]) -> Result<()> {
+// 解析二进制数据，从中分析出多部分请求的结尾部分
+fn parse_part_end<'a>(context: &'a mut GatewayContext,
+                      boundary: &'a [u8],
+                      boundary_end: &'a [u8]) -> Result<()> {
     if let Some(mut part_buf) = context.take_part_buf() {
         //解析剩余的非结尾部分
         let boundary_bin = [MULTI_PARTS_COMMON_PREFIX_SUFFIX_BIN.as_bytes(),
@@ -203,10 +227,7 @@ fn parse_part_end<'a>(context: &'a mut GatewayContext, boundary: &'a [u8]) -> Re
 
     if let Some(mut part_buf) = context.take_part_buf() {
         //解析结尾部分
-        let boundary_end_bin = [MULTI_PARTS_COMMON_PREFIX_SUFFIX_BIN.as_bytes(),
-            boundary, MULTI_PARTS_COMMON_PREFIX_SUFFIX_BIN.as_bytes(), MULTI_PARTS_LINE_BREAK.as_bytes()].concat();
-        let boundary_end = boundary_end_bin.as_slice();
-        if let Some(index) = rfind_bytes(&part_buf[..], boundary_end) {
+        if let Some(index) = check_part_end(&part_buf[..], boundary_end) {
             //查找到指定boundary分隔的结尾负载
             if let Err(e) = parse_part_headers_body(context, &part_buf[0..index]) {
                 return Err(e);
@@ -217,7 +238,7 @@ fn parse_part_end<'a>(context: &'a mut GatewayContext, boundary: &'a [u8]) -> Re
     Ok(())
 }
 
-//解析部分数据的头和体
+// 解析部分数据的头和体
 fn parse_part_headers_body<'a>(context: &'a mut GatewayContext, part: &'a [u8]) -> Result<()> {
     if part.len() == 0 {
         //部分数据长度为0，则忽略
@@ -228,7 +249,9 @@ fn parse_part_headers_body<'a>(context: &'a mut GatewayContext, part: &'a [u8]) 
     match parse_headers(part, &mut headers) {
         Err(e) => {
             //解析部分数据的头错误，则立即返回错误原因
-            Err(Error::new(ErrorKind::Other, format!("parse multi parts headers failed, reason: {:?}", e)))
+            Err(Error::new(ErrorKind::Other,
+                           format!("parse multi parts headers failed, reason: {:?}",
+                                   e)))
         },
         Ok(status) if status.is_complete() => {
             //解析部分数据的头完成
@@ -240,12 +263,16 @@ fn parse_part_headers_body<'a>(context: &'a mut GatewayContext, part: &'a [u8]) 
             for header in headers {
                 match HeaderName::try_from(header.name) {
                     Err(e) => {
-                        return Err(Error::new(ErrorKind::InvalidData, format!("parse multi parts headers name failed, reason: {:?}", e)));
+                        return Err(Error::new(ErrorKind::InvalidData,
+                                              format!("parse multi parts headers name failed, reason: {:?}",
+                                                      e)));
                     },
                     Ok(key) => {
                         match HeaderValue::from_bytes(header.value) {
                             Err(e) => {
-                                return Err(Error::new(ErrorKind::InvalidData, format!("parse multi parts headers value failed, reason: {:?}", e)));
+                                return Err(Error::new(ErrorKind::InvalidData,
+                                                      format!("parse multi parts headers value failed, reason: {:?}",
+                                                              e)));
                             },
                             Ok(value) => {
                                 //构建值成功
@@ -311,7 +338,8 @@ fn parse_part_headers_body<'a>(context: &'a mut GatewayContext, part: &'a [u8]) 
         },
         _ => {
             //解析部分数据不完整，则立即返回错误原因
-            Err(Error::new(ErrorKind::Other, "parse multi parts headers failed, reason: part not enough"))
+            Err(Error::new(ErrorKind::Other,
+                           "parse multi parts headers failed, reason: part not enough"))
         }
     }
 }

@@ -3,28 +3,31 @@ use std::io::{Error, Result, ErrorKind};
 
 use https::{header::{RANGE, ACCEPT_RANGES, CONTENT_RANGE, CONTENT_LENGTH}, StatusCode};
 use futures::future::{FutureExt, BoxFuture};
-
-use tcp::driver::{Socket, AsyncIOWait};
-use pi_handler::SGenType;
 use log::warn;
+
+use pi_handler::SGenType;
+
+use tcp::Socket;
 
 use crate::{gateway::GatewayContext,
             middleware::{MiddlewareResult, Middleware},
             request::HttpRequest,
             response::HttpResponse,
-            util::HttpRecvResult};
+            utils::HttpRecvResult};
 
-/*
-* Http静态资源范围加载器
-*/
+///
+/// Http静态资源范围加载器
+///
 pub struct RangeLoad;
 
 unsafe impl Send for RangeLoad {}
 unsafe impl Sync for RangeLoad {}
 
-impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for RangeLoad {
-    fn request<'a>(&'a self, context: &'a mut GatewayContext, req: HttpRequest<S, W>)
-                   -> BoxFuture<'a, MiddlewareResult<S, W>> {
+impl<S: Socket> Middleware<S, GatewayContext> for RangeLoad {
+    fn request<'a>(&'a self,
+                   context: &'a mut GatewayContext,
+                   req: HttpRequest<S>)
+                   -> BoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             //继续请求处理
             MiddlewareResult::ContinueRequest(req)
@@ -32,8 +35,11 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for RangeLoad {
         future.boxed()
     }
 
-    fn response<'a>(&'a self, context: &'a mut GatewayContext, req: HttpRequest<S, W>, resp: HttpResponse<S, W>)
-                    -> BoxFuture<'a, MiddlewareResult<S, W>> {
+    fn response<'a>(&'a self,
+                    context: &'a mut GatewayContext,
+                    req: HttpRequest<S>,
+                    resp: HttpResponse)
+                    -> BoxFuture<'a, MiddlewareResult<S>> {
         let mut response = resp;
         let future = async move {
             if let Some(range_value) = req.headers().get(RANGE) {
@@ -108,7 +114,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for RangeLoad {
 }
 
 impl RangeLoad {
-    //构建指定根目录的文件上传处理器
+    /// 构建指定根目录的文件上传处理器
     pub fn new() -> Self {
         RangeLoad
     }

@@ -22,9 +22,6 @@ extern crate bytes;
 extern crate path_absolutize;
 extern crate log;
 
-#[macro_use]
-extern crate env_logger;
-
 extern crate tcp;
 extern crate pi_handler;
 extern crate pi_hash;
@@ -53,4 +50,4 @@ pub mod static_cache;
 pub mod request;
 pub mod response;
 pub mod packet;
-pub mod util;
+pub mod utils;

@@ -10,7 +10,7 @@ use https::{Result as HttpResult,
             header::{HOST, CONTENT_LENGTH, HeaderMap}};
 use bytes::{Buf, BufMut, BytesMut};
 
-use tcp::driver::{Socket, AsyncIOWait, SocketHandle, AsyncReadTask, AsyncWriteTask};
+use tcp::{Socket, SocketHandle};
 
 use crate::{virtual_host::VirtualHostPool,
             service::{ServiceFactory, HttpService},
@@ -18,22 +18,22 @@ use crate::{virtual_host::VirtualHostPool,
             connect::HttpConnect,
             packet::UpStreamHeader};
 
-/*
-* Http连接时允许的最大Http头数量
-*/
+///
+/// Http连接时允许的最大Http头数量
+///
 pub const MAX_CONNECT_HTTP_HEADER_LIMIT: usize = 32;
 
-/*
-* Http连接接受器
-*/
-pub struct HttpAcceptor<S: Socket, W: AsyncIOWait> {
-    marker: PhantomData<(S, W)>,
+///
+/// Http连接接受器
+///
+pub struct HttpAcceptor<S: Socket> {
+    marker: PhantomData<(S)>,
 }
 
-unsafe impl<S: Socket, W: AsyncIOWait> Send for HttpAcceptor<S, W> {}
-unsafe impl<S: Socket, W: AsyncIOWait> Sync for HttpAcceptor<S, W> {}
+unsafe impl<S: Socket> Send for HttpAcceptor<S> {}
+unsafe impl<S: Socket> Sync for HttpAcceptor<S> {}
 
-impl<S: Socket, W: AsyncIOWait> Clone for HttpAcceptor<S, W> {
+impl<S: Socket> Clone for HttpAcceptor<S> {
     fn clone(&self) -> Self {
         HttpAcceptor {
             marker: PhantomData,
@@ -41,8 +41,8 @@ impl<S: Socket, W: AsyncIOWait> Clone for HttpAcceptor<S, W> {
     }
 }
 
-impl<S: Socket, W: AsyncIOWait> Default for HttpAcceptor<S, W> {
-    //默认构建连接接受器
+impl<S: Socket> Default for HttpAcceptor<S> {
+    /// 默认构建连接接受器
     fn default() -> Self {
         HttpAcceptor {
             marker: PhantomData,
@@ -50,78 +50,91 @@ impl<S: Socket, W: AsyncIOWait> Default for HttpAcceptor<S, W> {
     }
 }
 
-/*
-* Http连接接受器异步方法
-*/
-impl<S: Socket, W: AsyncIOWait> HttpAcceptor<S, W> {
-    //异步接受连接请求
+///
+/// Http连接接受器异步方法
+///
+impl<S: Socket> HttpAcceptor<S> {
+    /// 异步接受连接请求
     pub async fn accept<P>(handle: SocketHandle<S>,
-                           waits: W,
-                           acceptor: HttpAcceptor<S, W>,
+                           acceptor: HttpAcceptor<S>,
                            hosts: P,
                            keep_alive: usize)
-        where P: VirtualHostPool<S, W> {
+        where P: VirtualHostPool<S> {
         //解析上行请求
         let mut http_request_result = None;
-        let buf = Box::into_raw(Box::new(Vec::<u8>::new())) as usize;
+        let mut buf: &[u8] = &[]; //初始化本地缓冲区
         loop {
-            match AsyncReadTask::async_read(handle.clone(), waits.clone(), 0).await {
-                Err(e) => {
-                    handle.close(Err(Error::new(ErrorKind::Other, format!("http server read header failed, reason: {:?}", e))));
-                    return;
-                },
-                Ok(bin) => {
-                    unsafe { (&mut *(buf as *mut Vec<u8>)).put(bin); }
-                    let mut headers = HeaderMap::new();
-                    let mut header = [EMPTY_HEADER; MAX_CONNECT_HTTP_HEADER_LIMIT];
-                    let mut req = Request::new(&mut header);
-                    if let Some(body_offset) = UpStreamHeader::read_header(handle.clone(),
-                                                                           waits.clone(),
-                                                                            unsafe { (&*(buf as *mut Vec<u8>)).as_slice() },
-                                                                            &mut req,
-                                                                            &mut headers) {
-                        //解析成功，则根据请求的主机，获取相应的服务
-                        let buf = unsafe { *Box::from_raw(buf as *mut Vec<u8>) };
-                        if let Some(value) = headers.get(HOST) {
-                            if let Ok(host_name) = value.to_str() {
-                                if let Some(host) = hosts.get(host_name) {
-                                    let mut connect = HttpConnect::new(handle.clone(), waits.clone(), host.new_service(), keep_alive);
-                                    if let &Some(method) = &req.method {
-                                        if let &Some(path) = &req.path {
-                                            //构建本次Http连接请求
-                                            let url = if handle.is_security() {
-                                                "https://".to_string() + host_name + path
-                                            } else {
-                                                "http://".to_string() + host_name + path
-                                            };
+            if handle.get_read_buffer_mut().try_fill().await == 0 {
+                //当前缓冲区还没有请求的数据，则异步准备读取后，继续尝试接收请求数据
+                if let Ok(value) = handle.read_ready(0) {
+                    if value.await == 0 {
+                        //当前连接已关闭，则立即退出
+                        return;
+                    }
+                }
 
-                                            if let Some(request) = HttpRequest::new(handle.clone(), waits.clone(), method, &url, Version::HTTP_11, headers, &buf[body_offset..]) {
-                                                http_request_result = Some((connect, request));
-                                                break;
-                                            } else {
-                                                //连接请求中的Url无效，则立即关闭当前连接
-                                                handle.close(Err(Error::new(ErrorKind::Other, format!("http connect failed, url: {:?}, reason: invalid url", url))));
-                                                return;
-                                            }
-                                        }
+                continue;
+            }
+
+            let mut headers = HeaderMap::new();
+            let mut header = [EMPTY_HEADER; MAX_CONNECT_HTTP_HEADER_LIMIT];
+            let mut req = Request::new(&mut header);
+
+            buf = handle.get_read_buffer().as_ref(); //填充本地缓冲区
+            if let Some(_body_offset) = UpStreamHeader::read_header(handle.clone(),
+                                                                   buf,
+                                                                   &mut req,
+                                                                   &mut headers).await {
+                //解析成功，则根据请求的主机，获取相应的服务
+                if let Some(value) = headers.get(HOST) {
+                    if let Ok(host_name) = value.to_str() {
+                        if let Some(host) = hosts.get(host_name) {
+                            let mut connect = HttpConnect::new(handle.clone(),
+                                                               host.new_service(),
+                                                               keep_alive);
+                            if let &Some(method) = &req.method {
+                                if let &Some(path) = &req.path {
+                                    //构建本次Http连接请求
+                                    let url = if handle.is_security() {
+                                        "https://".to_string() + host_name + path
+                                    } else {
+                                        "http://".to_string() + host_name + path
+                                    };
+
+                                    if let Some(request) = HttpRequest::new(handle.clone(),
+                                                                            method,
+                                                                            &url,
+                                                                            Version::HTTP_11,
+                                                                            headers,
+                                                                            &[]) {
+                                        http_request_result = Some((connect, request));
+                                        break;
+                                    } else {
+                                        //连接请求中的Url无效，则立即关闭当前连接
+                                        handle.close(Err(Error::new(ErrorKind::Other,
+                                                                    format!("http connect failed, url: {:?}, reason: invalid url", url))));
+                                        return;
                                     }
-                                } else {
-                                    //连接请求中的主机不存在，则立即关闭当前连接
-                                    handle.close(Err(Error::new(ErrorKind::Other, format!("http connect failed, host: {:?}, reason: host not exist", host_name))));
-                                    return;
                                 }
-                            } else {
-                                //连接请求的主机头无效，则立即关闭当前连接
-                                handle.close(Err(Error::new(ErrorKind::Other, "http connect failed, reason: invalid host header")));
-                                return;
                             }
                         } else {
-                            //连接请求中没有主机头，则立即关闭当前连接
-                            handle.close(Err(Error::new(ErrorKind::Other, "http connect failed, reason: host header not exist")));
+                            //连接请求中的主机不存在，则立即关闭当前连接
+                            handle.close(Err(Error::new(ErrorKind::Other,
+                                                        format!("http connect failed, host: {:?}, reason: host not exist", host_name))));
                             return;
                         }
+                    } else {
+                        //连接请求的主机头无效，则立即关闭当前连接
+                        handle.close(Err(Error::new(ErrorKind::Other,
+                                                    "http connect failed, reason: invalid host header")));
+                        return;
                     }
-                },
+                } else {
+                    //连接请求中没有主机头，则立即关闭当前连接
+                    handle.close(Err(Error::new(ErrorKind::Other,
+                                                "http connect failed, reason: host header not exist")));
+                    return;
+                }
             }
         }
 

@@ -22,4 +22,4 @@ pub mod server;
 pub mod acceptor;
 pub mod frame;
 pub mod connect;
-pub mod util;
+pub mod utils;

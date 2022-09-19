@@ -11,45 +11,43 @@ use pi_async_file::file::{remove_file, AsyncFile, AsyncFileOptions, WriteOptions
 use pi_handler::SGenType;
 use log::warn;
 use pi_async::rt::{AsyncRuntime, multi_thread::MultiTaskRuntime};
-use tcp::driver::{AsyncIOWait, Socket};
+use tcp::Socket;
 
 use crate::{
     gateway::GatewayContext,
     middleware::{Middleware, MiddlewareResult},
     request::HttpRequest,
     response::HttpResponse,
-    util::{trim_path, HttpRecvResult},
+    utils::{trim_path, HttpRecvResult},
 };
 
-/*
-* https文件上传任务优先级
-*/
+///
+/// https文件上传任务优先级
+///
 const HTTPS_ASYNC_FILE_UPLOAD_PRIORITY: usize = 100;
 
-/*
-* 文件移除方法标记
-*/
+///
+/// 文件移除方法标记
+///
 const FILE_REMOVE_METHOD: &str = "_$remove";
 
-/*
-* Http文件上传处理器
-*/
+///
+/// Http文件上传处理器
+///
 pub struct UploadFile {
-    files_async_runtime: MultiTaskRuntime<()>,
-    //异步文件运行时
-    root: PathBuf, //文件上传根路径
+    files_async_runtime:    MultiTaskRuntime<()>,   //异步文件运行时
+    root:                   PathBuf,                //文件上传根路径
 }
 
 unsafe impl Send for UploadFile {}
-
 unsafe impl Sync for UploadFile {}
 
-impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for UploadFile {
+impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
     fn request<'a>(
         &'a self,
         context: &'a mut GatewayContext,
-        req: HttpRequest<S, W>,
-    ) -> BoxFuture<'a, MiddlewareResult<S, W>> {
+        req: HttpRequest<S>,
+    ) -> BoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             let mut is_remove = false;
             let mut file = String::from("");
@@ -104,7 +102,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for UploadFile 
             }
 
             let path = self.root.join(file);
-            let resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
+            let resp = HttpResponse::new(2);
             if let Some(dir) = path.parent() {
                 if let Ok(p) = dir.absolutize() {
                     if !p.starts_with(PathBuf::from(&self.root).absolutize().ok().unwrap()) {
@@ -126,7 +124,9 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for UploadFile 
                         ));
                     } else {
                         if let Err(e) =
-                            async_remove_file(self.files_async_runtime.clone(), &resp, path)
+                            async_remove_file(self.files_async_runtime.clone(),
+                                              &resp,
+                                              path).await
                         {
                             //移除文件失败
                             return MiddlewareResult::Throw(e);
@@ -145,7 +145,10 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for UploadFile 
                         }
                     }
                     if let Err(e) =
-                        async_save_file(self.files_async_runtime.clone(), &resp, path, content)
+                        async_save_file(self.files_async_runtime.clone(),
+                                        &resp,
+                                        path,
+                                        content).await
                     {
                         //存储文件失败
                         return MiddlewareResult::Throw(e);
@@ -168,9 +171,9 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for UploadFile 
     fn response<'a>(
         &'a self,
         context: &'a mut GatewayContext,
-        req: HttpRequest<S, W>,
-        resp: HttpResponse<S, W>,
-    ) -> BoxFuture<'a, MiddlewareResult<S, W>> {
+        req: HttpRequest<S>,
+        resp: HttpResponse,
+    ) -> BoxFuture<'a, MiddlewareResult<S>> {
         let mut body_bufs: Vec<Vec<u8>> = Vec::new();
         let mut response = resp;
         let future = async move {
@@ -219,8 +222,9 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for UploadFile 
 }
 
 impl UploadFile {
-    //构建指定根目录的文件上传处理器
-    pub fn new<P: Into<PathBuf>>(files_async_runtime: MultiTaskRuntime<()>, dir: P) -> Self {
+    /// 构建指定根目录的文件上传处理器
+    pub fn new<P: Into<PathBuf>>(files_async_runtime: MultiTaskRuntime<()>,
+                                 dir: P) -> Self {
         match trim_path(dir) {
             Err(e) => {
                 panic!("Create Http Upload Failed, reason: {:?}", e);
@@ -243,25 +247,26 @@ impl UploadFile {
     }
 }
 
-//异步移除文件
-fn async_remove_file<S: Socket, W: AsyncIOWait>(
-    files_async_runtime: MultiTaskRuntime<()>,
-    resp: &HttpResponse<S, W>,
-    path: PathBuf,
-) -> Result<()> {
+// 异步移除文件
+async fn async_remove_file(files_async_runtime: MultiTaskRuntime<()>,
+                           resp: &HttpResponse,
+                           path: PathBuf) -> Result<()> {
     let files_async_runtime_copy = files_async_runtime.clone();
     if let Some(resp_handler) = resp.get_response_handler() {
         let path_copy = path.clone();
-        if let Err(e) = files_async_runtime.spawn(files_async_runtime.alloc(), async move {
+        if let Err(e) = files_async_runtime.spawn(files_async_runtime.alloc(),
+                                                  async move {
             // 调用底层open接口
-            let r = remove_file(files_async_runtime_copy, path_copy.clone()).await;
+            let r = remove_file(files_async_runtime_copy,
+                                path_copy.clone()).await;
             match r {
                 Ok(_) => {
                     //移除文件成功
-                    if let Err(e) = resp_handler.finish() {
+                    if let Err(e) = resp_handler.finish().await {
                         warn!(
                             "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
-                            path_copy, e
+                            path_copy,
+                            e
                         );
                     }
                 }
@@ -269,27 +274,31 @@ fn async_remove_file<S: Socket, W: AsyncIOWait>(
                     //移除文件失败
                     warn!(
                         "!!!> Http Async Remove File Failed, file: {:?}, reason: {:?}",
-                        path_copy, e
+                        path_copy,
+                        e
                     );
                     if let Err(e) = resp_handler.write(Vec::from(
                         format!("remove file error, reason: {:?}", e).as_bytes(),
-                    )) {
+                    )).await {
                         warn!(
                             "!!!> Http Body Mut Write Failed, file: {:?}, reason: {:?}",
-                            path_copy, e
+                            path_copy,
+                            e
                         );
                     } else {
-                        if let Err(e) = resp_handler.finish() {
+                        if let Err(e) = resp_handler.finish().await {
                             warn!(
                                 "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
-                                path_copy, e
+                                path_copy,
+                                e
                             );
                         }
                     }
                 }
             }
         }) {
-            warn!("!!!> Http Async Open File Failed, reason: {:?}", e);
+            warn!("!!!> Http Async Open File Failed, reason: {:?}",
+                e);
         }
 
         return Ok(());
@@ -301,17 +310,16 @@ fn async_remove_file<S: Socket, W: AsyncIOWait>(
     ))
 }
 
-//异步存储文件
-fn async_save_file<S: Socket, W: AsyncIOWait>(
-    files_async_runtime: MultiTaskRuntime<()>,
-    resp: &HttpResponse<S, W>,
-    path: PathBuf,
-    content: Vec<u8>,
-) -> Result<()> {
+// 异步存储文件
+async fn async_save_file(files_async_runtime: MultiTaskRuntime<()>,
+                         resp: &HttpResponse,
+                         path: PathBuf,
+                         content: Vec<u8>) -> Result<()> {
     if let Some(resp_handler) = resp.get_response_handler() {
         let path_copy = path.clone();
         let files_async_runtime_copy = files_async_runtime.clone();
-        if let Err(e) = files_async_runtime.spawn(files_async_runtime.alloc(), async move {
+        if let Err(e) = files_async_runtime.spawn(files_async_runtime.alloc(),
+                                                  async move {
             // 调用底层open接口
             let file = AsyncFile::open(
                 files_async_runtime_copy,
@@ -325,26 +333,32 @@ fn async_save_file<S: Socket, W: AsyncIOWait>(
                     match file.write(0, content, WriteOptions::Flush).await {
                         Ok(_) => {
                             //写文件成功
-                            if let Err(e) = resp_handler.finish() {
-                                warn!("!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}", path_copy, e);
+                            if let Err(e) = resp_handler.finish().await {
+                                warn!("!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                    path_copy,
+                                    e);
                             }
                         }
                         Err(e) => {
                             //写文件失败
                             warn!(
                                 "!!!> Http Async Write File Failed, file: {:?}, reason: {:?}",
-                                path_copy, e
+                                path_copy,
+                                e
                             );
                             if let Err(e) = resp_handler.write(Vec::from(
                                 format!("upload file error, reason: {:?}", e).as_bytes(),
-                            )) {
+                            )).await {
                                 warn!(
                                     "!!!> Http Body Mut Write Failed, file: {:?}, reason: {:?}",
-                                    path_copy, e
+                                    path_copy,
+                                    e
                                 );
                             } else {
-                                if let Err(e) = resp_handler.finish() {
-                                    warn!("!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}", path_copy, e);
+                                if let Err(e) = resp_handler.finish().await {
+                                    warn!("!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                        path_copy,
+                                        e);
                                 }
                             }
                         }
@@ -354,20 +368,23 @@ fn async_save_file<S: Socket, W: AsyncIOWait>(
                     //打开文件失败
                     warn!(
                         "!!!> Http Async Open File Failed, file: {:?}, reason: {:?}",
-                        path_copy, e
+                        path_copy,
+                        e
                     );
                     if let Err(e) = resp_handler.write(Vec::from(
                         format!("upload file error, reason: {:?}", e).as_bytes(),
-                    )) {
+                    )).await {
                         warn!(
                             "!!!> Http Body Mut Write Failed, file: {:?}, reason: {:?}",
-                            path_copy, e
+                            path_copy,
+                            e
                         );
                     } else {
-                        if let Err(e) = resp_handler.finish() {
+                        if let Err(e) = resp_handler.finish().await {
                             warn!(
                                 "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
-                                path_copy, e
+                                path_copy,
+                                e
                             );
                         }
                     }

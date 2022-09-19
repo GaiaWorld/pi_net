@@ -22,17 +22,18 @@ use twoway::{find_bytes, rfind_bytes};
 use parking_lot::RwLock;
 use env_logger;
 
-use pi_async::rt::{multi_thread::{MultiTaskRuntimeBuilder, MultiTaskRuntime}};
+use pi_async::rt::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue,
+                   multi_thread::MultiTaskRuntimeBuilder};
 use pi_hash::XHashMap;
 use pi_atom::Atom;
 use pi_gray::GrayVersion;
 use pi_handler::{Args, Handler, SGenType};
-use tcp::driver::{Socket, SocketConfig, AsyncIOWait, AsyncServiceFactory};
-use tcp::buffer_pool::WriteBufferPool;
-use tcp::util::{SocketEvent, TlsConfig};
-use tcp::server::{AsyncWaitsHandle, AsyncPortsFactory, SocketListener};
-use tcp::connect::TcpSocket;
-use tcp::tls_connect::TlsSocket;
+
+use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
+          connect::TcpSocket,
+          tls_connect::TlsSocket,
+          server::{PortsAdapterFactory, SocketListener},
+          utils::{TlsConfig, Ready}};
 
 use http::{server::HttpListenerFactory,
            virtual_host::{VirtualHostTab, VirtualHost, VirtualHostPool},
@@ -51,7 +52,7 @@ use http::{server::HttpListenerFactory,
            static_cache::StaticCache,
            request::HttpRequest,
            response::{ResponseHandler, HttpResponse},
-           util::HttpRecvResult};
+           utils::HttpRecvResult};
 
 #[test]
 fn test_regex() {
@@ -177,50 +178,50 @@ fn test_router() {
     router.add("/:x", "Hello Router /:x");
     router.add("/:x/", "Hello Router /:x/"); //同段路径中如果有多个相同的通配符路由，则覆盖; 且形如/xxx/的路由可以同时匹配本级和下级路径，无法匹配上级路径，例如:可以匹配/path或/path/，但无法匹配/
     let dst = router.recognize("/").ok().unwrap();
-    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/", dst.handler, dst.params);
+    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/", dst.handler(), dst.params());
     let dst = router.recognize("/x").ok().unwrap();
-    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x", dst.handler, dst.params);
+    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x", dst.handler(), dst.params());
     let dst = router.recognize("/y").ok().unwrap();
-    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/y", dst.handler, dst.params);
+    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/y", dst.handler(), dst.params());
     let dst = router.recognize("/xyz").ok().unwrap();
-    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/xyz", dst.handler, dst.params);
+    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/xyz", dst.handler(), dst.params());
     let dst = router.recognize("/xyz/").ok().unwrap();
-    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/xyz/", dst.handler, dst.params);
+    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/xyz/", dst.handler(), dst.params());
     let dst = router.recognize("/;user=test001;passwd=111111").ok().unwrap();
-    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/;user=test001;passwd=111111", dst.handler, dst.params);
+    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/;user=test001;passwd=111111", dst.handler(), dst.params());
     let dst = router.recognize("/xyz;user=test001;passwd=111111").ok().unwrap();
-    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/xyz;user=test001;passwd=111111", dst.handler, dst.params);
+    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/xyz;user=test001;passwd=111111", dst.handler(), dst.params());
     let dst = router.recognize("/x;user=test001;passwd=111111").ok().unwrap();
-    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x;user=test001;passwd=111111", dst.handler, dst.params);
+    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x;user=test001;passwd=111111", dst.handler(), dst.params());
 
     router.add("/x/y/z", "Hello Router /x/y/z");
     let dst = router.recognize("/x/y/z").ok().unwrap();
-    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x/y/z", dst.handler, dst.params);
+    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x/y/z", dst.handler(), dst.params());
 
     router.add("/x/:y/:z/", "Hello Router /x/:y/:z/");
     let dst = router.recognize("/x/y/z/").ok().unwrap();
-    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x/y/z/", dst.handler, dst.params);
+    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x/y/z/", dst.handler(), dst.params());
 
     router.add("/x/:y/:z/:", "Hello Router /x/:y/:z/:");
     let dst = router.recognize("/x/y/z/;user=test001;passwd=111111").ok().unwrap();
-    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x/y/z/;user=test001;passwd=111111", dst.handler, dst.params);
+    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x/y/z/;user=test001;passwd=111111", dst.handler(), dst.params());
 
     router.add("/x/:y/:z/hello", "Hello Router /x/:y/:z/hello"); //通配符路径与确定路径配合使用
     let dst = router.recognize("/x/y/z/hello;user=test001;passwd=111111").ok().unwrap();
-    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x/y/z/hello;user=test001;passwd=111111", dst.handler, dst.params);
+    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x/y/z/hello;user=test001;passwd=111111", dst.handler(), dst.params());
 
     router.add("/x/:y/*", "Hello Router /x/:y/*");
     router.add("/x/*z/*", "Hello Router /x/*y/*"); //同段路径中有:通配符和*通配符，则:通配符更具体
-    println!("!!!!!!path: {:?}, dst: {:?}", "/x/y/z", router.recognize("/x/y/z").ok().unwrap().handler);
-    println!("!!!!!!path: {:?}, dst: {:?}", "/x/y/z/", router.recognize("/x/y/z/").ok().unwrap().handler);
-    println!("!!!!!!path: {:?}, dst: {:?}", "/x/y/z/hello", router.recognize("/x/y/z/").ok().unwrap().handler);
-    println!("!!!!!!path: {:?}, dst: {:?}", "/x/hello/z", router.recognize("/x/hello/z").ok().unwrap().handler);
-    println!("!!!!!!path: {:?}, dst: {:?}", "/x/hello/z/", router.recognize("/x/hello/z/").ok().unwrap().handler);
-    println!("!!!!!!path: {:?}, dst: {:?}", "/x/hello/z/hello", router.recognize("/x/hello/z/hello").ok().unwrap().handler);
-    println!("!!!!!!path: {:?}, dst: {:?}", "/x/hello/x/y/z", router.recognize("/x/hello/x/y/z").ok().unwrap().handler);
-    println!("!!!!!!path: {:?}, dst: {:?}", "/x/hello/x/y/z/", router.recognize("/x/hello/x/y/z/").ok().unwrap().handler);
-    println!("!!!!!!path: {:?}, dst: {:?}", "/x/hello/x/y/z/hello", router.recognize("/x/hello/x/y/z/hello").ok().unwrap().handler);
-    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x/hello/x/y/z/hello/", router.recognize("/x/hello/x/y/z/hello/").ok().unwrap().handler, router.recognize("/x/hello/x/y/z/hello/").ok().unwrap().params);
+    println!("!!!!!!path: {:?}, dst: {:?}", "/x/y/z", router.recognize("/x/y/z").ok().unwrap().handler());
+    println!("!!!!!!path: {:?}, dst: {:?}", "/x/y/z/", router.recognize("/x/y/z/").ok().unwrap().handler());
+    println!("!!!!!!path: {:?}, dst: {:?}", "/x/y/z/hello", router.recognize("/x/y/z/").ok().unwrap().handler());
+    println!("!!!!!!path: {:?}, dst: {:?}", "/x/hello/z", router.recognize("/x/hello/z").ok().unwrap().handler());
+    println!("!!!!!!path: {:?}, dst: {:?}", "/x/hello/z/", router.recognize("/x/hello/z/").ok().unwrap().handler());
+    println!("!!!!!!path: {:?}, dst: {:?}", "/x/hello/z/hello", router.recognize("/x/hello/z/hello").ok().unwrap().handler());
+    println!("!!!!!!path: {:?}, dst: {:?}", "/x/hello/x/y/z", router.recognize("/x/hello/x/y/z").ok().unwrap().handler());
+    println!("!!!!!!path: {:?}, dst: {:?}", "/x/hello/x/y/z/", router.recognize("/x/hello/x/y/z/").ok().unwrap().handler());
+    println!("!!!!!!path: {:?}, dst: {:?}", "/x/hello/x/y/z/hello", router.recognize("/x/hello/x/y/z/hello").ok().unwrap().handler());
+    println!("!!!!!!path: {:?}, dst: {:?}, params: {:?}", "/x/hello/x/y/z/hello/", router.recognize("/x/hello/x/y/z/hello/").ok().unwrap().handler(), router.recognize("/x/hello/x/y/z/hello/").ok().unwrap().params());
 }
 
 #[test]
@@ -292,9 +293,11 @@ struct TestMultiPartsHandler;
 unsafe impl Send for TestMultiPartsHandler {}
 unsafe impl Sync for TestMultiPartsHandler {}
 
-impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for TestMultiPartsHandler {
-    fn request<'a>(&'a self, context: &'a mut GatewayContext, req: HttpRequest<S, W>)
-                   -> BoxFuture<'a, MiddlewareResult<S, W>> {
+impl<S: Socket> Middleware<S, GatewayContext> for TestMultiPartsHandler {
+    fn request<'a>(&'a self,
+                   context: &'a mut GatewayContext,
+                   req: HttpRequest<S>)
+                   -> BoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             for (key, value) in context.as_parts() {
                 match value {
@@ -313,8 +316,11 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for TestMultiPa
         future.boxed()
     }
 
-    fn response<'a>(&'a self, context: &'a mut GatewayContext, req: HttpRequest<S, W>, resp: HttpResponse<S, W>)
-                    -> BoxFuture<'a, MiddlewareResult<S, W>> {
+    fn response<'a>(&'a self,
+                    context: &'a mut GatewayContext,
+                    req: HttpRequest<S>,
+                    resp: HttpResponse)
+                    -> BoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             MiddlewareResult::ContinueResponse((req, resp))
         };
@@ -328,16 +334,16 @@ struct WrapMsg(Arc<RefCell<XHashMap<String, SGenType>>>);
 unsafe impl Send for WrapMsg {}
 unsafe impl Sync for WrapMsg {}
 
-struct TestHttpGatewayHandler;
+struct TestHttpGatewayHandler<R: AsyncRuntime>(R);
 
-unsafe impl Send for TestHttpGatewayHandler {}
-unsafe impl Sync for TestHttpGatewayHandler {}
+unsafe impl<R: AsyncRuntime> Send for TestHttpGatewayHandler<R> {}
+unsafe impl<R: AsyncRuntime> Sync for TestHttpGatewayHandler<R> {}
 
-impl Handler for TestHttpGatewayHandler {
+impl<R: AsyncRuntime> Handler for TestHttpGatewayHandler<R> {
     type A = SocketAddr;
     type B = Arc<HeaderMap>;
     type C = Arc<RefCell<XHashMap<String, SGenType>>>;
-    type D = ResponseHandler<TcpSocket>;
+    type D = ResponseHandler;
     type E = ();
     type F = ();
     type G = ();
@@ -347,45 +353,22 @@ impl Handler for TestHttpGatewayHandler {
     //处理方法
     fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> Self::HandleResult {
         if let Args::FourArgs(addr, headers, msg, handler) = args {
-            handle(env, topic, addr, headers, msg, handler);
+            handle(self.0.clone(), env, topic, addr, headers, msg, handler);
         }
     }
 }
 
-struct TestHttpsGatewayHandler;
-
-unsafe impl Send for TestHttpsGatewayHandler {}
-unsafe impl Sync for TestHttpsGatewayHandler {}
-
-impl Handler for TestHttpsGatewayHandler {
-    type A = SocketAddr;
-    type B = Arc<HeaderMap>;
-    type C = Arc<RefCell<XHashMap<String, SGenType>>>;
-    type D = ResponseHandler<TlsSocket>;
-    type E = ();
-    type F = ();
-    type G = ();
-    type H = ();
-    type HandleResult = ();
-
-    //处理方法
-    fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> Self::HandleResult {
-        if let Args::FourArgs(addr, headers, msg, handler) = args {
-            handle(env, topic, addr, headers, msg, handler);
-        }
-    }
-}
-
-fn handle<S: Socket>(env: Arc<dyn GrayVersion>,
-                     topic: Atom,
-                     addr: SocketAddr,
-                     headers: Arc<HeaderMap>,
-                     msg: Arc<RefCell<XHashMap<String, SGenType>>>,
-                     handler: ResponseHandler<S>) {
+fn handle<R: AsyncRuntime>(rt: R,
+                           env: Arc<dyn GrayVersion>,
+                           topic: Atom,
+                           addr: SocketAddr,
+                           headers: Arc<HeaderMap>,
+                           msg: Arc<RefCell<XHashMap<String, SGenType>>>,
+                           handler: ResponseHandler) {
     let msg = WrapMsg(msg);
     let resp_handler = Arc::new(handler);
 
-    thread::spawn(move || {
+    rt.spawn(rt.alloc(), async move {
         println!("!!!!!!http gateway handle, topic: {:?}", topic);
         println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
         println!("!!!!!!http gateway handle, headers: {:?}", headers);
@@ -394,12 +377,12 @@ fn handle<S: Socket>(env: Arc<dyn GrayVersion>,
         //处理Http响应
         resp_handler.status(200);
         resp_handler.header("Port_Test", "true");
-        if let Err(e) = resp_handler.write(Vec::from("Hello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello Http\n".as_bytes())) {
+        if let Err(e) = resp_handler.write(Vec::from("Hello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello Http\n".as_bytes())).await {
             println!("!!!!!!write body failed, reason: {:?}", e);
             return;
         }
 
-        resp_handler.finish();
+        resp_handler.finish().await;
         println!("!!!!!!http gateway handle ok");
     });
 }
@@ -411,10 +394,17 @@ fn test_http_hosts() {
 
     //启动文件异步运行时
     let mut builder = MultiTaskRuntimeBuilder::default();
-    let rt = builder.build();
+    let file_rt = builder.build();
+
+    //启动网络异步运行时
+    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
+                                                        None,
+                                                        None,
+                                                        None);
 
     //构建请求处理器
-    let handler = Arc::new(TestHttpGatewayHandler);
+    let handler
+        = Arc::new(TestHttpGatewayHandler(file_rt.clone()));
 
     //构建全局静态资源缓存，并启动缓存的整理
     let cache = Arc::new(StaticCache::new(1024 * 1024 * 1024, 99999));
@@ -428,10 +418,10 @@ fn test_http_hosts() {
     let parser = Arc::new(DefaultParser::with(128, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
-    let file_load = Arc::new(FileLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let files_load = Arc::new(FilesLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let batch_load = Arc::new(BatchLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let upload = Arc::new(UploadFile::new(rt.clone(), "../upload"));
+    let file_load = Arc::new(FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let files_load = Arc::new(FilesLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let batch_load = Arc::new(BatchLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let upload = Arc::new(UploadFile::new(file_rt.clone(), "../upload"));
     let port = Arc::new(HttpPort::with_handler(None, handler));
 
     //构建处理CORS的Options方法的请求的中间件链
@@ -510,17 +500,25 @@ fn test_http_hosts() {
 
     //设置虚拟主机
     let mut hosts = VirtualHostTab::new();
-    hosts.add("msg.highapp.com", host.clone());
+    hosts.add("test.17youx.cn", host.clone());
     hosts.add("127.0.0.1", host);
 
-    let mut factory = AsyncPortsFactory::<TcpSocket>::new();
+    let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(80,
-                 Box::new(HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 10000)));
-    let mut config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
+                 HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 10000).new_service());
+    let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
-    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(vec![rt],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               16777216,
+                               16777216,
+                               Some(10)) {
         Err(e) => {
             println!("!!!> Http Listener Bind Error, reason: {:?}", e);
         },
@@ -539,10 +537,17 @@ fn test_https_hosts() {
 
     //启动文件异步运行时
     let mut builder = MultiTaskRuntimeBuilder::default();
-    let rt = builder.build();
+    let file_rt = builder.build();
+
+    //启动网络异步运行时
+    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
+                                                        None,
+                                                        None,
+                                                        None);
 
     //构建请求处理器
-    let handler = Arc::new(TestHttpsGatewayHandler);
+    let handler
+        = Arc::new(TestHttpGatewayHandler(file_rt.clone()));
 
     //构建全局静态资源缓存，并启动缓存的整理
     let cache = Arc::new(StaticCache::new(1024 * 1024 * 1024, 99999));
@@ -556,10 +561,10 @@ fn test_https_hosts() {
     let parser = Arc::new(DefaultParser::with(128, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
-    let file_load = Arc::new(FileLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let files_load = Arc::new(FilesLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let batch_load = Arc::new(BatchLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let upload = Arc::new(UploadFile::new(rt.clone(), "../upload"));
+    let file_load = Arc::new(FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let files_load = Arc::new(FilesLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let batch_load = Arc::new(BatchLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let upload = Arc::new(UploadFile::new(file_rt.clone(), "../upload"));
     let port = Arc::new(HttpPort::with_handler(None, handler));
 
     //构建处理CORS的Options方法的请求的中间件链
@@ -638,26 +643,34 @@ fn test_https_hosts() {
 
     //设置虚拟主机
     let mut hosts = VirtualHostTab::new();
-    hosts.add("msg.highapp.com", host.clone());
+    hosts.add("test.17youx.cn", host.clone());
     hosts.add("127.0.0.1", host);
 
-    let mut factory = AsyncPortsFactory::<TlsSocket>::new();
+    let mut factory = PortsAdapterFactory::<TlsSocket>::new();
     factory.bind(443,
-                 Box::new(HttpListenerFactory::<TlsSocket, _>::with_hosts(hosts, 10000)));
+                 HttpListenerFactory::<TlsSocket, _>::with_hosts(hosts, 10000).new_service());
     let tls_config = TlsConfig::new_server("",
                                            false,
-                                           "./3376363_msg.highapp.com.pem",
-                                           "./3376363_msg.highapp.com.key",
+                                           "./tests/7285407__17youx.cn.pem",
+                                           "./tests/7285407__17youx.cn.key",
                                            "",
                                            "",
                                            "",
                                            512,
                                            false,
                                            "").unwrap();
-    let mut config = SocketConfig::with_tls("0.0.0.0", &[(443, tls_config)]);
-    config.set_option(16384, 16384, 16384, 16);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
-    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    let mut config = SocketConfig::with_tls("0.0.0.0", &[(38080, tls_config)]);
+
+    match SocketListener::bind(vec![rt],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               16777216,
+                               16777216,
+                               Some(10)) {
         Err(e) => {
             println!("!!!> Https Listener Bind Error, reason: {:?}", e);
         },

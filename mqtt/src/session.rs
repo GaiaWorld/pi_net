@@ -8,132 +8,135 @@ use std::io::{Cursor, Result, Error, ErrorKind};
 
 use mqtt311::{MqttWrite, QoS, LastWill, Packet, Publish};
 
-use tcp::{server::AsyncWaitsHandle,
-          driver::Socket,
-          buffer_pool::WriteBuffer,
-          util::ContextHandle};
+use tcp::{Socket,
+          utils::{ContextHandle, Hibernate, Ready}};
 use ws::connect::WsSocket;
 
-use crate::{v311::WsMqtt311, tls_v311::WssMqtt311, util::{ValueEq, BrokerSession}};
+use crate::{v311::WsMqtt311,
+            tls_v311::WssMqtt311,
+            utils::{ValueEq, BrokerSession}};
 
-/*
-* Mqtt会话
-*/
+///
+/// Mqtt会话
+///
 pub trait MqttSession: Debug + Send + Sync + 'static {
     type Connect;
 
-    //获取连接
+    /// 获取连接
     fn get_connect(&self) -> Option<&Self::Connect>;
 
-    //绑定连接
+    /// 绑定连接
     fn bind_connect(&mut self, connect: Self::Connect);
 
-    //解绑定连接
+    /// 解绑定连接
     fn unbind_connect(&mut self) -> Option<Self::Connect>;
 
-    //判断是否已接受连接
+    /// 判断是否已接受连接
     fn is_accepted(&self) -> bool;
 
-    //设置是否已连接
+    /// 设置是否已连接
     fn set_accept(&self, connect: bool);
 
-    //是否清理会话
+    /// 是否清理会话
     fn is_clean(&self) -> bool;
 
-    //设置是否清理会话
+    /// 设置是否清理会话
     fn set_clean(&self, clean: bool);
 
-    //获取Will
+    /// 获取Will
     fn get_will(&self) -> Option<(&str, &str, u8, bool)>;
 
-    //设置Will
+    /// 设置Will
     fn set_will(&mut self, topic: String, msg: String, qos: u8, retain: bool);
 
-    //取消息Will
+    /// 取消息Will
     fn unset_will(&mut self) -> Option<(String, String, u8, bool)>;
 
-    //获取用户
+    /// 获取用户
     fn get_user(&self) -> Option<&str>;
 
-    //获取用户密码
+    /// 获取用户密码
     fn get_pwd(&self) -> Option<&str>;
 
-    //设置用户名和密码
+    /// 设置用户名和密码
     fn set_user_pwd(&mut self, user: Option<String>, pwd: Option<String>);
 
-    //获取未发送的Mqtt报文
+    /// 获取未发送的Mqtt报文
     fn unsend_packet(&self) -> Option<&[Vec<u8>]> {
         None
     }
 
-    //获取已发送但未确认的Mqtt报文
+    /// 获取已发送但未确认的Mqtt报文
     fn unconfirm_sended(&self) -> Option<&[Vec<u8>]> {
         None
     }
 
-    //获取已接收但未确认的Mqtt报文
+    /// 获取已接收但未确认的Mqtt报文
     fn unconfirm_received(&self) -> Option<&[Vec<u8>]> {
         None
     }
 
-    //获取连接保持间隔时长
+    /// 获取连接保持间隔时长
     fn get_keep_alive(&self) -> u16;
 
-    //设置连接保持间隔时长
+    /// 设置连接保持间隔时长
     fn set_keep_alive(&mut self, keep_alive: u16);
 }
 
-/*
-* Mqtt连接
-*/
-pub trait MqttConnect: Debug + Send + Sync + 'static {
-    //获取连接的唯一id
+///
+/// Mqtt连接
+///
+pub trait MqttConnect<S: Socket>: Debug + Send + Sync + 'static {
+    /// 获取连接的唯一id
     fn get_uid(&self) -> Option<usize>;
 
-    //获取连接的令牌
+    /// 获取连接的令牌
     fn get_token(&self) -> Option<usize>;
 
-    //获取本地地址
+    /// 获取本地地址
     fn get_local_addr(&self) -> Option<SocketAddr>;
 
-    //获取远端地址
+    /// 获取远端地址
     fn get_remote_addr(&self) -> Option<SocketAddr>;
 
-    //判断是否是安全的连接
+    /// 判断是否是安全的连接
     fn is_security(&self) -> bool;
 
-    //是否被接收消息
+    /// 是否被接收消息
     fn is_passive_receive(&self) -> bool;
 
-    //设置是否被动接收消息
+    /// 设置是否被动接收消息
     fn passive_receive(&self, b: bool);
 
-    //唤醒连接
-    fn wakeup(&self) -> Result<()>;
-
-    //获取连接的代理会话
+    /// 获取连接的代理会话
     fn get_session(&self) -> Option<ContextHandle<BrokerSession>>;
 
-    //发送消息
+    /// 发送消息
     fn send(&self, topic: &String, payload: Arc<Vec<u8>>) -> Result<()>;
 
-    //关闭连接
+    /// 线程安全的异步休眠当前连接，直到被唤醒，返回空表示连接已关闭
+    fn hibernate(&self, ready: Ready) -> Option<Hibernate<S>>;
+
+    /// 线程安全的唤醒被休眠的当前连接，如果当前连接未被休眠，则忽略
+    fn wakeup(&self, result: Result<()>) -> bool;
+
+    /// 关闭连接
     fn close(&self, reason: Result<()>) -> Result<()>;
 }
 
-/*
-* Qos0的Mqtt会话
-*/
+///
+/// Qos0的Mqtt会话
+///
 pub struct QosZeroSession<S: Socket> {
-    connect:        Option<WsSocket<S, AsyncWaitsHandle>>,  //Websocket连接
-    is_passive:     Arc<AtomicBool>,                        //是否被动接收消息
-    client_id:      String,                                 //客户端id
-    is_accepted:    Arc<AtomicBool>,                        //是否已连接
-    is_clean:       Arc<AtomicBool>,                        //是否清理会话
-    will:           Option<LastWill>,                       //Will
-    user:           Option<String>,                         //会话用户
-    pwd:            Option<String>,                         //会话用户密码
-    keep_alive:     u16,                                    //连接保持间隔时长，单位秒，服务器端在1.5倍间隔时长内没有收到任何控制报文，则主动关闭连接
+    connect:        Option<WsSocket<S>>,    //Websocket连接
+    is_passive:     Arc<AtomicBool>,        //是否被动接收消息
+    client_id:      String,                 //客户端id
+    is_accepted:    Arc<AtomicBool>,        //是否已连接
+    is_clean:       Arc<AtomicBool>,        //是否清理会话
+    will:           Option<LastWill>,       //Will
+    user:           Option<String>,         //会话用户
+    pwd:            Option<String>,         //会话用户密码
+    keep_alive:     u16,                    //连接保持间隔时长，单位秒，服务器端在1.5倍间隔时长内没有收到任何控制报文，则主动关闭连接
 }
 
 unsafe impl<S: Socket> Send for QosZeroSession<S> {}
@@ -169,7 +172,11 @@ impl<S: Socket> Hash for QosZeroSession<S> {
 
 impl<S: Socket> Debug for QosZeroSession<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "QosZeroSession {{ client_id: {:?}, is_accepted: {}, is_clean: {}, keep_alive: {} }}", self.client_id, self.is_accepted.load(AtomicOrdering::Relaxed), self.is_clean.load(AtomicOrdering::Relaxed), self.keep_alive)
+        write!(f, "QosZeroSession {{ client_id: {:?}, is_accepted: {}, is_clean: {}, keep_alive: {} }}",
+               self.client_id,
+               self.is_accepted.load(AtomicOrdering::Relaxed),
+               self.is_clean.load(AtomicOrdering::Relaxed),
+               self.keep_alive)
     }
 }
 
@@ -196,7 +203,7 @@ impl<S: Socket> ValueEq for Arc<QosZeroSession<S>> {
 }
 
 impl<S: Socket> MqttSession for QosZeroSession<S> {
-    type Connect = WsSocket<S, AsyncWaitsHandle>;
+    type Connect = WsSocket<S>;
 
     fn get_connect(&self) -> Option<&Self::Connect> {
         self.connect.as_ref()
@@ -281,7 +288,7 @@ impl<S: Socket> MqttSession for QosZeroSession<S> {
     }
 }
 
-impl<S: Socket> MqttConnect for QosZeroSession<S> {
+impl<S: Socket> MqttConnect<S> for QosZeroSession<S> {
     fn get_uid(&self) -> Option<usize> {
         if let Some(connect) = &self.connect {
             return Some(connect.get_uid())
@@ -330,14 +337,6 @@ impl<S: Socket> MqttConnect for QosZeroSession<S> {
         self.is_passive.store(b, AtomicOrdering::SeqCst);
     }
 
-    fn wakeup(&self) -> Result<()> {
-        if let Some(connect) = &self.connect {
-            return connect.wake();
-        }
-
-        Err(Error::new(ErrorKind::ConnectionAborted, "Wakeup connect failed, reason: connect not exist"))
-    }
-
     fn get_session(&self) -> Option<ContextHandle<BrokerSession>> {
         if let Some(connect) = &self.connect {
             if connect.is_closed() {
@@ -368,23 +367,36 @@ impl<S: Socket> MqttConnect for QosZeroSession<S> {
             let mut buf: Cursor<Vec<u8>> = Cursor::new(Vec::new());
             if let Err(e) = buf.write_packet(&packet) {
                 //序列化Mqtt报文失败
-                return Err(Error::new(ErrorKind::InvalidData, format!("mqtt session send failed, reason: {:?}", e)));
+                return Err(Error::new(ErrorKind::InvalidData,
+                                      format!("mqtt session send failed, reason: {:?}",
+                                              e)));
             }
 
             //通过Ws连接发送指定报文
-            if let Some(mut ws_payload) = connect.alloc() {
-                ws_payload.get_iolist_mut().push_back(buf.into_inner().into());
-                if connect.is_security() {
-                    return connect.send(WssMqtt311::WS_MSG_TYPE, ws_payload);
-                } else {
-                    return connect.send(WsMqtt311::WS_MSG_TYPE, ws_payload);
-                }
+            if connect.is_security() {
+                return connect.send(WssMqtt311::WS_MSG_TYPE, buf.into_inner());
+            } else {
+                return connect.send(WsMqtt311::WS_MSG_TYPE, buf.into_inner());
             }
-
-            return Err(Error::new(ErrorKind::Other, "mqtt session send failed, reason: alloc write buffer failed"));
         }
 
         Ok(())
+    }
+
+    fn hibernate(&self, ready: Ready) -> Option<Hibernate<S>> {
+        if let Some(connect) = &self.connect {
+            connect.hibernate(ready)
+        } else {
+            None
+        }
+    }
+
+    fn wakeup(&self, result: Result<()>) -> bool {
+        if let Some(connect) = &self.connect {
+            connect.wakeup(result)
+        } else {
+            true
+        }
     }
 
     fn close(&self, reason: Result<()>) -> Result<()> {

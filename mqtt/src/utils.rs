@@ -7,54 +7,18 @@ use mqtt311::{Topic, TopicPath};
 use pi_atom::Atom;
 use pi_hash::XHashMap;
 
-use tcp::util::SocketContext;
+use tcp::utils::SocketContext;
 
-/*
-* 异步回应结果
-*/
-#[derive(Clone)]
-pub struct AsyncResult(Arc<RefCell<Option<std::io::Result<()>>>>);
-
-unsafe impl Send for AsyncResult {}
-unsafe impl Sync for AsyncResult {}
-
-impl AsyncResult {
-    //构建异步回应结果
-    pub fn new() -> Self {
-        AsyncResult(Arc::new(RefCell::new(None)))
-    }
-
-    //构建指定结果的异步回应结果
-    pub fn with(result: std::io::Result<()>) -> Self {
-        AsyncResult(Arc::new(RefCell::new(Some(result))))
-    }
-
-    //是否需要异步等待回应结果
-    pub fn is_wait(&self) -> bool {
-        self.0.borrow().is_none()
-    }
-
-    //获取异步回应结果
-    pub fn get(&self) -> Option<std::io::Result<()>> {
-        self.0.borrow_mut().take()
-    }
-
-    //设置异步回应结果
-    pub fn set(&self, result: std::io::Result<()>) {
-        *self.0.borrow_mut() = Some(result);
-    }
-}
-
-/*
-* 值指针相等
-*/
+///
+/// 值指针相等
+///
 pub trait ValueEq {
     fn value_eq(this: &Self, other: &Self) -> bool;
 }
 
-/*
-* 路径节点
-*/
+///
+/// 路径节点
+///
 #[derive(Clone)]
 struct PathNode<V: ValueEq + Ord + Debug + Clone> {
     topic:      Topic,                          //节点主题名
@@ -67,7 +31,7 @@ unsafe impl<V: ValueEq + Ord + Debug + Clone> Send for PathNode<V> {}
 unsafe impl<V: ValueEq + Ord + Debug + Clone> Sync for PathNode<V> {}
 
 impl<V: ValueEq + Ord + Debug + Clone> PathNode<V> {
-    //构建一个指定节点主题名的路径节点
+    /// 构建一个指定节点主题名的路径节点
     pub fn new(topic: Topic, level: usize) -> Self {
         PathNode {
             topic,
@@ -78,9 +42,9 @@ impl<V: ValueEq + Ord + Debug + Clone> PathNode<V> {
     }
 }
 
-/*
-* 路径匹配树
-*/
+///
+/// 路径匹配树
+///
 #[derive(Clone)]
 pub struct PathTree<V: ValueEq + Ord + Debug + Clone> {
     root:   PathNode<V>,    //根节点
@@ -88,7 +52,7 @@ pub struct PathTree<V: ValueEq + Ord + Debug + Clone> {
 }
 
 impl<V: ValueEq + Ord + Debug + Clone> PathTree<V> {
-    //构建空路径匹配树
+    /// 构建空路径匹配树
     pub fn empty() -> Self {
         PathTree {
             root: PathNode::new(Topic::Blank, 0),
@@ -96,17 +60,17 @@ impl<V: ValueEq + Ord + Debug + Clone> PathTree<V> {
         }
     }
 
-    //是否为空路径匹配树
+    /// 是否为空路径匹配树
     pub fn is_empty(&self) -> bool {
         self.root.unmatch.is_empty() && self.root.childs.is_empty()
     }
 
-    //获取值数量
+    /// 获取值数量
     pub fn len(&self) -> usize {
         self.size
     }
 
-    //查找指定路径匹配的值
+    /// 查找指定路径匹配的值
     pub fn lookup(&self, path: TopicPath) -> Option<Vec<V>> {
         if path.wildcards {
             //路径有通配符，则返回空
@@ -119,7 +83,7 @@ impl<V: ValueEq + Ord + Debug + Clone> PathTree<V> {
         Some(map)
     }
 
-    //插入一个路径对应的值
+    /// 插入一个路径对应的值
     pub fn insert(&mut self, path: TopicPath, value: V) -> Result<(), (TopicPath, V)> {
         if !path.wildcards {
             //路径没有通配符，则返回路径和值
@@ -179,7 +143,7 @@ impl<V: ValueEq + Ord + Debug + Clone> PathTree<V> {
         Ok(())
     }
 
-    //移除一个路径对应的值
+    /// 移除一个路径对应的值
     pub fn remove(&mut self, path: TopicPath, value: V) -> Result<(), (TopicPath, V)> {
         if !path.wildcards {
             //路径没有通配符，则返回路径和值
@@ -225,8 +189,12 @@ impl<V: ValueEq + Ord + Debug + Clone> PathTree<V> {
     }
 }
 
-//递归遍历查找匹配指定路径的值
-fn lookup<V: ValueEq + Ord + Debug + Clone>(mut path_node: Option<&PathNode<V>>, path: &TopicPath, path_len: usize, index: usize, values: &mut Vec<V>) {
+// 递归遍历查找匹配指定路径的值
+fn lookup<V: ValueEq + Ord + Debug + Clone>(mut path_node: Option<&PathNode<V>>,
+                                            path: &TopicPath,
+                                            path_len: usize,
+                                            index: usize,
+                                            values: &mut Vec<V>) {
     if path_node.is_none() {
         //当前路径树节点为空，则返回
         return;
@@ -295,14 +263,14 @@ fn lookup<V: ValueEq + Ord + Debug + Clone>(mut path_node: Option<&PathNode<V>>,
     }
 }
 
-//获取指定全匹配节点下的所有值
+// 获取指定全匹配节点下的所有值
 fn all_values<V: ValueEq + Ord + Debug + Clone>(node: &PathNode<V>, values: &mut Vec<V>) {
     values.extend_from_slice(&node.unmatch[..]);
 }
 
-/*
-* Mqtt代理会话
-*/
+///
+/// Mqtt代理会话
+///
 pub struct BrokerSession {
     client_id:  String,         //客户端id
     keep_alive: u16,            //连接保持间隔时长，单位秒，服务器端在1.5倍间隔时长内没有收到任何控制报文，则主动关闭连接
@@ -315,7 +283,7 @@ pub struct BrokerSession {
 unsafe impl Send for BrokerSession {}
 
 impl BrokerSession {
-    //构建Mqtt代理会话
+    /// 构建Mqtt代理会话
     pub fn new(client_id: String,
                keep_alive: u16,
                is_clean: bool,
@@ -331,37 +299,37 @@ impl BrokerSession {
         }
     }
 
-    //获取客户端id
+    /// 获取客户端id
     pub fn get_client_id(&self) -> &String {
         &self.client_id
     }
 
-    //获取连接保持间隔时长
+    /// 获取连接保持间隔时长
     pub fn get_keep_alive(&self) -> u16 {
         self.keep_alive
     }
 
-    //是否清理会话
+    /// 是否清理会话
     pub fn is_clean_session(&self) -> bool {
         self.is_clean
     }
 
-    //获取用户名
+    /// 获取用户名
     pub fn get_user(&self) -> Option<&String> {
         self.user.as_ref()
     }
 
-    //获取用户密码
+    /// 获取用户密码
     pub fn get_pwd(&self) -> Option<&String> {
         self.pwd.as_ref()
     }
 
-    //获取Mqtt代理会话上下文的只读引用
+    /// 获取Mqtt代理会话上下文的只读引用
     pub fn get_context(&self) -> &SocketContext {
         &self.context
     }
 
-    //获取Mqtt代理会话上下文的可写引用
+    /// 获取Mqtt代理会话上下文的可写引用
     pub fn get_context_mut(&mut self) -> &mut SocketContext {
         &mut self.context
     }

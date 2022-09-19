@@ -10,7 +10,7 @@ use futures::future::{FutureExt, BoxFuture};
 
 use pi_hash::XHashMap;
 use pi_handler::SGenType;
-use tcp::driver::{Socket, AsyncIOWait};
+use tcp::Socket;
 
 use crate::{service::{HttpService, ServiceFactory},
             route::{RouterTab, HttpRoute},
@@ -18,9 +18,9 @@ use crate::{service::{HttpService, ServiceFactory},
             request::HttpRequest,
             response::HttpResponse};
 
-/*
-* Http路由服务上下文
-*/
+///
+/// Http路由服务上下文
+///
 #[derive(Clone)]
 pub struct GatewayContext {
     params:     Arc<RefCell<XHashMap<String, SGenType>>>,   //Http连接请求参数表
@@ -36,7 +36,7 @@ unsafe impl Send for GatewayContext {}
 unsafe impl Sync for GatewayContext {}
 
 impl GatewayContext {
-    //构建Http路由服务上下文
+    /// 构建Http路由服务上下文
     pub fn new() -> Self {
         GatewayContext {
             params: Arc::new(RefCell::new(XHashMap::default())),
@@ -49,32 +49,32 @@ impl GatewayContext {
         }
     }
 
-    //获取请求参数表的引用
+    /// 获取请求参数表的引用
     pub fn as_params(&self) -> &Arc<RefCell<XHashMap<String, SGenType>>> {
         &self.params
     }
 
-    //清空请求参数表
+    /// 清空请求参数表
     pub fn clear_params(&mut self) {
         self.params.borrow_mut().clear();
     }
 
-    //获取请求体已解析部分的只读引用
+    /// 获取请求体已解析部分的只读引用
     pub fn as_parts(&self) -> &XHashMap<String, SGenType> {
         &self.parts
     }
 
-    //获取请求体已解析部分的可写引用
+    /// 获取请求体已解析部分的可写引用
     pub fn as_mut_parts(&mut self) -> &mut XHashMap<String, SGenType> {
         &mut self.parts
     }
 
-    //清空请求体已解析部分
+    /// 清空请求体已解析部分
     pub fn clear_parts(&mut self) {
         self.parts.clear();
     }
 
-    //获取Http请求缓存参数
+    /// 获取Http请求缓存参数
     pub fn get_cache_args(&self) -> Option<(String, Mime, SystemTime)> {
         if let Some((file_path, mime, last_modified)) = &self.cache_args {
             return Some((file_path.clone(), mime.clone(), last_modified.clone()));
@@ -83,62 +83,62 @@ impl GatewayContext {
         None
     }
 
-    //设置Http请求缓存参数
+    /// 设置Http请求缓存参数
     pub fn set_cache_args(&mut self, args: Option<(String, Mime, SystemTime)>) {
         self.cache_args = args;
     }
 
-    //获取Http批量加载文件大小
+    /// 获取Http批量加载文件大小
     pub fn get_files_size(&self) -> u64 {
         self.files_size
     }
 
-    //设置Http批量加载文件大小
+    /// 设置Http批量加载文件大小
     pub fn set_files_size(&mut self, size: u64) {
         self.files_size = size;
     }
 
-    //获取Http批量加载文件数量
+    /// 获取Http批量加载文件数量
     pub fn get_files_len(&self) -> usize {
         self.files_len
     }
 
-    //设置Http批量加载文件数量
+    /// 设置Http批量加载文件数量
     pub fn set_files_len(&mut self, len: usize) {
         self.files_len = len;
     }
 
-    //获取属性数量
+    /// 获取属性数量
     pub fn len(&self) -> usize {
         self.attrs.len()
     }
 
-    //检查是否有指定属性
+    /// 检查是否有指定属性
     pub fn contains_key(&self, key: &String) -> bool {
         self.attrs.contains_key(key)
     }
 
-    //获取指定属性的值
+    /// 获取指定属性的值
     pub fn get(&self, key: &String) -> Option<&SGenType> {
         self.attrs.get(key)
     }
 
-    //设置指定属性的值，返回属性的上一个值
+    /// 设置指定属性的值，返回属性的上一个值
     pub fn set(&mut self, key: String, value: SGenType) -> Option<SGenType> {
         self.attrs.insert(key, value)
     }
 
-    //移除指定属性的值，返回被移除的值
+    /// 移除指定属性的值，返回被移除的值
     pub fn remove(&mut self, key: &String) -> Option<SGenType> {
         self.attrs.remove(key)
     }
 
-    //获取请求体未解析部分缓冲
+    /// 获取请求体未解析部分缓冲
     pub fn take_part_buf(&mut self) -> Option<Vec<u8>> {
         self.part_buf.take()
     }
 
-    //设置请求体未解析部分缓冲
+    /// 设置请求体未解析部分缓冲
     pub fn push_part_buf(&mut self, buf: &[u8]) {
         if let Some(part_buf) = &mut self.part_buf {
             return part_buf.put_slice(buf);
@@ -148,23 +148,26 @@ impl GatewayContext {
     }
 }
 
-/*
-* Http网关，每个Http连接和一个Http网关绑定
-*/
-pub struct HttpGateway<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> {
+///
+/// Http网关，每个Http连接和一个Http网关绑定
+///
+pub struct HttpGateway<S: Socket, H: Middleware<S, GatewayContext>> {
     context:    GatewayContext,                     //上下文
-    router_tab: RouterTab<S, W, GatewayContext, H>, //路由器表
+    router_tab: RouterTab<S, GatewayContext, H>,    //路由器表
 }
 
-unsafe impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> Send for HttpGateway<S, W, H> {}
-unsafe impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> Sync for HttpGateway<S, W, H> {}
+unsafe impl<S: Socket, H: Middleware<S, GatewayContext>> Send for HttpGateway<S, H> {}
+unsafe impl<S: Socket, H: Middleware<S, GatewayContext>> Sync for HttpGateway<S, H> {}
 
-impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> HttpService<S, W> for HttpGateway<S, W, H> {
+impl<S: Socket, H: Middleware<S, GatewayContext>> HttpService<S> for HttpGateway<S, H> {
     type Error = Error;
-    type Future = BoxFuture<'static, GenResult<HttpResponse<S, W>, Self::Error>>;
 
-    fn call(&mut self, req: HttpRequest<S, W>) -> Self::Future {
-        let middleware = self.router_tab.match_route(req.method(), req.url().path());
+    fn call(&mut self, req: HttpRequest<S>)
+            -> BoxFuture<'static, GenResult<HttpResponse, Self::Error>> {
+        let middleware = self
+            .router_tab
+            .match_route(req.method(),
+                         req.url().path());
         let mut context = self.context.clone();
 
         let future = async move {
@@ -194,7 +197,8 @@ impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> HttpService
                             },
                             _ => {
                                 //无效的请求返回，则立即返回错误
-                                Err(Error::new(ErrorKind::Other, "invalid middleware result"))
+                                Err(Error::new(ErrorKind::Other,
+                                               "invalid middleware result"))
                             }
                         }
                     },
@@ -204,21 +208,23 @@ impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> HttpService
                     },
                     _ => {
                         //无效的请求返回，则立即返回错误
-                        Err(Error::new(ErrorKind::Other, "invalid middleware result"))
+                        Err(Error::new(ErrorKind::Other,
+                                       "invalid middleware result"))
                     },
                 }
             } else {
                 //路由错误，则立即返回错误原因
-                Err(Error::new(ErrorKind::Other, "invalid route"))
+                Err(Error::new(ErrorKind::Other,
+                               "invalid route"))
             }
         };
         future.boxed()
     }
 }
 
-impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> HttpGateway<S, W, H> {
-    //创建指定路由器表的Http路由服务
-    pub fn with(tab: RouterTab<S, W, GatewayContext, H>) -> Self {
+impl<S: Socket, H: Middleware<S, GatewayContext>> HttpGateway<S, H> {
+    /// 创建指定路由器表的Http路由服务
+    pub fn with(tab: RouterTab<S, GatewayContext, H>) -> Self {
         HttpGateway {
             context: GatewayContext::new(),
             router_tab: tab,

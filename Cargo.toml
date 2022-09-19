@@ -7,10 +7,12 @@ members = [
   #"rpc_tmp",
   #"nodec",
   "tcp",
+  "new_tcp",
   "ws",
   "mqtt",
   "mqtt_proxy",
   "rpc",
+  "udp",
   "async_httpc",
   "async_wsc",
 ]

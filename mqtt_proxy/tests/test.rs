@@ -4,26 +4,36 @@ use std::sync::Arc;
 use std::mem::transmute;
 use std::time::Duration;
 use std::net::SocketAddr;
+use std::marker::PhantomData;
 
+use env_logger;
+
+use pi_async::rt::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue};
 use pi_atom::Atom;
 use pi_gray::GrayVersion;
 use pi_handler::{Args, Handler};
 
-use tcp::connect::TcpSocket;
-use tcp::tls_connect::TlsSocket;
-use tcp::server::{AsyncWaitsHandle, AsyncPortsFactory, SocketListener};
-use tcp::driver::{Socket, SocketConfig, AsyncIOWait, AsyncServiceFactory};
-use tcp::buffer_pool::WriteBufferPool;
-use tcp::util::TlsConfig;
-use ws::server::WebsocketListenerFactory;
+use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
+          connect::TcpSocket,
+          tls_connect::TlsSocket,
+          server::{PortsAdapterFactory, SocketListener},
+          utils::{TlsConfig, Ready}};
+use ws::{server::WebsocketListener,
+         connect::WsSocket,
+         frame::WsHead,
+         utils::{ChildProtocol, WsSession}};
 use mqtt::server::{WsMqttBrokerFactory, WssMqttBrokerFactory,
-                   register_listener, register_service};
+                   register_mqtt_listener, register_mqtt_service,
+                   register_mqtts_listener, register_mqtts_service};
 
 use mqtt_proxy::service::{MqttEvent, MqttConnectHandle, MqttProxyListener, MqttProxyService};
 
-struct TestMqttConnectHandler;
+struct TestMqttConnectHandler<S: Socket>(PhantomData<S>);
 
-impl Handler for TestMqttConnectHandler {
+unsafe impl<S: Socket> Send for TestMqttConnectHandler<S> {}
+unsafe impl<S: Socket> Sync for TestMqttConnectHandler<S> {}
+
+impl<S: Socket> Handler for TestMqttConnectHandler<S> {
     type A = MqttEvent;
     type B = ();
     type C = ();
@@ -34,14 +44,19 @@ impl Handler for TestMqttConnectHandler {
     type H = ();
     type HandleResult = ();
 
-    fn handle(&self, env: Arc<dyn GrayVersion>, _: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> Self::HandleResult {
-        let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const MqttConnectHandle) };
+    fn handle(&self,
+              env: Arc<dyn GrayVersion>, _: Atom,
+              args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> Self::HandleResult {
+        let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const MqttConnectHandle<S>) };
         match args {
-            Args::OneArgs(MqttEvent::Connect(socket_id, broker_name, client_id, keep_alive, is_clean_session, user, pwd, result)) => {
+            Args::OneArgs(MqttEvent::Connect(socket_id, broker_name, client_id, keep_alive, is_clean_session, user, pwd)) => {
                 //处理Mqtt连接
                 println!("!!!!!!Connect, socket_id: {:?}, broker_name: {:?}, client_id: {:?}, keep_alive: {:?}, is_clean_session: {:?}, user: {:?}, pwd: {:?}", socket_id, broker_name, client_id, keep_alive, is_clean_session, user, pwd);
-                result.set(Ok(()));
-                connect.wakeup();
+                thread::spawn(move || {
+                    while !connect.wakeup(Ok(())) {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                });
             }
             Args::OneArgs(MqttEvent::Disconnect(socket_id, broker_name, client_id, reason)) => {
                 //处理Mqtt连接关闭
@@ -54,9 +69,18 @@ impl Handler for TestMqttConnectHandler {
     }
 }
 
-struct TestMqttRequestHandler;
+impl<S: Socket> TestMqttConnectHandler<S> {
+    pub fn new() -> Self {
+        TestMqttConnectHandler(PhantomData)
+    }
+}
 
-impl Handler for TestMqttRequestHandler {
+struct TestMqttRequestHandler<S: Socket>(PhantomData<S>);
+
+unsafe impl<S: Socket> Send for TestMqttRequestHandler<S> {}
+unsafe impl<S: Socket> Sync for TestMqttRequestHandler<S> {}
+
+impl<S: Socket> Handler for TestMqttRequestHandler<S> {
     type A = MqttEvent;
     type B = ();
     type C = ();
@@ -68,9 +92,9 @@ impl Handler for TestMqttRequestHandler {
     type HandleResult = ();
 
     fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> Self::HandleResult {
-        let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const MqttConnectHandle) };
+        let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const MqttConnectHandle<S>) };
         match args {
-            Args::OneArgs(MqttEvent::Sub(socket_id, broker_name, client_id, topics, result)) => {
+            Args::OneArgs(MqttEvent::Sub(socket_id, broker_name, client_id, topics)) => {
                 //处理Mqtt订阅主题
                 println!("!!!!!!Sub, socket_id: {:?}, broker_name: {:?}, client_id: {:?}, topics: {:?}", socket_id, broker_name, client_id, topics);
 
@@ -78,8 +102,12 @@ impl Handler for TestMqttRequestHandler {
                     connect.sub(topic);
                 }
 
-                result.set(Ok(()));
-                connect.wakeup();
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(1000));
+                    while !connect.wakeup(Ok(())) {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                });
             },
             Args::OneArgs(MqttEvent::Unsub(socket_id, broker_name, client_id, topics)) => {
                 //处理Mqtt退订主题
@@ -103,29 +131,53 @@ impl Handler for TestMqttRequestHandler {
     }
 }
 
+impl<S: Socket> TestMqttRequestHandler<S> {
+    pub fn new() -> Self {
+        TestMqttRequestHandler(PhantomData)
+    }
+}
+
 #[test]
 fn test_mqtt_proxy_service() {
+    //启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
+
+    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
+                                                        None,
+                                                        None,
+                                                        None);
+
     let protocol_name = "mqttv3.1";
     let broker_name = "test_ws_mqtt";
     let port = 38080;
 
-    let broker_factory = Arc::new(WsMqttBrokerFactory::new(protocol_name, broker_name, port));
-    let event_handler = Arc::new(TestMqttConnectHandler);
-    let rpc_handler = Arc::new(TestMqttRequestHandler);
+    //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
+    let broker_factory = Arc::new(WsMqttBrokerFactory::new(protocol_name,
+                                                           broker_name,
+                                                           port));
+    let event_handler = Arc::new(TestMqttConnectHandler::<TcpSocket>::new());
+    let rpc_handler = Arc::new(TestMqttRequestHandler::<TcpSocket>::new());
     let listener = Arc::new(MqttProxyListener::with_handler(Some(event_handler)));
     let service = Arc::new(MqttProxyService::with_handler(Some(rpc_handler)));
-    register_listener(broker_name, listener);
-    register_service(broker_name, service);
+    register_mqtt_listener(broker_name, listener);
+    register_mqtt_service(broker_name, service);
 
-    let mut factory = AsyncPortsFactory::<TcpSocket>::new();
+    let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(port,
-                 Box::new(WebsocketListenerFactory::<TcpSocket>::with_protocol_factory(
-                     broker_factory)));
-    let mut config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
+                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol())));
+    let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
-    match SocketListener::bind(factory, buffer, config, 1024, 2 * 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(vec![rt],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               4096,
+                               4096,
+                               Some(10)) {
         Err(e) => {
             println!("!!!> Rpc Listener Bind Error, reason: {:?}", e);
         },
@@ -139,26 +191,34 @@ fn test_mqtt_proxy_service() {
 
 #[test]
 fn test_tls_mqtt_proxy_service() {
+    //启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
+
+    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
+                                                        None,
+                                                        None,
+                                                        None);
+
     let protocol_name = "mqttv3.1";
     let broker_name = "test_wss_mqtt";
     let port = 38080;
 
+    //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
     let broker_factory = Arc::new(WssMqttBrokerFactory::new(protocol_name, broker_name, port));
-    let event_handler = Arc::new(TestMqttConnectHandler);
-    let rpc_handler = Arc::new(TestMqttRequestHandler);
+    let event_handler = Arc::new(TestMqttConnectHandler::<TlsSocket>::new());
+    let rpc_handler = Arc::new(TestMqttRequestHandler::<TlsSocket>::new());
     let listener = Arc::new(MqttProxyListener::with_handler(Some(event_handler)));
     let service = Arc::new(MqttProxyService::with_handler(Some(rpc_handler)));
-    register_listener(broker_name, listener);
-    register_service(broker_name, service);
+    register_mqtts_listener(broker_name, listener);
+    register_mqtts_service(broker_name, service);
 
-    let mut factory = AsyncPortsFactory::<TlsSocket>::new();
+    let mut factory = PortsAdapterFactory::<TlsSocket>::new();
     factory.bind(port,
-                 Box::new(WebsocketListenerFactory::<TlsSocket>::with_protocol_factory(
-                     broker_factory)));
+                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol())));
     let tls_config = TlsConfig::new_server("",
                                            false,
-                                           "./3376363_msg.highapp.com.pem",
-                                           "./3376363_msg.highapp.com.key",
+                                           "./tests/7285407__17youx.cn.pem",
+                                           "./tests/7285407__17youx.cn.key",
                                            "",
                                            "",
                                            "",
@@ -167,9 +227,17 @@ fn test_tls_mqtt_proxy_service() {
                                            "").unwrap();
     let mut config = SocketConfig::with_tls("0.0.0.0", &[(port, tls_config)]);
     config.set_option(16384, 16384, 16384, 16);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
-    match SocketListener::bind(factory, buffer, config, 1024, 2 * 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(vec![rt],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               4096,
+                               4096,
+                               Some(10)) {
         Err(e) => {
             println!("!!!> Rpc Listener Bind Error, reason: {:?}", e);
         },

@@ -10,16 +10,17 @@ use futures::future::{FutureExt, BoxFuture};
 
 use pi_gray::GrayVersion;
 use parking_lot::RwLock;
-use tcp::driver::{Socket, AsyncIOWait};
 use pi_handler::{Args, Handler, SGenType};
 use pi_atom::Atom;
 use pi_hash::XHashMap;
+
+use tcp::Socket;
 
 use crate::{gateway::GatewayContext,
             middleware::{MiddlewareResult, Middleware},
             request::HttpRequest,
             response::{ResponseHandler, HttpResponse},
-            util::HttpRecvResult};
+            utils::HttpRecvResult};
 
 /*
 * Http连接句柄，用于为Http端口中间件中的handler提供灰度
@@ -55,16 +56,16 @@ impl GrayVersion for HttpGray {
     }
 }
 
-/*
-* Http端口中间件，连接Http与js虚拟机，用于将Http请求转递给js逻辑代码，并在js逻辑代码处理完成后将返回的值转换为Http响应
-*/
-pub struct HttpPort<S: Socket> {
+///
+/// Http端口中间件，连接Http与js虚拟机，用于将Http请求转递给js逻辑代码，并在js逻辑代码处理完成后将返回的值转换为Http响应
+///
+pub struct HttpPort {
     gray:       RwLock<Option<usize>>,                  //Http端口的灰度
     handler:    Arc<dyn Handler<
         A = SocketAddr,                                 //对端地址
         B = Arc<HeaderMap>,                             //请求头
         C = Arc<RefCell<XHashMap<String, SGenType>>>,   //请求参数或请求Body
-        D = ResponseHandler<S>,                         //响应句柄
+        D = ResponseHandler,                            //响应句柄
         E = (),
         F = (),
         G = (),
@@ -73,12 +74,14 @@ pub struct HttpPort<S: Socket> {
     >>,                                                 //Http请求服务异步处理器
 }
 
-unsafe impl<S: Socket> Send for HttpPort<S> {}
-unsafe impl<S: Socket> Sync for HttpPort<S> {}
+unsafe impl Send for HttpPort {}
+unsafe impl Sync for HttpPort {}
 
-impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for HttpPort<S> {
-    fn request<'a>(&'a self, context: &'a mut GatewayContext, req: HttpRequest<S, W>)
-                   -> BoxFuture<'a, MiddlewareResult<S, W>> {
+impl<S: Socket> Middleware<S, GatewayContext> for HttpPort {
+    fn request<'a>(&'a self,
+                   context: &'a mut GatewayContext,
+                   req: HttpRequest<S>)
+                   -> BoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             //处理请求
             let uid = req.get_handle().get_uid(); //获取当前http连接的唯一id
@@ -103,13 +106,17 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for HttpPort<S>
                 }
             }
 
-            let resp = HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
+            let resp = HttpResponse::new(2);
             if let Some(resp_handler) = resp.get_response_handler() {
                 let http_gray = HttpGray {
                     uid,
                     gray,
                 };
-                self.handler.handle(Arc::new(http_gray), Atom::from(req.url().path()), Args::FourArgs(remote_addr, headers, args, resp_handler));
+                self
+                    .handler
+                    .handle(Arc::new(http_gray),
+                            Atom::from(req.url().path()),
+                            Args::FourArgs(remote_addr, headers, args, resp_handler));
             }
 
             //完成请求处理
@@ -118,8 +125,11 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for HttpPort<S>
         future.boxed()
     }
 
-    fn response<'a>(&'a self, context: &'a mut GatewayContext, req: HttpRequest<S, W>, resp: HttpResponse<S, W>)
-                    -> BoxFuture<'a, MiddlewareResult<S, W>> {
+    fn response<'a>(&'a self,
+                    context: &'a mut GatewayContext,
+                    req: HttpRequest<S>,
+                    resp: HttpResponse)
+                    -> BoxFuture<'a, MiddlewareResult<S>> {
         let mut body_bufs: Vec<Vec<u8>> = Vec::new();
         let mut response = resp;
         let future = async move {
@@ -159,13 +169,13 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for HttpPort<S>
     }
 }
 
-impl<S: Socket> HttpPort<S> {
-    //构建指定异步请求处理器的Http端口中间件
+impl HttpPort {
+    /// 构建指定异步请求处理器的Http端口中间件
     pub fn with_handler(gray: Option<usize>, handler: Arc<dyn Handler<
         A = SocketAddr,
         B = Arc<HeaderMap>,
         C = Arc<RefCell<XHashMap<String, SGenType>>>,
-        D = ResponseHandler<S>,
+        D = ResponseHandler,
         E = (),
         F = (),
         G = (),

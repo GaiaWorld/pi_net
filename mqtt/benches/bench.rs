@@ -16,7 +16,7 @@ use mqtt311::{TopicPath, Topic};
 
 use hash::XHashMap;
 
-use mqtt::util::PathTree;
+use mqtt::utils::PathTree;
 
 #[bench]
 fn bench_topic_tree_by_base(b: &mut Bencher) {

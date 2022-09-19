@@ -14,14 +14,16 @@ use log::warn;
 use pi_atom::Atom;
 use pi_hash::XHashMap;
 
-use tcp::{server::AsyncWaitsHandle, driver::{Socket, PendSocket}, tls_connect::TlsSocket, util::SocketEvent};
+use tcp::{Socket, SocketEvent,
+          tls_connect::TlsSocket,
+          utils::Ready};
 use ws::{connect::WsSocket,
-         util::{ChildProtocol, ChildProtocolFactory, WsFrameType, WsSession}};
+         utils::{ChildProtocol, WsFrameType, WsSession}};
 
 use crate::{server::MqttBrokerProtocol,
             broker::{Retain, MqttBroker},
             session::{MqttConnect, MqttSession, QosZeroSession},
-            util::BrokerSession};
+            utils::BrokerSession};
 use futures::FutureExt;
 
 // /*
@@ -31,9 +33,9 @@ use futures::FutureExt;
 //     pub static ref WSS_MQTT3_BROKER: MqttBroker<TlsSocket> = MqttBroker::new();
 // }
 
-/*
-* 基于Tls Websocket的Mqtt3.1.1协议，服务质量为Qos0
-*/
+///
+/// 基于Tls Websocket的Mqtt3.1.1协议，服务质量为Qos0
+///
 #[derive(Clone)]
 pub struct WssMqtt311 {
     protocol_name:  String,                 //协议名
@@ -45,17 +47,19 @@ pub struct WssMqtt311 {
 unsafe impl Send for WssMqtt311 {}
 unsafe impl Sync for WssMqtt311 {}
 
-impl ChildProtocol<TlsSocket, AsyncWaitsHandle> for WssMqtt311 {
+impl ChildProtocol<TlsSocket> for WssMqtt311 {
     fn protocol_name(&self) -> &str {
         self.protocol_name.as_str()
     }
 
     fn decode_protocol(&self,
-                       connect: WsSocket<TlsSocket, AsyncWaitsHandle>,
-                       waits: AsyncWaitsHandle,
+                       connect: WsSocket<TlsSocket>,
                        context: &mut WsSession) -> BoxFuture<'static, Result<()>> {
         let ws_mqtt = self.clone();
-        match context.as_buf().read_packet() {
+        match context
+            .pop_msg()
+            .as_slice().
+            read_packet() {
             Err(e) => {
                 //解码Mqtt报文失败，则立即返回错误原因
                 async move {
@@ -66,13 +70,13 @@ impl ChildProtocol<TlsSocket, AsyncWaitsHandle> for WssMqtt311 {
                 let future = async move {
                     match packet {
                         Packet::Connect(packet) => {
-                            accept(ws_mqtt, connect, waits, packet).await
+                            accept(ws_mqtt, connect, packet).await
                         },
                         Packet::Publish(packet) => {
-                            publish(ws_mqtt, connect, waits, packet).await
+                            publish(ws_mqtt, connect, packet).await
                         },
                         Packet::Subscribe(packet) => {
-                            subscribe(ws_mqtt, connect, waits, packet).await
+                            subscribe(ws_mqtt, connect, packet).await
                         },
                         Packet::Unsubscribe(packet) => {
                             unsubscribe(ws_mqtt, connect, packet)
@@ -94,7 +98,10 @@ impl ChildProtocol<TlsSocket, AsyncWaitsHandle> for WssMqtt311 {
         }
     }
 
-    fn close_protocol(&self, connect: WsSocket<TlsSocket, AsyncWaitsHandle>, mut context: WsSession, reason: Result<()>) {
+    fn close_protocol(&self,
+                      connect: WsSocket<TlsSocket>,
+                      mut context: WsSession,
+                      reason: Result<()>) {
         //连接已关闭，则立即释放Ws会话的上下文
         match context.get_context_mut().remove::<BrokerSession>() {
             Err(e) => {
@@ -115,7 +122,12 @@ impl ChildProtocol<TlsSocket, AsyncWaitsHandle> for WssMqtt311 {
 
                         //处理Mqtt连接关闭
                         if let Some(listener) = self.broker.get_listener() {
-                            listener.0.closed(MqttBrokerProtocol::WssMqtt311(Arc::new(self.clone())), session, context, reason);
+                            listener
+                                .0
+                                .closed(MqttBrokerProtocol::WssMqtt311(Arc::new(self.clone())),
+                                        session,
+                                        context,
+                                        reason);
                         }
                     }
                 }
@@ -123,46 +135,53 @@ impl ChildProtocol<TlsSocket, AsyncWaitsHandle> for WssMqtt311 {
         }
     }
 
-    fn protocol_timeout(&self, connect: WsSocket<TlsSocket, AsyncWaitsHandle>, context: &mut WsSession, event: SocketEvent) -> Result<()> {
+    fn protocol_timeout(&self,
+                        connect: WsSocket<TlsSocket>,
+                        context: &mut WsSession,
+                        event: SocketEvent) -> Result<()> {
         if let Err(e) = send_packet(&connect, &Packet::Disconnect) {
             //发送关闭连接报文失败，则立即返回错误原因
-            return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt send failed by disconnect, reason: {:?}", e)));
+            return Err(Error::new(ErrorKind::BrokenPipe,
+                                  format!("mqtt send failed by disconnect, reason: {:?}",
+                                          e)));
         }
 
-        warn!("!!!> Mqtt Session Timeout, uid: {:?}, local: {:?}, remote: {:?}", connect.get_uid(), connect.get_local(), connect.get_remote());
+        warn!("!!!> Mqtt Session Timeout, uid: {:?}, local: {:?}, remote: {:?}",
+            connect.get_uid(),
+            connect.get_local(),
+            connect.get_remote());
         Ok(())
     }
 }
 
-//更新当前会话的连接超时时长
-fn update_timeout(connect: &WsSocket<TlsSocket, AsyncWaitsHandle>, client_id: String, keep_alive: u16) {
+// 更新当前会话的连接超时时长
+fn update_timeout(connect: &WsSocket<TlsSocket>,
+                  client_id: String,
+                  keep_alive: u16) {
     //设置当前会话超时时长，一般为keep_alive的1.5倍
     let mut event = SocketEvent::empty();
     event.set::<String>(client_id);
     connect.set_timeout(keep_alive as usize * 1500, event);
 }
 
-//发送指定的Mqtt报文，一般用于报文回应
-fn send_packet(connect: &WsSocket<TlsSocket, AsyncWaitsHandle>,
+// 发送指定的Mqtt报文，一般用于报文回应
+fn send_packet(connect: &WsSocket<TlsSocket>,
                packet: &Packet) -> Result<()> {
     let mut buf: Cursor<Vec<u8>> = Cursor::new(Vec::new());
     if let Err(e) = buf.write_packet(packet) {
         //序列化Mqtt报文失败
-        return Err(Error::new(ErrorKind::InvalidData, format!("mqtt send failed, reason: {:?}", e)));
+        return Err(Error::new(ErrorKind::InvalidData,
+                              format!("mqtt send failed, reason: {:?}",
+                                      e)));
     }
 
     //通过Ws连接发送指定报文
-    if let Some(mut payload) = connect.alloc() {
-        payload.get_iolist_mut().push_back(buf.into_inner().into());
-        return connect.send(WssMqtt311::WS_MSG_TYPE, payload);
-    }
-
-    Err(Error::new(ErrorKind::Other, "send tls mqtt packet failed, reason: alloc write buffer failed"))
+    connect.send(WssMqtt311::WS_MSG_TYPE, buf.into_inner())
 }
 
-//广播指定的Mqtt报文，用于发布消息的发送
-pub fn broadcast_packet(connects: &[WsSocket<TlsSocket, AsyncWaitsHandle>],
-                    packet: &Packet) -> Result<()> {
+// 广播指定的Mqtt报文，用于发布消息的发送
+pub fn broadcast_packet(connects: &[WsSocket<TlsSocket>],
+                        packet: &Packet) -> Result<()> {
     if connects.len() == 0 {
         //Ws连接列表为空，则忽略
         return Ok(());
@@ -171,7 +190,9 @@ pub fn broadcast_packet(connects: &[WsSocket<TlsSocket, AsyncWaitsHandle>],
     let mut buf: Cursor<Vec<u8>> = Cursor::new(Vec::new());
     if let Err(e) = buf.write_packet(packet) {
         //序列化Mqtt报文失败
-        return Err(Error::new(ErrorKind::InvalidData, format!("mqtt send failed, reason: {:?}", e)));
+        return Err(Error::new(ErrorKind::InvalidData,
+                              format!("mqtt send failed, reason: {:?}",
+                                      e)));
     }
 
     //通过Ws连接列表广播指定报文
@@ -180,21 +201,17 @@ pub fn broadcast_packet(connects: &[WsSocket<TlsSocket, AsyncWaitsHandle>],
             continue;
         }
 
-        if let Some(mut payload) = connect.alloc() {
-            payload.get_iolist_mut().push_back(buf.into_inner().into());
-            return WsSocket::<TlsSocket, AsyncWaitsHandle>::broadcast(connects, WssMqtt311::WS_MSG_TYPE, payload);
-        }
-
-        return Err(Error::new(ErrorKind::Other, "broadcast tls mqtt packet failed, reason: alloc write buffer failed"));
+        return WsSocket::<TlsSocket>::broadcast(connects,
+                                                WssMqtt311::WS_MSG_TYPE,
+                                                buf.into_inner());
     }
 
     Ok(())
 }
 
-//接受Mqtt连接请求
+// 接受Mqtt连接请求
 async fn accept(protocol: WssMqtt311,
-                connect: WsSocket<TlsSocket, AsyncWaitsHandle>,
-                waits: AsyncWaitsHandle,
+                connect: WsSocket<TlsSocket>,
                 packet: Connect) -> Result<()> {
     let clean_session = packet.clean_session;
     let client_id = packet.client_id.clone();
@@ -205,7 +222,8 @@ async fn accept(protocol: WssMqtt311,
         if let Some(session) = protocol.broker.get_session(&client_id) {
             if session.is_accepted() {
                 //当前客户端已连接，则立即返回错误原因
-                return Err(Error::new(ErrorKind::AlreadyExists, "mqtt connect failed, reason: connect already exist"));
+                return Err(Error::new(ErrorKind::AlreadyExists,
+                                      "mqtt connect failed, reason: connect already exist"));
             }
         }
     }
@@ -231,10 +249,13 @@ async fn accept(protocol: WssMqtt311,
 
         if let Err(e) = send_packet(&connect, &Packet::Connack(ack)) {
             //发送回应失败，则立即返回错误原因
-            return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt send failed by connect, reason: {:?}", e)));
+            return Err(Error::new(ErrorKind::BrokenPipe,
+                                  format!("mqtt send failed by connect, reason: {:?}",
+                                          e)));
         }
 
-        return Err(Error::new(ErrorKind::ConnectionAborted, "mqtt connect failed, reason: invalid protocol version"));
+        return Err(Error::new(ErrorKind::ConnectionAborted,
+                              "mqtt connect failed, reason: invalid protocol version"));
     }
 
     //在Ws连接会话中绑定当前连接与当前客户端会话
@@ -257,13 +278,10 @@ async fn accept(protocol: WssMqtt311,
     let mqtt_connect = reset_session(&protocol, connect.clone(), client_id, packet);
     if let Some(listener) = protocol.broker.get_listener() {
         //指定的监听器存在，则执行已连接处理
-        let r = listener.0.connected(MqttBrokerProtocol::WssMqtt311(Arc::new(protocol)), mqtt_connect);
-        if r.is_wait() {
-            //需要等待异步回应，则挂起连接，并等待握手检查完成
-            PendSocket::pending(connect.get_token().clone(), waits).await;
-        }
-
-        if let Some(Err(e)) = r.get() {
+        if let Err(e) = listener
+            .0
+            .connected(MqttBrokerProtocol::WssMqtt311(Arc::new(protocol)),
+                       mqtt_connect).await {
             //连接检查失败，则立即回应连接未授权
             code = ConnectReturnCode::NotAuthorized
         }
@@ -276,15 +294,17 @@ async fn accept(protocol: WssMqtt311,
     };
     if let Err(e) = send_packet(&connect, &Packet::Connack(ack)) {
         //发送回应失败，则立即返回错误原因
-        return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt send failed by connect, reason: {:?}", e)));
+        return Err(Error::new(ErrorKind::BrokenPipe,
+                              format!("mqtt send failed by connect, reason: {:?}",
+                                      e)));
     }
 
     Ok(())
 }
 
-//创建新会话，并重置会话
+// 创建新会话，并重置会话
 fn reset_session(protocol: &WssMqtt311,
-                 connect: WsSocket<TlsSocket, AsyncWaitsHandle>,
+                 connect: WsSocket<TlsSocket>,
                  client_id: String,
                  packet: Connect) -> Arc<QosZeroSession<TlsSocket>> {
     let mut session = QosZeroSession::with_client_id(client_id.clone());
@@ -302,23 +322,28 @@ fn reset_session(protocol: &WssMqtt311,
     protocol.broker.insert_session(client_id, session)
 }
 
-//获取Ws连接绑定的客户端id和客户端保持时长
+// 获取Ws连接绑定的客户端id和客户端保持时长
 #[inline(always)]
-fn get_client_context(connect: &WsSocket<TlsSocket, AsyncWaitsHandle>) -> Result<(String, u16)> {
-    if let Some(handle) = connect.get_session().unwrap().as_ref().get_context().get::<BrokerSession>() {
+fn get_client_context(connect: &WsSocket<TlsSocket>) -> Result<(String, u16)> {
+    if let Some(handle) = connect
+        .get_session()
+        .unwrap()
+        .as_ref()
+        .get_context()
+        .get::<BrokerSession>() {
         //Ws连接绑定的客户端存在
         let h = handle.as_ref();
         Ok((h.get_client_id().clone(), h.get_keep_alive()))
     } else {
         //Ws连接绑定的客户端不存在，则立即返回错误原因
-        Err(Error::new(ErrorKind::ConnectionRefused, "mqtt subscribe failed, reason: invalid connect"))
+        Err(Error::new(ErrorKind::ConnectionRefused,
+                       "mqtt subscribe failed, reason: invalid connect"))
     }
 }
 
-//发布消息
+// 发布消息
 async fn publish(protocol: WssMqtt311,
-                 connect: WsSocket<TlsSocket, AsyncWaitsHandle>,
-                 waits: AsyncWaitsHandle,
+                 connect: WsSocket<TlsSocket>,
                  mut packet: Publish) -> Result<()> {
     let (client_id, keep_alive) = match get_client_context(&connect) {
         Err(e) => {
@@ -333,7 +358,8 @@ async fn publish(protocol: WssMqtt311,
     let qos = packet.qos.to_u8();
     if qos > protocol.get_qos().to_u8() {
         //如果客户端要求的发布消息的Qos大于服务端支持的最大Qos，则立即返回错误原因
-        return Err(Error::new(ErrorKind::InvalidData, "mqtt publish failed, reason: invalid qos"));
+        return Err(Error::new(ErrorKind::InvalidData,
+                              "mqtt publish failed, reason: invalid qos"));
     }
 
     let topic_path = if let Ok(path) = TopicPath::from_str(packet.topic_name.as_str()) {
@@ -341,11 +367,14 @@ async fn publish(protocol: WssMqtt311,
         path
     } else {
         //解析发布的主题失败，则立即返回错误原因
-        return Err(Error::new(ErrorKind::InvalidData, format!("mqtt publish failed, topic: {:?}, reason: parse topic error", packet.topic_name)));
+        return Err(Error::new(ErrorKind::InvalidData,
+                              format!("mqtt publish failed, topic: {:?}, reason: parse topic error",
+                                      packet.topic_name)));
     };
     if topic_path.wildcards || topic_path.path.is_empty() {
         //发布消息的主题为空，或者有通匹符，则立即返回错误原因
-        return Err(Error::new(ErrorKind::InvalidData, "mqtt publish failed, reason: invalid topic"));
+        return Err(Error::new(ErrorKind::InvalidData,
+                              "mqtt publish failed, reason: invalid topic"));
     }
 
     //修改需要待发送的发布消息报文，并向订阅了指定主题的客户端发送当前报文
@@ -360,11 +389,21 @@ async fn publish(protocol: WssMqtt311,
         //如果有服务，则只执行服务
         if let Some(session) = protocol.broker.get_session(&client_id) {
             let is_passive_receive = session.is_passive_receive();
-            let result = service.0.publish(MqttBrokerProtocol::WssMqtt311(Arc::new(protocol)), session, packet.topic_name.clone(), packet.payload);
+            let result = service
+                .0
+                .publish(MqttBrokerProtocol::WssMqtt311(Arc::new(protocol)),
+                         session.clone(),
+                         packet.topic_name.clone(),
+                         packet.payload);
 
             if is_passive_receive {
                 //需要被动接收，则立即挂起连接，并等待服务回应
-                PendSocket::pending(connect.get_token().clone(), waits).await;
+                if let Some(hibernate) = session.hibernate(Ready::Writable) {
+                    return hibernate.await;
+                } else {
+                    //连接已关闭，则立即退出
+                    return Ok(());
+                }
             }
 
             return result;
@@ -374,9 +413,11 @@ async fn publish(protocol: WssMqtt311,
     //如果指定主题没有服务，则执行标准发布
     let mut is_public = true; //是否为公共主题
 
-    if let Some(sessions) = protocol.broker.subscribed(is_public, &topic_path.path, qos, retain) {
+    if let Some(sessions) = protocol
+        .broker
+        .subscribed(is_public, &topic_path.path, qos, retain) {
         //指定主题有订阅
-        let mut connects: Vec<WsSocket<TlsSocket, AsyncWaitsHandle>> = Vec::with_capacity(sessions.len());
+        let mut connects: Vec<WsSocket<TlsSocket>> = Vec::with_capacity(sessions.len());
         for session in sessions {
             //返回会话绑定的Ws连接
             if let Some(connect) = session.get_connect() {
@@ -385,17 +426,18 @@ async fn publish(protocol: WssMqtt311,
         };
         if let Err(e) = broadcast_packet(&connects[..], &Packet::Publish(packet)) {
             //发布消息失败，则立即返回错误原因
-            return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt broadcast failed by publish, reason: {:?}", e)));
+            return Err(Error::new(ErrorKind::BrokenPipe,
+                                  format!("mqtt broadcast failed by publish, reason: {:?}",
+                                          e)));
         }
     }
 
     Ok(())
 }
 
-//订阅主题
+// 订阅主题
 async fn subscribe(protocol: WssMqtt311,
-                   connect: WsSocket<TlsSocket, AsyncWaitsHandle>,
-                   waits: AsyncWaitsHandle,
+                   connect: WsSocket<TlsSocket>,
                    packet: Subscribe) -> Result<()> {
     let (client_id, keep_alive) = match get_client_context(&connect) {
         Err(e) => {
@@ -418,13 +460,13 @@ async fn subscribe(protocol: WssMqtt311,
             for topic in &topics {
                 sub_topics.push((topic.topic_path.clone(), topic.qos.to_u8()));
             }
-            let r = service.0.subscribe(MqttBrokerProtocol::WssMqtt311(Arc::new(protocol.clone())), session, sub_topics);
-            if r.is_wait() {
-                //需要等待异步回应，则挂起连接，并等待订阅完成
-                PendSocket::pending(connect.get_token().clone(), waits).await;
-            }
 
-            if let Some(Err(_)) = r.get() {
+            if let Err(_) = service
+                .0
+                .subscribe(MqttBrokerProtocol::WssMqtt311(
+                    Arc::new(protocol.clone())),
+                           session,
+                           sub_topics).await {
                 //返回订阅主题失败
                 for _ in topics {
                     return_codes.push(SubscribeReturnCodes::Failure);
@@ -452,7 +494,10 @@ async fn subscribe(protocol: WssMqtt311,
                     return_codes.push(SubscribeReturnCodes::Success(qos));
                 }
 
-                retains = protocol.broker.subscribe(session.clone(), topic.topic_path);
+                retains = protocol
+                    .broker
+                    .subscribe(session.clone(),
+                               topic.topic_path);
             }
         }
     }
@@ -464,7 +509,9 @@ async fn subscribe(protocol: WssMqtt311,
     };
     if let Err(e) = send_packet(&connect, &Packet::Suback(ack)) {
         //发送回应失败，则立即返回错误原因
-        return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt send failed by subscribe, reason: {:?}", e)));
+        return Err(Error::new(ErrorKind::BrokenPipe,
+                              format!("mqtt send failed by subscribe, reason: {:?}",
+                                      e)));
     }
 
     if let Some(r) = retains {
@@ -484,9 +531,9 @@ async fn subscribe(protocol: WssMqtt311,
     Ok(())
 }
 
-//退订主题
+// 退订主题
 fn unsubscribe(protocol: WssMqtt311,
-               connect: WsSocket<TlsSocket, AsyncWaitsHandle>,
+               connect: WsSocket<TlsSocket>,
                packet: Unsubscribe) -> Result<()> {
     let (client_id, keep_alive) = match get_client_context(&connect) {
         Err(e) => {
@@ -503,8 +550,14 @@ fn unsubscribe(protocol: WssMqtt311,
     if let Some(service) = protocol.broker.get_service() {
         //如果有服务，则只执行服务
         if let Some(session) = protocol.broker.get_session(&client_id) {
-            if let Err(e) = service.0.unsubscribe(MqttBrokerProtocol::WssMqtt311(Arc::new(protocol)), session, topics.clone()) {
-                return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt unsubscribe failed, reason: {:?}", e)));
+            if let Err(e) = service
+                .0
+                .unsubscribe(MqttBrokerProtocol::WssMqtt311(Arc::new(protocol)),
+                             session,
+                             topics.clone()) {
+                return Err(Error::new(ErrorKind::BrokenPipe,
+                                      format!("mqtt unsubscribe failed, reason: {:?}",
+                                              e)));
             }
         }
     } else {
@@ -520,14 +573,16 @@ fn unsubscribe(protocol: WssMqtt311,
     //回应退订主题
     if let Err(e) = send_packet(&connect, &Packet::Unsuback(pkid)) {
         //发送回应失败，则立即返回错误原因
-        return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt send failed by unsubscribe, reason: {:?}", e)));
+        return Err(Error::new(ErrorKind::BrokenPipe,
+                              format!("mqtt send failed by unsubscribe, reason: {:?}",
+                                      e)));
     }
 
     Ok(())
 }
 
-//处理ping请求
-fn ping_req(connect: WsSocket<TlsSocket, AsyncWaitsHandle>) -> Result<()> {
+// 处理ping请求
+fn ping_req(connect: WsSocket<TlsSocket>) -> Result<()> {
     match get_client_context(&connect) {
         Err(e) => {
             return Err(e);
@@ -539,14 +594,16 @@ fn ping_req(connect: WsSocket<TlsSocket, AsyncWaitsHandle>) -> Result<()> {
 
     if let Err(e) = send_packet(&connect, &Packet::Pingresp) {
         //发送回应失败，则立即返回错误原因
-        return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt send failed by ping, reason: {:?}", e)));
+        return Err(Error::new(ErrorKind::BrokenPipe,
+                              format!("mqtt send failed by ping, reason: {:?}",
+                                      e)));
     }
 
     Ok(())
 }
 
 //处理关闭连接请求
-fn disconnect(connect: WsSocket<TlsSocket, AsyncWaitsHandle>) -> Result<()> {
+fn disconnect(connect: WsSocket<TlsSocket>) -> Result<()> {
     connect.close(Ok(()))
 }
 

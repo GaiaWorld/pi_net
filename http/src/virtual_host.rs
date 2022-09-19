@@ -4,18 +4,19 @@ use std::io::{Error, Result, ErrorKind};
 use pi_hash::XHashMap;
 use pi_atom::Atom;
 use pi_handler::{Args, Handler, SGenType};
-use tcp::driver::{Socket, AsyncIOWait};
+
+use tcp::Socket;
 
 use crate::{service::{HttpService, ServiceFactory},
             gateway::{GatewayContext, HttpGateway},
             route::{RouterTab, HttpRoute},
             middleware::Middleware};
 
-/*
-* 虚拟主机池
-*/
-pub trait VirtualHostPool<S: Socket, W: AsyncIOWait>: Clone + Send + Sync + 'static {
-    type Host: ServiceFactory<S, W>;
+///
+/// 虚拟主机池
+///
+pub trait VirtualHostPool<S: Socket>: Clone + Send + Sync + 'static {
+    type Host: ServiceFactory<S>;
 
     //获取虚拟主机数量
     fn size(&self) -> usize;
@@ -27,22 +28,22 @@ pub trait VirtualHostPool<S: Socket, W: AsyncIOWait>: Clone + Send + Sync + 'sta
     fn add(&mut self, name: &str, host: Self::Host) -> Result<()>;
 }
 
-/*
-* 虚拟主机表
-*/
-pub struct VirtualHostTab<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>>(Arc<XHashMap<Atom, VirtualHost<S, W, H>>>);
+///
+/// 虚拟主机表
+///
+pub struct VirtualHostTab<S: Socket, H: Middleware<S, GatewayContext>>(Arc<XHashMap<Atom, VirtualHost<S, H>>>);
 
-unsafe impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> Send for VirtualHostTab<S, W, H> {}
-unsafe impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> Sync for VirtualHostTab<S, W, H> {}
+unsafe impl<S: Socket, H: Middleware<S, GatewayContext>> Send for VirtualHostTab<S, H> {}
+unsafe impl<S: Socket, H: Middleware<S, GatewayContext>> Sync for VirtualHostTab<S, H> {}
 
-impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> Clone for VirtualHostTab<S, W, H> {
+impl<S: Socket, H: Middleware<S, GatewayContext>> Clone for VirtualHostTab<S, H> {
     fn clone(&self) -> Self {
         VirtualHostTab(self.0.clone())
     }
 }
 
-impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> VirtualHostPool<S, W> for VirtualHostTab<S, W, H> {
-    type Host = VirtualHost<S, W, H>;
+impl<S: Socket, H: Middleware<S, GatewayContext>> VirtualHostPool<S> for VirtualHostTab<S, H> {
+    type Host = VirtualHost<S, H>;
 
     fn size(&self) -> usize {
         self.0.len()
@@ -63,24 +64,24 @@ impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> VirtualHost
     }
 }
 
-impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> VirtualHostTab<S, W, H> {
+impl<S: Socket, H: Middleware<S, GatewayContext>> VirtualHostTab<S, H> {
     //构建虚拟主机表
     pub fn new() -> Self {
         VirtualHostTab(Arc::new(XHashMap::default()))
     }
 }
 
-/*
-* 虚拟主机，即Http网关工厂
-*/
-pub struct VirtualHost<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> {
-    router_tab: RouterTab<S, W, GatewayContext, H>, //路由器表
+///
+/// 虚拟主机，即Http网关工厂
+///
+pub struct VirtualHost<S: Socket, H: Middleware<S, GatewayContext>> {
+    router_tab: RouterTab<S, GatewayContext, H>, //路由器表
 }
 
-unsafe impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> Send for VirtualHost<S, W, H> {}
-unsafe impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> Sync for VirtualHost<S, W, H> {}
+unsafe impl<S: Socket, H: Middleware<S, GatewayContext>> Send for VirtualHost<S, H> {}
+unsafe impl<S: Socket, H: Middleware<S, GatewayContext>> Sync for VirtualHost<S, H> {}
 
-impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> Clone for VirtualHost<S, W, H> {
+impl<S: Socket, H: Middleware<S, GatewayContext>> Clone for VirtualHost<S, H> {
     fn clone(&self) -> Self {
         VirtualHost {
             router_tab: self.router_tab.clone(),
@@ -88,17 +89,17 @@ impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> Clone for V
     }
 }
 
-impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> ServiceFactory<S, W> for VirtualHost<S, W, H> {
-    type Service = HttpGateway<S, W, H>;
+impl<S: Socket, H: Middleware<S, GatewayContext>> ServiceFactory<S> for VirtualHost<S, H> {
+    type Service = HttpGateway<S, H>;
 
     fn new_service(&self) -> Self::Service {
         HttpGateway::with(self.router_tab.clone())
     }
 }
 
-impl<S: Socket, W: AsyncIOWait, H: Middleware<S, W, GatewayContext>> VirtualHost<S, W, H> {
-    //构建指定Http路由配置和Http请求处理器的Http网关工厂
-    pub fn with(route: HttpRoute<S, W, GatewayContext, H>) -> Self {
+impl<S: Socket, H: Middleware<S, GatewayContext>> VirtualHost<S, H> {
+    /// 构建指定Http路由配置和Http请求处理器的Http网关工厂
+    pub fn with(route: HttpRoute<S, GatewayContext, H>) -> Self {
         VirtualHost {
             router_tab: route.into(),
         }

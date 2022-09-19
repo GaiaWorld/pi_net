@@ -13,39 +13,46 @@ use crossbeam_channel::{Sender, Receiver, unbounded};
 use log::warn;
 
 use pi_atom::Atom;
-use tcp::driver::{Socket, AsyncIOWait};
 use pi_hash::XHashMap;
 use pi_adler32::adler32 as encode_adler32;
+
+use tcp::Socket;
 
 use crate::{request::HttpRequest, response::HttpResponse};
 use crate::static_cache::CacheRes::Cache;
 
-/*
-* 支持的Http请求缓存指令
-*/
+///
+/// 支持的Http请求缓存指令
+///
 const REQUEST_NO_STORE_CONTROL_CMD: &str = "no-store";  //不缓存资源
 const REQUEST_MAX_AGE_CONTROL_CMD: &str = "max-age";    //获取过期时间不大于指定秒数的资源
 
-/*
-* 根据Http请求头的验证缓存是否未修改
-*/
-pub fn is_unmodified<S: Socket, W: AsyncIOWait>(cache: &StaticCache,
-                                                req: &HttpRequest<S, W>,
-                                                owner: Option<Atom>,
-                                                key: Atom) -> Result<Option<bool>> {
+///
+/// 根据Http请求头的验证缓存是否未修改
+///
+pub fn is_unmodified<S: Socket>(cache: &StaticCache,
+                                req: &HttpRequest<S>,
+                                owner: Option<Atom>,
+                                key: Atom) -> Result<Option<bool>> {
     let mut reply = Ok(None);
     if let Some(value) = req.headers().get(IF_UNMODIFIED_SINCE.as_str()) {
         match value.to_str() {
             Err(e) => {
-                return Err(Error::new(ErrorKind::Other, format!("valid http cache unmodified failed, reason: {:?}", e)));
+                return Err(Error::new(ErrorKind::Other,
+                                      format!("valid http cache unmodified failed, reason: {:?}",
+                                              e)));
             },
             Ok(date) => {
                 match parse_http_date(date) {
                     Err(e) => {
-                        return Err(Error::new(ErrorKind::Other, format!("valid http cache unmodified failed, reason: {:?}", e)));
+                        return Err(Error::new(ErrorKind::Other,
+                                              format!("valid http cache unmodified failed, reason: {:?}",
+                                                      e)));
                     },
                     Ok(client_last_modified) => {
-                        reply = Ok(Some(cache.is_unmodified(owner.clone(), key.clone(), &client_last_modified)));
+                        reply = Ok(Some(cache.is_unmodified(owner.clone(),
+                                                            key.clone(),
+                                                            &client_last_modified)));
                     },
                 }
             },
@@ -55,7 +62,9 @@ pub fn is_unmodified<S: Socket, W: AsyncIOWait>(cache: &StaticCache,
     if let Some(value) = req.headers().get(IF_MATCH.as_str()) {
         match value.to_str() {
             Err(e) => {
-                return Err(Error::new(ErrorKind::Other, format!("valid http cache match failed, reason: {:?}", e)));
+                return Err(Error::new(ErrorKind::Other,
+                                      format!("valid http cache match failed, reason: {:?}",
+                                              e)));
             },
             Ok(client_sign_str) => {
                 if let CacheRes::Cache((_, _, sign, _)) = cache.get(owner, key) {
@@ -77,26 +86,32 @@ pub fn is_unmodified<S: Socket, W: AsyncIOWait>(cache: &StaticCache,
     reply
 }
 
-/*
-* 根据Http请求头的验证缓存是否已修改
-*/
-pub fn is_modified<S: Socket, W: AsyncIOWait>(cache: &StaticCache,
-                                              req: &HttpRequest<S, W>,
-                                              owner: Option<Atom>,
-                                              key: Atom) -> Result<bool> {
+///
+/// 根据Http请求头的验证缓存是否已修改
+///
+pub fn is_modified<S: Socket>(cache: &StaticCache,
+                              req: &HttpRequest<S>,
+                              owner: Option<Atom>,
+                              key: Atom) -> Result<bool> {
     let mut reply = Ok(true);
     if let Some(value) = req.headers().get(IF_MODIFIED_SINCE.as_str()) {
         match value.to_str() {
             Err(e) => {
-                return Err(Error::new(ErrorKind::Other, format!("valid http cache modified failed, reason: {:?}", e)));
+                return Err(Error::new(ErrorKind::Other,
+                                      format!("valid http cache modified failed, reason: {:?}",
+                                              e)));
             },
             Ok(date) => {
                 match parse_http_date(date) {
                     Err(e) => {
-                        return Err(Error::new(ErrorKind::Other, format!("valid http cache modified failed, reason: {:?}", e)));
+                        return Err(Error::new(ErrorKind::Other,
+                                              format!("valid http cache modified failed, reason: {:?}",
+                                                      e)));
                     },
                     Ok(client_last_modified) => {
-                        reply = Ok(!cache.is_unmodified(owner.clone(), key.clone(), &client_last_modified));
+                        reply = Ok(!cache.is_unmodified(owner.clone(),
+                                                        key.clone(),
+                                                        &client_last_modified));
                     },
                 }
             },
@@ -128,13 +143,13 @@ pub fn is_modified<S: Socket, W: AsyncIOWait>(cache: &StaticCache,
     reply
 }
 
-/*
-* 根据Http请求头确定是否获取指定用户和名称的缓存，返回是否缓存资源、缓存的过期时长和缓存
-*/
-pub fn request_get_cache<S: Socket, W: AsyncIOWait>(cache: &StaticCache,
-                                                    req: &HttpRequest<S, W>,
-                                                    owner: Option<Atom>,
-                                                    key: Atom) -> Result<(bool, u64, CacheRes)> {
+///
+/// 根据Http请求头确定是否获取指定用户和名称的缓存，返回是否缓存资源、缓存的过期时长和缓存
+///
+pub fn request_get_cache<S: Socket>(cache: &StaticCache,
+                                    req: &HttpRequest<S>,
+                                    owner: Option<Atom>,
+                                    key: Atom) -> Result<(bool, u64, CacheRes)> {
     let mut is_store = true; //默认要缓存资源
     let mut max_age: u64 = 0; //默认缓存立即过期，即每次Http请求必须进行缓存是否未修改的验证
     if let Some(value) = req.headers().get(CACHE_CONTROL.as_str()) {
@@ -150,7 +165,9 @@ pub fn request_get_cache<S: Socket, W: AsyncIOWait>(cache: &StaticCache,
                         //有max-age
                         match any.split('=').collect::<Vec<&str>>()[1].parse::<u64>() {
                             Err(e) => {
-                                return Err(Error::new(ErrorKind::Other, format!("http request get cache failed, reason: {:?}", e)));
+                                return Err(Error::new(ErrorKind::Other,
+                                                      format!("http request get cache failed, reason: {:?}",
+                                                              e)));
                             },
                             Ok(age) => {
                                 max_age = age;
@@ -167,18 +184,18 @@ pub fn request_get_cache<S: Socket, W: AsyncIOWait>(cache: &StaticCache,
     Ok((is_store, max_age, CacheRes::Empty))
 }
 
-/*
-* 设置缓存的响应头
-*/
-pub fn set_cache_resp_headers<S: Socket, W: AsyncIOWait>(resp: &mut HttpResponse<S, W>,
-                                                         is_private: bool,
-                                                         is_cache: bool,
-                                                         is_store: bool,
-                                                         is_transform: bool,
-                                                         is_only_if_cached: bool,
-                                                         max_age: u64,
-                                                         last_modified: Option<SystemTime>,
-                                                         etag: usize) {
+///
+/// 设置缓存的响应头
+///
+pub fn set_cache_resp_headers(resp: &mut HttpResponse,
+                              is_private: bool,
+                              is_cache: bool,
+                              is_store: bool,
+                              is_transform: bool,
+                              is_only_if_cached: bool,
+                              max_age: u64,
+                              last_modified: Option<SystemTime>,
+                              etag: usize) {
     let mut cache_control_value = "".to_string();
 
     //设置是否是私有资源
@@ -223,9 +240,9 @@ pub fn set_cache_resp_headers<S: Socket, W: AsyncIOWait>(resp: &mut HttpResponse
     resp.header(ETAG.as_str(), etag.to_string().as_str());
 }
 
-/*
-* Http缓存资源主键
-*/
+///
+/// Http缓存资源主键
+///
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 enum CacheKey {
     Private((Atom, Atom)),  //私有缓存主键
@@ -233,7 +250,7 @@ enum CacheKey {
 }
 
 impl CacheKey {
-    //判断是否是私有缓存主键
+    /// 判断是否是私有缓存主键
     pub fn is_private(&self) -> bool {
         match self {
             CacheKey::Private(_) =>  true,
@@ -242,9 +259,9 @@ impl CacheKey {
     }
 }
 
-/*
-* Http缓存整理控制指令
-*/
+///
+/// Http缓存整理控制指令
+///
 #[derive(Debug, Clone)]
 enum CollectCmd {
     Stop(String),                   //关闭整理
@@ -254,9 +271,9 @@ enum CollectCmd {
     Clear(usize),                   //清理不小于指定大小的缓存，如果为0表示清理缓存最久的资源
 }
 
-/*
-* Http缓存资源
-*/
+///
+/// Http缓存资源
+///
 #[derive(Debug, Clone)]
 pub enum CacheRes {
     Empty,                                          //缓存不存在
@@ -264,9 +281,9 @@ pub enum CacheRes {
     Cache((SystemTime, Mime, usize, Arc<Vec<u8>>)), //有效缓存
 }
 
-/*
-* Http静态资源缓存
-*/
+///
+/// Http静态资源缓存
+///
 pub struct StaticCache {
     max_size:       usize,                                                                          //缓存资源最大大小，单位字节
     max_len:        usize,                                                                          //缓存资源最大数量
@@ -283,7 +300,7 @@ unsafe impl Send for StaticCache {}
 unsafe impl Sync for StaticCache {}
 
 impl StaticCache {
-    //构建指定缓存资源最大大小和最大数量的Http静态资源缓存，
+    /// 构建指定缓存资源最大大小和最大数量的Http静态资源缓存，
     pub fn new(max_size: usize, max_len: usize) -> Self {
         let (collect_sent, collect_recv) = unbounded();
 
@@ -300,7 +317,7 @@ impl StaticCache {
         }
     }
 
-    //运行指定整理时间间隔的缓存整理
+    /// 运行指定整理时间间隔的缓存整理
     pub fn run_collect(cache: Arc<Self>, name: String, collect_time: u64) {
         if cache.is_running.load(Ordering::SeqCst) {
             //整理已运行，则忽略
@@ -314,7 +331,8 @@ impl StaticCache {
                 //设置缓存的整理状态为已运行
                 if cache.is_running.compare_and_swap(false, true, Ordering::SeqCst) {
                     //当前缓存的整理状态为已运行，则忽略
-                    warn!("!!!> Http Static Cache Already Continue, name: {:?}, reason: compare swap failed", thread_name);
+                    warn!("!!!> Http Static Cache Already Continue, name: {:?}, reason: compare swap failed",
+                        thread_name);
                     return;
                 }
 
@@ -328,20 +346,26 @@ impl StaticCache {
                             CollectCmd::Continue(reason) => {
                                 if !is_collect {
                                     is_collect = true; //当前不整理，则设置为整理
-                                    warn!("!!!> Http Static Cache Already Continue, name: {:?}, reason: {:?}", thread_name, reason);
+                                    warn!("!!!> Http Static Cache Already Continue, name: {:?}, reason: {:?}",
+                                        thread_name,
+                                        reason);
                                 }
                             },
                             CollectCmd::Pause(reason) => {
                                 if is_collect {
                                     //当前整理，则设置为不整理
                                     is_collect = false;
-                                    warn!("!!!> Http Static Cache Already Pause, name: {:?}, reason: {:?}", thread_name, reason);
+                                    warn!("!!!> Http Static Cache Already Pause, name: {:?}, reason: {:?}",
+                                        thread_name,
+                                        reason);
                                 }
                             },
                             CollectCmd::Stop(reason) => {
                                 //停止缓存的整理
                                 is_runing = false;
-                                warn!("!!!> Http Static Cache Already Stop, name: {:?}, reason: {:?}", thread_name, reason);
+                                warn!("!!!> Http Static Cache Already Stop, name: {:?}, reason: {:?}",
+                                    thread_name,
+                                    reason);
                             },
                             CollectCmd::Index((timeout, key)) => {
                                 //更新缓存的超时索引
@@ -370,17 +394,17 @@ impl StaticCache {
             });
     }
 
-    //获取当前缓存资源大小
+    /// 获取当前缓存资源大小
     pub fn size(&self) -> usize {
         self.size.load(Ordering::SeqCst)
     }
 
-    //获取当前缓存数量
+    /// 获取当前缓存数量
     pub fn len(&self) -> usize {
         self.len.load(Ordering::SeqCst)
     }
 
-    //检查指定用户和名称的缓存是否存在
+    /// 检查指定用户和名称的缓存是否存在
     pub fn contains(&self, owner: Option<Atom>, key: Atom) -> bool {
         if let Some(owner) = owner {
             //私有缓存
@@ -391,7 +415,7 @@ impl StaticCache {
         }
     }
 
-    //检查指定用户和名称的缓存是否过期
+    /// 检查指定用户和名称的缓存是否过期
     pub fn is_expired(&self, owner: Option<Atom>, key: Atom) -> bool {
         if let Some(owner) = owner {
             //私有缓存
@@ -413,7 +437,7 @@ impl StaticCache {
         true
     }
 
-    //检查指定用户、名称和上次修改时间的缓存是否未修改
+    /// 检查指定用户、名称和上次修改时间的缓存是否未修改
     pub fn is_unmodified(&self, owner: Option<Atom>, key: Atom, last: &SystemTime) -> bool {
         if let Some(owner) = owner {
             //私有缓存
@@ -446,7 +470,7 @@ impl StaticCache {
         }
     }
 
-    //获取指定用户和名称的缓存，过期则返回空
+    /// 获取指定用户和名称的缓存，过期则返回空
     pub fn get(&self, owner: Option<Atom>, key: Atom) -> CacheRes {
         if let Some(owner) = owner {
             //私有缓存
@@ -477,24 +501,50 @@ impl StaticCache {
         CacheRes::Empty
     }
 
-    //插入指定用户、名称、类型和有效时长的缓存，同名缓存则覆盖，并返回指定名称的上个缓存资源，有效时长单位为秒。同时更新缓存的超时索引
-    pub fn insert(&self, owner: Option<Atom>, max_age: u64, last_modified: SystemTime, mime: Mime, full_sign: bool, key: Atom, value: Arc<Vec<u8>>) -> Result<(usize, CacheRes)> {
+    /// 插入指定用户、名称、类型和有效时长的缓存，同名缓存则覆盖，并返回指定名称的上个缓存资源，有效时长单位为秒。同时更新缓存的超时索引
+    pub fn insert(&self,
+                  owner: Option<Atom>,
+                  max_age: u64,
+                  last_modified: SystemTime,
+                  mime: Mime,
+                  full_sign: bool,
+                  key: Atom,
+                  value: Arc<Vec<u8>>) -> Result<(usize, CacheRes)> {
         let value_size = value.len();
         if self.size.load(Ordering::SeqCst) + value_size > self.max_size {
             //已超过指定的缓存大小限制，则强制缓存进行整理，并返回错误
             self.collect_sent.send(CollectCmd::Clear(value_size));
-            return Err(Error::new(ErrorKind::Other, format!("insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: cache size full", owner, max_age, mime, key, value.len())));
+            return Err(Error::new(ErrorKind::Other,
+                                  format!("insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: cache size full",
+                                          owner,
+                                          max_age,
+                                          mime,
+                                          key,
+                                          value.len())));
         }
 
         if self.len.load(Ordering::SeqCst) + 1 > self.max_len {
             //已超过指定的缓存数量限制，则强制缓存进行整理，返回错误
             self.collect_sent.send(CollectCmd::Clear(0));
-            return Err(Error::new(ErrorKind::Other, format!("insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: cache length full", owner, max_age, mime, key, value.len())));
+            return Err(Error::new(ErrorKind::Other,
+                                  format!("insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: cache length full",
+                                          owner,
+                                          max_age,
+                                          mime,
+                                          key,
+                                          value.len())));
         }
 
         match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
             Err(e) => {
-                Err(Error::new(ErrorKind::Other, format!("insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: {:?}", owner, max_age, mime, key, value.len(), e)))
+                Err(Error::new(ErrorKind::Other,
+                               format!("insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: {:?}",
+                                       owner,
+                                       max_age,
+                                       mime,
+                                       key,
+                                       value.len(),
+                                       e)))
             },
             Ok(now) => {
                 if let Some(timeout) = now.clone().checked_add(Duration::from_secs(max_age)) {
@@ -525,7 +575,9 @@ impl StaticCache {
                         }
                     };
 
-                    self.collect_sent.send(CollectCmd::Index((timeout, cache_key.clone()))); //更新缓存的超时索引
+                    self
+                        .collect_sent
+                        .send(CollectCmd::Index((timeout, cache_key.clone()))); //更新缓存的超时索引
                     if cache_key.is_private() {
                         //私有缓存
                         if let Some((old_timeout, old_last_modifed, old_mime, old_sign, old_value)) = self.cache.write().insert(cache_key, (timeout, last_modified, mime, sign, value)) {
@@ -562,12 +614,18 @@ impl StaticCache {
                     return Ok((sign, CacheRes::Empty));
                 }
 
-                Err(Error::new(ErrorKind::Other, format!("insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: invalid max age", owner, max_age, mime, value.len(), key)))
+                Err(Error::new(ErrorKind::Other,
+                               format!("insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: invalid max age",
+                                       owner,
+                                       max_age,
+                                       mime,
+                                       value.len(),
+                                       key)))
             },
         }
     }
 
-    //移除指定用户和名称的缓存，但不移除缓存超时索引
+    /// 移除指定用户和名称的缓存，但不移除缓存超时索引
     pub fn remove(&self, owner: Option<Atom>, key: Atom) -> CacheRes {
         let cache_key = if let Some(owner) = owner {
             //私有缓存
@@ -611,7 +669,7 @@ impl StaticCache {
         self.cache.write().clear();
     }
 
-    //暂停缓存的整理
+    /// 暂停缓存的整理
     pub fn pause_collect(&self, reason: String) -> Result<()> {
         if !self.is_running.load(Ordering::SeqCst) {
             //整理已停止，则忽略
@@ -619,13 +677,15 @@ impl StaticCache {
         }
 
         if let Err(e) = self.collect_sent.send(CollectCmd::Pause(reason)) {
-            return Err(Error::new(ErrorKind::ConnectionAborted, format!("pause http static cache collect failed, reason: {:?}", e)));
+            return Err(Error::new(ErrorKind::ConnectionAborted,
+                                  format!("pause http static cache collect failed, reason: {:?}",
+                                          e)));
         }
 
         Ok(())
     }
 
-    //继续缓存的整理
+    /// 继续缓存的整理
     pub fn continue_collect(&self, reason: String) -> Result<()> {
         if !self.is_running.load(Ordering::SeqCst) {
             //整理已停止，则忽略
@@ -633,14 +693,16 @@ impl StaticCache {
         }
 
         if let Err(e) = self.collect_sent.send(CollectCmd::Continue(reason)) {
-            return Err(Error::new(ErrorKind::ConnectionAborted, format!("continue http static cache collect failed, reason: {:?}", e)));
+            return Err(Error::new(ErrorKind::ConnectionAborted,
+                                  format!("continue http static cache collect failed, reason: {:?}",
+                                          e)));
         }
 
         Ok(())
     }
 }
 
-//整理过期缓存资源
+// 整理过期缓存资源
 fn collect_expired(cache: &StaticCache) {
     let mut kvs = cache.timeout_index
         .read()
@@ -673,7 +735,7 @@ fn collect_expired(cache: &StaticCache) {
     }
 }
 
-//强制整理缓存
+// 强制整理缓存
 fn collect_clear(cache: &StaticCache, mut size: usize) {
     if size == 0 {
         //移除缓存最久的资源

@@ -1,25 +1,29 @@
 use std::thread;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::io::{ErrorKind, Result, Error};
 
+use futures::future::{FutureExt, BoxFuture};
 use mqtt311::{TopicPath, Topic};
+use env_logger;
 
-use tcp::connect::TcpSocket;
-use tcp::tls_connect::TlsSocket;
-use tcp::server::{AsyncWaitsHandle, AsyncPortsFactory, SocketListener};
-use tcp::driver::{Socket, SocketConfig, AsyncIOWait, AsyncServiceFactory};
-use tcp::buffer_pool::WriteBufferPool;
-use tcp::util::TlsConfig;
-use ws::{server::WebsocketListenerFactory,
+use pi_async::rt::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue};
+
+use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
+          connect::TcpSocket,
+          tls_connect::TlsSocket,
+          server::{PortsAdapterFactory, SocketListener},
+          utils::{TlsConfig, Ready}};
+use ws::{server::WebsocketListener,
          connect::WsSocket,
          frame::WsHead,
-         util::{ChildProtocol, ChildProtocolFactory, WsSession}};
-use mqtt::{server::{register_listener, register_service,
+         utils::{ChildProtocol, WsSession}};
+use mqtt::{server::{register_mqtt_listener, register_mqtt_service,
+                    register_mqtts_listener, register_mqtts_service,
                     MqttBrokerProtocol, WsMqttBrokerFactory, WssMqttBrokerFactory},
            broker::{MqttBrokerListener, MqttBrokerService},
            session::MqttConnect,
-           util::{PathTree, BrokerSession, AsyncResult}};
+           utils::{PathTree, BrokerSession}};
 
 #[test]
 fn test_topic_tree() {
@@ -56,13 +60,40 @@ fn test_topic_tree() {
 
 struct TestBrokerService;
 
-impl MqttBrokerListener for TestBrokerService {
-    fn connected(&self, broker: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>) -> AsyncResult {
-        println!("mqtt connected, connect: {:?}", connect);
-        AsyncResult::with(Ok(()))
+impl<S: Socket> MqttBrokerListener<S> for TestBrokerService {
+    fn connected(&self,
+                 protocol: MqttBrokerProtocol,
+                 connect: Arc<dyn MqttConnect<S>>) -> BoxFuture<'static, Result<()>> {
+        async move{
+            println!("mqtt connected, connect: {:?}", connect);
+
+            if let Some(hibernate) = connect.hibernate(Ready::ReadWrite) {
+                let connect_copy = connect.clone();
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(1000));
+                    while !connect_copy.wakeup(Ok(())) {
+                        //唤醒被阻塞，则休眠指定时间后继续尝试唤醒
+                        thread::sleep(Duration::from_millis(15));
+                    }
+                });
+                let start = Instant::now();
+                if let Err(e) = hibernate.await {
+                    //唤醒后返回错误，则立即返回错误原因
+                    return Err(e);
+                }
+                println!("!!!!!!wakeup hibernate ok, time: {:?}", start.elapsed());
+            }
+
+            println!("mqtt connected finish, connect: {:?}", connect);
+            Ok(())
+        }.boxed()
     }
 
-    fn closed(&self, broker: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>, context: BrokerSession, reason: Result<()>) {
+    fn closed(&self,
+              protocol: MqttBrokerProtocol,
+              connect: Arc<dyn MqttConnect<S>>,
+              context: BrokerSession,
+              reason: Result<()>) {
         if let Err(e) = reason {
             return println!("mqtt closed, connect: {:?}, reason: {:?}", connect, e);
         }
@@ -71,45 +102,94 @@ impl MqttBrokerListener for TestBrokerService {
     }
 }
 
-impl MqttBrokerService for TestBrokerService {
+impl<S: Socket> MqttBrokerService<S> for TestBrokerService {
     //指定Mqtt客户端订阅指定主题的服务
-    fn subscribe(&self, protocol: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>, topics: Vec<(String, u8)>) -> AsyncResult {
-        println!("mqtt subscribe, connect: {:?}", connect);
-        AsyncResult::with(Ok(()))
+    fn subscribe(&self,
+                 protocol: MqttBrokerProtocol,
+                 connect: Arc<dyn MqttConnect<S>>,
+                 topics: Vec<(String, u8)>) -> BoxFuture<'static, Result<()>> {
+        async move {
+            println!("mqtt subscribe, connect: {:?}", connect);
+
+            if let Some(hibernate) = connect.hibernate(Ready::ReadWrite) {
+                let connect_copy = connect.clone();
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(1000));
+                    while !connect_copy.wakeup(Ok(())) {
+                        //唤醒被阻塞，则休眠指定时间后继续尝试唤醒
+                        thread::sleep(Duration::from_millis(15));
+                    }
+                });
+                let start = Instant::now();
+                if let Err(e) = hibernate.await {
+                    //唤醒后返回错误，则立即返回错误原因
+                    return Err(e);
+                }
+                println!("!!!!!!wakeup hibernate ok, time: {:?}", start.elapsed());
+            }
+
+            println!("mqtt subscribe finish, connect: {:?}", connect);
+            Ok(())
+        }.boxed()
     }
 
     //指定Mqtt客户端取消订阅指定主题的服务
-    fn unsubscribe(&self, protocol: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>, topics: Vec<String>) -> Result<()> {
+    fn unsubscribe(&self,
+                   protocol: MqttBrokerProtocol,
+                   connect: Arc<dyn MqttConnect<S>>,
+                   topics: Vec<String>) -> Result<()> {
         println!("mqtt unsubscribe, connect: {:?}", connect);
         Ok(())
     }
 
     //指定Mqtt客户端发布指定主题的服务
-    fn publish(&self, protocol: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()> {
+    fn publish(&self,
+               protocol: MqttBrokerProtocol,
+               connect: Arc<dyn MqttConnect<S>>,
+               topic: String,
+               payload: Arc<Vec<u8>>) -> Result<()> {
         connect.send(&topic, payload)
     }
 }
 
 #[test]
 fn test_mqtt_311() {
+    //启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
+
+    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
+                                                        None,
+                                                        None,
+                                                        None);
+
     let protocol_name = "mqttv3.1";
     let broker_name = "test_ws_mqtt";
     let port = 38080;
 
-    let broker_factory = Arc::new(WsMqttBrokerFactory::new(protocol_name, broker_name, port));
+    //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
+    let broker_factory = Arc::new(WsMqttBrokerFactory::new(protocol_name,
+                                                           broker_name,
+                                                           port));
     let service = Arc::new(TestBrokerService);
-    register_listener(broker_name, service.clone());
-    register_service(broker_name, service);
+    register_mqtt_listener(broker_name, service.clone());
+    register_mqtt_service(broker_name, service);
 
-    let mut factory = AsyncPortsFactory::<TcpSocket>::new();
+    let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(port,
-                 Box::new(WebsocketListenerFactory::<TcpSocket>::with_protocol_factory(
-                     broker_factory)));
-    let mut config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
+                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol())));
+    let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
-    match SocketListener::bind(factory, buffer, config, 1024, 2 * 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(vec![rt],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               4096,
+                               4096,
+                               Some(10)) {
         Err(e) => {
             println!("!!!> Mqtt Listener Bind Error, reason: {:?}", e);
         },
@@ -123,23 +203,31 @@ fn test_mqtt_311() {
 
 #[test]
 fn test_tls_mqtt_311() {
+    //启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
+
+    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
+                                                        None,
+                                                        None,
+                                                        None);
+
     let protocol_name = "mqttv3.1";
     let broker_name = "test_wss_mqtt";
     let port = 38080;
 
+    //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
     let broker_factory = Arc::new(WssMqttBrokerFactory::new(protocol_name, broker_name, port));
     let service = Arc::new(TestBrokerService);
-    register_listener(broker_name, service.clone());
-    register_service(broker_name, service);
+    register_mqtts_listener(broker_name, service.clone());
+    register_mqtts_service(broker_name, service);
 
-    let mut factory = AsyncPortsFactory::<TlsSocket>::new();
+    let mut factory = PortsAdapterFactory::<TlsSocket>::new();
     factory.bind(port,
-                 Box::new(WebsocketListenerFactory::<TlsSocket>::with_protocol_factory(
-                     broker_factory)));
+                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol())));
     let tls_config = TlsConfig::new_server("",
                                            false,
-                                           "./3376363_msg.highapp.com.pem",
-                                           "./3376363_msg.highapp.com.key",
+                                           "./tests/7285407__17youx.cn.pem",
+                                           "./tests/7285407__17youx.cn.key",
                                            "",
                                            "",
                                            "",
@@ -148,8 +236,17 @@ fn test_tls_mqtt_311() {
                                            "").unwrap();
     let mut config = SocketConfig::with_tls("0.0.0.0", &[(port, tls_config)]);
     config.set_option(16384, 16384, 16384, 16);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
-    match SocketListener::bind(factory, buffer, config, 1024, 2 * 1024 * 1024, 1024, Some(10)) {
+
+    match SocketListener::bind(vec![rt],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               4096,
+                               4096,
+                               Some(10)) {
         Err(e) => {
             println!("!!!> Mqtt Listener Bind Error, reason: {:?}", e);
         },
@@ -163,14 +260,24 @@ fn test_tls_mqtt_311() {
 
 struct TestPassiveBrokerService;
 
-impl MqttBrokerListener for TestPassiveBrokerService {
-    fn connected(&self, broker: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>) -> AsyncResult {
-        println!("mqtt connected, connect: {:?}", connect);
-        connect.passive_receive(true);
-        AsyncResult::with(Ok(()))
+impl<S: Socket> MqttBrokerListener<S> for TestPassiveBrokerService {
+    fn connected(&self,
+                 protocol: MqttBrokerProtocol,
+                 connect: Arc<dyn MqttConnect<S>>) -> BoxFuture<'static, Result<()>> {
+        async move {
+            println!("mqtt connected, connect: {:?}", connect);
+
+            connect.passive_receive(true);
+
+            Ok(())
+        }.boxed()
     }
 
-    fn closed(&self, broker: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>, context: BrokerSession, reason: Result<()>) {
+    fn closed(&self,
+              protocol: MqttBrokerProtocol,
+              connect: Arc<dyn MqttConnect<S>>,
+              context: BrokerSession,
+              reason: Result<()>) {
         if let Err(e) = reason {
             return println!("mqtt closed, connect: {:?}, reason: {:?}", connect, e);
         }
@@ -179,25 +286,40 @@ impl MqttBrokerListener for TestPassiveBrokerService {
     }
 }
 
-impl MqttBrokerService for TestPassiveBrokerService {
+impl<S: Socket> MqttBrokerService<S> for TestPassiveBrokerService {
     //指定Mqtt客户端订阅指定主题的服务
-    fn subscribe(&self, protocol: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>, topics: Vec<(String, u8)>) -> AsyncResult {
-        println!("mqtt subscribe, connect: {:?}", connect);
-        AsyncResult::with(Ok(()))
+    fn subscribe(&self,
+                 protocol: MqttBrokerProtocol,
+                 connect: Arc<dyn MqttConnect<S>>,
+                 topics: Vec<(String, u8)>) -> BoxFuture<'static, Result<()>> {
+        async move {
+            println!("mqtt subscribe, connect: {:?}, topic: {:?}", connect, topics);
+            Ok(())
+        }.boxed()
     }
 
     //指定Mqtt客户端取消订阅指定主题的服务
-    fn unsubscribe(&self, protocol: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>, topics: Vec<String>) -> Result<()> {
+    fn unsubscribe(&self,
+                   protocol: MqttBrokerProtocol,
+                   connect: Arc<dyn MqttConnect<S>>,
+                   topics: Vec<String>) -> Result<()> {
         println!("mqtt unsubscribe, connect: {:?}", connect);
         Ok(())
     }
 
     //指定Mqtt客户端发布指定主题的服务
-    fn publish(&self, protocol: MqttBrokerProtocol, connect: Arc<dyn MqttConnect>, topic: String, payload: Arc<Vec<u8>>) -> Result<()> {
+    fn publish(&self,
+               protocol: MqttBrokerProtocol,
+               connect: Arc<dyn MqttConnect<S>>,
+               topic: String,
+               payload: Arc<Vec<u8>>) -> Result<()> {
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(5000));
             connect.send(&topic, payload);
-            connect.wakeup();
+            while !connect.wakeup(Ok(())) {
+                //唤醒被阻塞，则休眠指定时间后继续尝试唤醒
+                thread::sleep(Duration::from_millis(15));
+            }
         });
 
         Ok(())
@@ -206,24 +328,40 @@ impl MqttBrokerService for TestPassiveBrokerService {
 
 #[test]
 fn test_mqtt_311_passive() {
+    //启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
+
+    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
+                                                        None,
+                                                        None,
+                                                        None);
+
     let protocol_name = "mqttv3.1";
     let broker_name = "test_ws_mqtt";
     let port = 38080;
 
+    //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
     let broker_factory = Arc::new(WsMqttBrokerFactory::new(protocol_name, broker_name, port));
     let service = Arc::new(TestPassiveBrokerService);
-    register_listener(broker_name, service.clone());
-    register_service(broker_name, service);
+    register_mqtt_listener(broker_name, service.clone());
+    register_mqtt_service(broker_name, service);
 
-    let mut factory = AsyncPortsFactory::<TcpSocket>::new();
+    let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(port,
-                 Box::new(WebsocketListenerFactory::<TcpSocket>::with_protocol_factory(
-                     broker_factory)));
-    let mut config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
+                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol())));
+    let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
-    match SocketListener::bind(factory, buffer, config, 1024, 2 * 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(vec![rt],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               4096,
+                               4096,
+                               Some(10)) {
         Err(e) => {
             println!("!!!> Mqtt Listener Bind Error, reason: {:?}", e);
         },
@@ -237,23 +375,31 @@ fn test_mqtt_311_passive() {
 
 #[test]
 fn test_tls_mqtt_311_passive() {
+    //启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
+
+    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
+                                                        None,
+                                                        None,
+                                                        None);
+
     let protocol_name = "mqttv3.1";
     let broker_name = "test_wss_mqtt";
     let port = 38080;
 
+    //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
     let broker_factory = Arc::new(WssMqttBrokerFactory::new(protocol_name, broker_name, port));
     let service = Arc::new(TestPassiveBrokerService);
-    register_listener(broker_name, service.clone());
-    register_service(broker_name, service);
+    register_mqtts_listener(broker_name, service.clone());
+    register_mqtts_service(broker_name, service);
 
-    let mut factory = AsyncPortsFactory::<TlsSocket>::new();
+    let mut factory = PortsAdapterFactory::<TlsSocket>::new();
     factory.bind(port,
-                 Box::new(WebsocketListenerFactory::<TlsSocket>::with_protocol_factory(
-                     broker_factory)));
+                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol())));
     let tls_config = TlsConfig::new_server("",
                                            false,
-                                           "./3376363_msg.highapp.com.pem",
-                                           "./3376363_msg.highapp.com.key",
+                                           "./tests/7285407__17youx.cn.pem",
+                                           "./tests/7285407__17youx.cn.key",
                                            "",
                                            "",
                                            "",
@@ -262,8 +408,17 @@ fn test_tls_mqtt_311_passive() {
                                            "").unwrap();
     let mut config = SocketConfig::with_tls("0.0.0.0", &[(port, tls_config)]);
     config.set_option(16384, 16384, 16384, 16);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
-    match SocketListener::bind(factory, buffer, config, 1024, 2 * 1024 * 1024, 1024, Some(10)) {
+
+    match SocketListener::bind(vec![rt],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               4096,
+                               4096,
+                               Some(10)) {
         Err(e) => {
             println!("!!!> Mqtt Listener Bind Error, reason: {:?}", e);
         },

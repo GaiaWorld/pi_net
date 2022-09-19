@@ -26,51 +26,44 @@ use crate::{
         is_modified, is_unmodified, request_get_cache, set_cache_resp_headers, CacheRes,
         StaticCache,
     },
-    util::{trim_path, HttpRecvResult},
+    utils::{trim_path, HttpRecvResult},
 };
 use pi_async_file::file::{AsyncFile, AsyncFileOptions};
 use pi_atom::Atom;
 use pi_handler::SGenType;
 use pi_async::rt::{AsyncRuntime, multi_thread::MultiTaskRuntime};
 use std::time::SystemTime;
-use tcp::driver::{AsyncIOWait, Socket};
+use tcp::Socket;
 
-/*
-* 默认的附件名
-*/
+///
+/// 默认的附件名
+///
 const DEFAULT_CONTENT_DISPOSITION: &str = "attachment;filename=files";
 
-/*
-* Http文件批量加载器
-*/
+///
+/// Http文件批量加载器
+///
 pub struct FilesLoad {
-    files_async_runtime: MultiTaskRuntime<()>,
-    //异步文件运行时
-    root: PathBuf,
-    //文件根路径
-    cache: Option<Arc<StaticCache>>,
-    //文件缓存
-    is_cache: bool,
-    //是否要求客户端每次请求强制验证资源是否过期
-    is_store: bool,
-    //设置是否缓存资源
-    is_transform: bool,
-    //设置是否允许客户端更改前端资源内容
-    is_only_if_cached: bool,
-    //设置是否要求代理有缓存，则只由代理向客户端提供资源
-    max_age: u64, //缓存有效时长
+    files_async_runtime:    MultiTaskRuntime<()>,       //异步文件运行时
+    root:                   PathBuf,                    //文件根路径
+    cache:                  Option<Arc<StaticCache>>,   //文件缓存
+    is_cache:               bool,                       //是否要求客户端每次请求强制验证资源是否过期
+    is_store:               bool,                       //设置是否缓存资源
+    is_transform:           bool,                       //设置是否允许客户端更改前端资源内容
+    is_only_if_cached:      bool,                       //设置是否要求代理有缓存，则只由代理向客户端提供资源
+    max_age:                u64,                        //缓存有效时长
 }
 
 unsafe impl Send for FilesLoad {}
 
 unsafe impl Sync for FilesLoad {}
 
-impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FilesLoad {
+impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
     fn request<'a>(
         &'a self,
         context: &'a mut GatewayContext,
-        req: HttpRequest<S, W>,
-    ) -> BoxFuture<'a, MiddlewareResult<S, W>> {
+        req: HttpRequest<S>,
+    ) -> BoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             //获取请求参数
             let mut ds = String::from("");
@@ -86,43 +79,49 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FilesLoad {
             //访问指定的批量文件的内存缓存
             if let Some(cache) = &self.cache {
                 //设置了文件缓存
-                match is_unmodified(cache.as_ref(), &req, None, files_id.clone()) {
+                match is_unmodified(cache.as_ref(),
+                                    &req,
+                                    None,
+                                    files_id.clone()) {
                     Err(e) => {
                         return MiddlewareResult::Throw(e);
                     }
                     Ok(None) => (), //忽略这个判断
                     Ok(Some(false)) => {
                         //验证指定文件的缓存已修改，则立即返回指定错误
-                        let mut resp =
-                            HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
+                        let mut resp = HttpResponse::new(2);
                         resp.status(StatusCode::PRECONDITION_FAILED.as_u16());
                         resp.header(CONTENT_LENGTH.as_str(), "0");
                         return MiddlewareResult::Break(resp);
                     }
                     Ok(Some(true)) => {
                         //验证指定文件的缓存未修改，则立即返回
-                        let mut resp =
-                            HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
+                        let mut resp = HttpResponse::new(2);
                         resp.status(StatusCode::NOT_MODIFIED.as_u16());
                         return MiddlewareResult::Break(resp);
                     }
                 }
 
-                match is_modified(cache.as_ref(), &req, None, files_id.clone()) {
+                match is_modified(cache.as_ref(),
+                                  &req,
+                                  None,
+                                  files_id.clone()) {
                     Err(e) => {
                         return MiddlewareResult::Throw(e);
                     }
                     Ok(true) => (), //验证指定文件的缓存已修改，则继续
                     Ok(false) => {
                         //验证指定文件的缓存未修改，则立即返回
-                        let mut resp =
-                            HttpResponse::new(req.get_handle().clone(), req.get_waits().clone(), 2);
+                        let mut resp = HttpResponse::new(2);
                         resp.status(StatusCode::NOT_MODIFIED.as_u16());
                         return MiddlewareResult::Break(resp);
                     }
                 }
 
-                match request_get_cache(cache.as_ref(), &req, None, files_id.clone()) {
+                match request_get_cache(cache.as_ref(),
+                                        &req,
+                                        None,
+                                        files_id.clone()) {
                     Err(e) => {
                         //获取指定文件的缓存错误，则立即抛出错误
                         return MiddlewareResult::Throw(e);
@@ -131,11 +130,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FilesLoad {
                         match res {
                             CacheRes::Cache((_last_modified, mime, sign, bin)) => {
                                 //指定文件存在有效的缓存，则设置缓存响应头，响应体文件类型和响应体长度，并立即返回响应
-                                let mut resp = HttpResponse::new(
-                                    req.get_handle().clone(),
-                                    req.get_waits().clone(),
-                                    2,
-                                );
+                                let mut resp = HttpResponse::new(2);
                                 set_cache_resp_headers(
                                     &mut resp,
                                     false,
@@ -168,14 +163,19 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FilesLoad {
             //访问指定的批量文件的磁盘资源
             let mut dir_vec: Vec<(u64, PathBuf)> = Vec::new();
             let mut dirs: Vec<String> = Vec::new();
-            match decode(&mut ds.chars(), &mut vec![], &mut vec![], &mut dirs, 0) {
+            match decode(&mut ds.chars(),
+                         &mut vec![],
+                         &mut vec![],
+                         &mut dirs,
+                         0) {
                 Err(pos) => {
                     //解析请求的目录参数错误，则立即中止请求处理，并返回响应
                     return MiddlewareResult::Throw(Error::new(
                         ErrorKind::NotFound,
                         format!(
                             "files load failed, dir: {}, pos: {}, reason: decode dir failed",
-                            ds, pos
+                            ds,
+                            pos
                         ),
                     ));
                 }
@@ -197,7 +197,8 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FilesLoad {
                         ErrorKind::NotFound,
                         format!(
                             "files load failed, file: {}, pos: {}, reason: decode file failed",
-                            fs, pos
+                            fs,
+                            pos
                         ),
                     ));
                 }
@@ -219,14 +220,12 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FilesLoad {
 
             //合并解析的所有文件，并根据文件数量构建Http响应
             dir_vec.append(&mut file_vec);
-            let resp = HttpResponse::new(
-                req.get_handle().clone(),
-                req.get_waits().clone(),
-                dir_vec.len() + 1,
-            );
+            let resp = HttpResponse::new(dir_vec.len() + 1);
 
             //异步加载所有文件
-            match async_load_files(self.files_async_runtime.clone(), &resp, dir_vec) {
+            match async_load_files(self.files_async_runtime.clone(),
+                                   &resp,
+                                   dir_vec).await {
                 Err(e) => {
                     //异步批量加载文件错误，则立即中止请求处理，并返回响应
                     return MiddlewareResult::Throw(e);
@@ -252,9 +251,9 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FilesLoad {
     fn response<'a>(
         &'a self,
         context: &'a mut GatewayContext,
-        req: HttpRequest<S, W>,
-        resp: HttpResponse<S, W>,
-    ) -> BoxFuture<'a, MiddlewareResult<S, W>> {
+        req: HttpRequest<S>,
+        resp: HttpResponse,
+    ) -> BoxFuture<'a, MiddlewareResult<S>> {
         let total_size = context.get_files_size(); //需要异步加载文件的总大小
         let total_len = context.get_files_len(); //需要异步加载文件的总数量
         let mut loaded_size = 0; //已加载成功的文件大小
@@ -303,13 +302,19 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FilesLoad {
 
                             if loaded_len < total_len {
                                 //文件数量不匹配
-                                return MiddlewareResult::Throw(Error::new(ErrorKind::Other, format!("files load failed, require len: {:?}, loaded len: {:?}, reason: invalid file len", total_len, loaded_len)));
+                                return MiddlewareResult::Throw(Error::new(ErrorKind::Other,
+                                                                          format!("files load failed, require len: {:?}, loaded len: {:?}, reason: invalid file len",
+                                                                                  total_len,
+                                                                                  loaded_len)));
                             }
 
                             //文件已加载完成，检查文件大小是否匹配
                             if loaded_size != total_size {
                                 //文件大小不匹配
-                                return MiddlewareResult::Throw(Error::new(ErrorKind::Other, format!("files load failed, require size: {:?}, loaded size: {:?}, reason: invalid file size", total_size, loaded_size)));
+                                return MiddlewareResult::Throw(Error::new(ErrorKind::Other,
+                                                                          format!("files load failed, require size: {:?}, loaded size: {:?}, reason: invalid file size",
+                                                                                  total_size,
+                                                                                  loaded_size)));
                             }
 
                             //异步批量加载文件成功，则将文件内容缓冲的数据写入Http响应体
@@ -325,8 +330,12 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FilesLoad {
 
             if let Some((files_id, mime, last_modified)) = context.get_cache_args() {
                 //设置响应体类型
-                response.header(CONTENT_DISPOSITION.as_str(), DEFAULT_CONTENT_DISPOSITION);
-                response.header(CONTENT_TYPE.as_str(), mime.as_ref());
+                response
+                    .header(CONTENT_DISPOSITION.as_str(),
+                            DEFAULT_CONTENT_DISPOSITION);
+                response
+                    .header(CONTENT_TYPE.as_str(),
+                            mime.as_ref());
 
                 if self.is_store {
                     //需要缓存文件
@@ -348,7 +357,9 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FilesLoad {
                                 ) {
                                     Err(e) => {
                                         //缓存指定的批量文件错误
-                                        warn!("!!!> Files Load Ok, But Cache Failed, file: {:?}, reason: {:?}", files_id, e);
+                                        warn!("!!!> Files Load Ok, But Cache Failed, file: {:?}, reason: {:?}",
+                                            files_id,
+                                            e);
                                     }
                                     Ok((sign, _)) => {
                                         //缓存指定的批量文件成功，则设置响应的缓存头
@@ -379,7 +390,7 @@ impl<S: Socket, W: AsyncIOWait> Middleware<S, W, GatewayContext> for FilesLoad {
 }
 
 impl FilesLoad {
-    //构建指定根目录的文件批量加载器
+    /// 构建指定根目录的文件批量加载器
     pub fn new<P: Into<PathBuf>>(
         files_async_runtime: MultiTaskRuntime<()>,
         dir: P,
@@ -408,7 +419,7 @@ impl FilesLoad {
     }
 }
 
-//解析后缀，失败返回在解析哪个字符时出错
+// 解析后缀，失败返回在解析哪个字符时出错
 fn decode(
     chars: &mut Chars,
     suffix: &mut Vec<char>,
@@ -468,7 +479,7 @@ fn decode(
     }
 }
 
-//解析指定后缀的文件
+// 解析指定后缀的文件
 fn decode_file(
     chars: &mut Chars,
     suffix: &mut Vec<char>,
@@ -534,7 +545,7 @@ fn decode_file(
     }
 }
 
-//解析文件路径
+// 解析文件路径
 fn decode_path(
     chars: &mut Chars,
     stack: &mut Vec<String>,
@@ -598,7 +609,7 @@ fn decode_path(
     }
 }
 
-//解析指定目录下指定后缀的文件，没有后缀即目录下所有文件
+// 解析指定目录下指定后缀的文件，没有后缀即目录下所有文件
 fn decode_dir(
     dirs: &mut Vec<String>,
     root: &PathBuf,
@@ -667,7 +678,7 @@ fn decode_dir(
     Ok(())
 }
 
-//从硬盘上递归读取文件名和大小
+// 从硬盘上递归读取文件名和大小
 fn disk_files(
     suffix: Option<&OsStr>,
     path: &PathBuf,
@@ -711,8 +722,10 @@ fn disk_files(
     }
 }
 
-//过滤指定后缀和大小的文件
-fn filter_file(suffix: Option<&OsStr>, entry: DirEntry, result: &mut Vec<(u64, PathBuf)>) {
+// 过滤指定后缀和大小的文件
+fn filter_file(suffix: Option<&OsStr>,
+               entry: DirEntry,
+               result: &mut Vec<(u64, PathBuf)>) {
     if let Some(s0) = suffix {
         //过滤指定后缀名的文件
         match Path::new(&entry.file_name()).extension() {
@@ -728,7 +741,12 @@ fn filter_file(suffix: Option<&OsStr>, entry: DirEntry, result: &mut Vec<(u64, P
                 //继续检查以确认是否有后缀名
                 let mut path = PathBuf::new();
                 path.push(&entry.file_name().to_os_string());
-                let vec: Vec<&str> = path.to_str().as_ref().unwrap().split(".").collect();
+                let vec: Vec<&str> = path
+                    .to_str()
+                    .as_ref()
+                    .unwrap()
+                    .split(".")
+                    .collect();
                 if vec.len() > 1 && s0 == vec[1] {
                     //后缀名相同，形如.*的文件
                     if let Ok(meta) = entry.metadata() {
@@ -750,12 +768,10 @@ fn filter_file(suffix: Option<&OsStr>, entry: DirEntry, result: &mut Vec<(u64, P
     }
 }
 
-//异步批量加载文件，并返回批量加载文件的总大小和总数量
-fn async_load_files<S: Socket, W: AsyncIOWait>(
-    files_async_runtime: MultiTaskRuntime<()>,
-    resp: &HttpResponse<S, W>,
-    files: Vec<(u64, PathBuf)>,
-) -> Result<(u64, usize)> {
+// 异步批量加载文件，并返回批量加载文件的总大小和总数量
+async fn async_load_files(files_async_runtime: MultiTaskRuntime<()>,
+                          resp: &HttpResponse,
+                          files: Vec<(u64, PathBuf)>) -> Result<(u64, usize)> {
     let mut total_size = 0;
     let mut index: u64 = 0;
 
@@ -776,7 +792,8 @@ fn async_load_files<S: Socket, W: AsyncIOWait>(
             let resp_handler_copy = resp_handler.clone();
             let path = file_path.clone();
             let files_async_runtime_copy = files_async_runtime.clone();
-            if let Err(e) = files_async_runtime.spawn(files_async_runtime.alloc(), async move {
+            if let Err(e) = files_async_runtime.spawn(files_async_runtime.alloc(),
+                                                      async move {
                 // 调用底层open接口
                 let file = AsyncFile::open(
                     files_async_runtime_copy,
@@ -793,16 +810,21 @@ fn async_load_files<S: Socket, W: AsyncIOWait>(
                             Ok(bin) => {
                                 //读文件成功
                                 let bin_size = bin.len() as u64;
-                                if let Err(e) = resp_handler_copy.write_index(index, bin) {
-                                    warn!("!!!> Http Body Mut Write Index Failed, index: {:?}, file: {:?}, reason: {:?}", index, path, e);
+                                if let Err(e) = resp_handler_copy.write_index(index, bin).await {
+                                    warn!("!!!> Http Body Mut Write Index Failed, index: {:?}, file: {:?}, reason: {:?}",
+                                        index,
+                                        path,
+                                        e);
                                 } else {
                                     //发送文件成功，则减去当前文件的大小
                                     let last_size =
                                         unload_size_copy.fetch_sub(bin_size, Ordering::Relaxed);
                                     if last_size == bin_size {
                                         //所有文件已加载完成，则结束响应体的异步写
-                                        if let Err(e) = resp_handler_copy.finish() {
-                                            warn!("!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}", path, e);
+                                        if let Err(e) = resp_handler_copy.finish().await {
+                                            warn!("!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                                path,
+                                                e);
                                         }
                                     }
                                 }
@@ -810,12 +832,14 @@ fn async_load_files<S: Socket, W: AsyncIOWait>(
                             Err(e) => {
                                 warn!(
                                     "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
-                                    path, e
+                                    path,
+                                    e
                                 );
-                                if let Err(e) = resp_handler_copy.finish() {
+                                if let Err(e) = resp_handler_copy.finish().await {
                                     warn!(
                                         "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
-                                        path, e
+                                        path,
+                                        e
                                     );
                                 }
                             }
@@ -826,10 +850,11 @@ fn async_load_files<S: Socket, W: AsyncIOWait>(
                             "!!!> Http Async Open File Failed, file: {:?}, reason: {:?}",
                             path, e
                         );
-                        if let Err(e) = resp_handler_copy.finish() {
+                        if let Err(e) = resp_handler_copy.finish().await {
                             warn!(
                                 "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
-                                path, e
+                                path,
+                                e
                             );
                         }
                     }
