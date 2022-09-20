@@ -173,7 +173,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
                     return MiddlewareResult::Throw(Error::new(
                         ErrorKind::NotFound,
                         format!(
-                            "files load failed, dir: {}, pos: {}, reason: decode dir failed",
+                            "Files load failed, dir: {}, pos: {}, reason: decode dir failed",
                             ds,
                             pos
                         ),
@@ -196,7 +196,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
                     return MiddlewareResult::Throw(Error::new(
                         ErrorKind::NotFound,
                         format!(
-                            "files load failed, file: {}, pos: {}, reason: decode file failed",
+                            "Files load failed, file: {}, pos: {}, reason: decode file failed",
                             fs,
                             pos
                         ),
@@ -303,7 +303,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
                             if loaded_len < total_len {
                                 //文件数量不匹配
                                 return MiddlewareResult::Throw(Error::new(ErrorKind::Other,
-                                                                          format!("files load failed, require len: {:?}, loaded len: {:?}, reason: invalid file len",
+                                                                          format!("Files load failed, require len: {:?}, loaded len: {:?}, reason: invalid file len",
                                                                                   total_len,
                                                                                   loaded_len)));
                             }
@@ -312,7 +312,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
                             if loaded_size != total_size {
                                 //文件大小不匹配
                                 return MiddlewareResult::Throw(Error::new(ErrorKind::Other,
-                                                                          format!("files load failed, require size: {:?}, loaded size: {:?}, reason: invalid file size",
+                                                                          format!("Files load failed, require size: {:?}, loaded size: {:?}, reason: invalid file size",
                                                                                   total_size,
                                                                                   loaded_size)));
                             }
@@ -357,7 +357,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
                                 ) {
                                     Err(e) => {
                                         //缓存指定的批量文件错误
-                                        warn!("!!!> Files Load Ok, But Cache Failed, file: {:?}, reason: {:?}",
+                                        warn!("Files Load Ok, But Cache Failed, file: {:?}, reason: {:?}",
                                             files_id,
                                             e);
                                     }
@@ -688,7 +688,7 @@ fn disk_files(
         return Err(Error::new(
             ErrorKind::NotFound,
             format!(
-                "select disk files failed, path: {:?}, reason: path not exist",
+                "Select disk files failed, path: {:?}, reason: path not exist",
                 path
             ),
         ));
@@ -698,7 +698,7 @@ fn disk_files(
         Err(e) => Err(Error::new(
             ErrorKind::Other,
             format!(
-                "select disk files failed, path: {:?}, reason: {:?}",
+                "Select disk files failed, path: {:?}, reason: {:?}",
                 path, e
             ),
         )),
@@ -811,7 +811,7 @@ async fn async_load_files(files_async_runtime: MultiTaskRuntime<()>,
                                 //读文件成功
                                 let bin_size = bin.len() as u64;
                                 if let Err(e) = resp_handler_copy.write_index(index, bin).await {
-                                    warn!("!!!> Http Body Mut Write Index Failed, index: {:?}, file: {:?}, reason: {:?}",
+                                    warn!("Http Body Mut Write Index Failed, index: {:?}, file: {:?}, reason: {:?}",
                                         index,
                                         path,
                                         e);
@@ -822,7 +822,7 @@ async fn async_load_files(files_async_runtime: MultiTaskRuntime<()>,
                                     if last_size == bin_size {
                                         //所有文件已加载完成，则结束响应体的异步写
                                         if let Err(e) = resp_handler_copy.finish().await {
-                                            warn!("!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                            warn!("Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
                                                 path,
                                                 e);
                                         }
@@ -831,13 +831,13 @@ async fn async_load_files(files_async_runtime: MultiTaskRuntime<()>,
                             }
                             Err(e) => {
                                 warn!(
-                                    "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                    "Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
                                     path,
                                     e
                                 );
                                 if let Err(e) = resp_handler_copy.finish().await {
                                     warn!(
-                                        "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                        "Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
                                         path,
                                         e
                                     );
@@ -847,12 +847,12 @@ async fn async_load_files(files_async_runtime: MultiTaskRuntime<()>,
                     }
                     Err(e) => {
                         warn!(
-                            "!!!> Http Async Open File Failed, file: {:?}, reason: {:?}",
+                            "Http Async Open File Failed, file: {:?}, reason: {:?}",
                             path, e
                         );
                         if let Err(e) = resp_handler_copy.finish().await {
                             warn!(
-                                "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                "Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
                                 path,
                                 e
                             );
@@ -861,7 +861,7 @@ async fn async_load_files(files_async_runtime: MultiTaskRuntime<()>,
                 }
             }) {
                 warn!(
-                    "!!!> Http Async Open File Failed, reason: {:?}",
+                    "Http Async Open File Failed, reason: {:?}",
                     e
                 );
             }
@@ -874,6 +874,6 @@ async fn async_load_files(files_async_runtime: MultiTaskRuntime<()>,
 
     Err(Error::new(
         ErrorKind::NotFound,
-        "load files error, reason: invalid response body",
+        "Load files error, reason: invalid response body",
     ))
 }

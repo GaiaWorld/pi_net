@@ -53,37 +53,39 @@ const DEAFULT_READED_WRITE_BUF_SIZE_LIMIT: usize = 256 * 1024;
 /// Tcp连接
 ///
 pub struct TcpSocket {
-    rt:                 Option<WorkerRuntime<()>>,                          //连接所在运行时
-    uid:                Option<usize>,                                      //连接唯一id
-    local:              SocketAddr,                                         //连接本地地址
-    remote:             SocketAddr,                                         //连接远端地址
-    token:              Option<Token>,                                      //连接令牌
-    stream:             TcpStream,                                          //连接流
-    last_interest:      RefCell<Option<Interest>>,                          //连接上次感兴趣的事件类型
-    interest:           Arc<SpinLock<Interest>>,                            //连接当前感兴趣的事件类型
-    wait_recv_len:      usize,                                              //连接需要接收的字节数
-    recv_len:           usize,                                              //连接已接收的字节数
-    read_len:           Arc<AtomicUsize>,                                   //连接读取块大小
-    readed_read_limit:  Arc<AtomicUsize>,                                   //已读读缓冲大小限制
-    read_buf:           ByteBuffer,                                         //连接读缓冲
-    reader:             Arc<SpinLock<PipeSender<Arc<Vec<u8>>>>>,            //连接读缓冲输入器
-    wait_ready_len:     usize,                                              //连接异步准备读取的字节数
-    ready_len:          usize,                                              //连接异步准备读取已就绪的字节数
-    ready_reader:       Option<AsyncValue<usize>>,                          //异步准备读取器
-    wait_sent_len:      AtomicUsize,                                        //连接需要发送的字节数
-    sent_len:           usize,                                              //连接已发送的字节数
-    write_len:          Arc<AtomicUsize>,                                   //连接写入块大小
-    readed_write_limit: Arc<AtomicUsize>,                                   //已读写缓冲大小限制
-    readed_write_len:   usize,                                              //已读写缓冲大小
-    write_buf:          Arc<SpinLock<Option<BytesMut>>>,                    //连接写缓冲
-    poll:               Option<Arc<SpinLock<Poll>>>,                        //连接所在轮询器
-    hibernate:          SpinLock<Option<Hibernate<Self>>>,                  //连接异步休眠对象
-    hibernate_wakers:   SpinLock<VecDeque<Waker>>,                          //连接正在休眠时，其它休眠对象的唤醒器队列
-    hibernated_queue:   Arc<SpinLock<VecDeque<BoxFuture<'static, ()>>>>,    //连接休眠时任务队列
-    handle:             Option<SocketHandle<Self>>,                         //连接句柄
-    context:            SocketContext,                                      //连接上下文
-    closed:             Rc<AtomicBool>,                                     //连接关闭状态
-    close_listener:     Option<Sender<(Token, Result<()>)>>,                //连接关闭事件监听器
+    rt:                 Option<WorkerRuntime<()>>,                              //连接所在运行时
+    uid:                Option<usize>,                                          //连接唯一id
+    local:              SocketAddr,                                             //连接本地地址
+    remote:             SocketAddr,                                             //连接远端地址
+    token:              Option<Token>,                                          //连接令牌
+    stream:             TcpStream,                                              //连接流
+    last_interest:      RefCell<Option<Interest>>,                              //连接上次感兴趣的事件类型
+    interest:           Arc<SpinLock<Interest>>,                                //连接当前感兴趣的事件类型
+    wait_recv_len:      usize,                                                  //连接需要接收的字节数
+    recv_len:           usize,                                                  //连接已接收的字节数
+    read_len:           Arc<AtomicUsize>,                                       //连接读取块大小
+    readed_read_limit:  Arc<AtomicUsize>,                                       //已读读缓冲大小限制
+    read_buf:           ByteBuffer,                                             //连接读缓冲
+    reader:             Arc<SpinLock<PipeSender<Arc<Vec<u8>>>>>,                //连接读缓冲输入器
+    wait_ready_len:     usize,                                                  //连接异步准备读取的字节数
+    ready_len:          usize,                                                  //连接异步准备读取已就绪的字节数
+    ready_reader:       Option<AsyncValue<usize>>,                              //异步准备读取器
+    wait_sent_len:      AtomicUsize,                                            //连接需要发送的字节数
+    sent_len:           usize,                                                  //连接已发送的字节数
+    write_len:          Arc<AtomicUsize>,                                       //连接写入块大小
+    readed_write_limit: Arc<AtomicUsize>,                                       //已读写缓冲大小限制
+    readed_write_len:   usize,                                                  //已读写缓冲大小
+    write_buf:          Arc<SpinLock<Option<BytesMut>>>,                        //连接写缓冲
+    poll:               Option<Arc<SpinLock<Poll>>>,                            //连接所在轮询器
+    hibernate:          SpinLock<Option<Hibernate<Self>>>,                      //连接异步休眠对象
+    hibernate_wakers:   SpinLock<VecDeque<Waker>>,                              //连接正在休眠时，其它休眠对象的唤醒器队列
+    hibernated_queue:   Arc<SpinLock<VecDeque<BoxFuture<'static, ()>>>>,        //连接休眠时任务队列
+    handle:             Option<SocketHandle<Self>>,                             //连接句柄
+    context:            SocketContext,                                          //连接上下文
+    closed:             Rc<AtomicBool>,                                         //连接关闭状态
+    close_listener:     Option<Sender<(Token, Result<()>)>>,                    //连接关闭事件监听器
+    timer_handle:       Option<usize>,                                          //定时器句柄
+    timer_listener:     Option<Sender<(Token, Option<(usize, SocketEvent)>)>>,  //定时事件监听器
 }
 
 unsafe impl Send for TcpSocket {}
@@ -168,6 +170,8 @@ impl Stream for TcpSocket {
             context,
             closed,
             close_listener: None,
+            timer_handle: None,
+            timer_listener: None,
         }
     }
 
@@ -178,18 +182,18 @@ impl Stream for TcpSocket {
     fn set_handle(&mut self, shared: &Arc<RefCell<Self>>) {
         if let Some(token) = self.token {
             if let Some(close_listener) = &self.close_listener {
-                // if let Some(timer_listener) = &self.timer_listener {
-                let image = SocketImage::new(shared,
-                                             self.local,
-                                             self.remote,
-                                             token,
-                                             self.is_security(),
-                                             self.closed.clone(),
-                                             close_listener.clone(),
-                                             // timer_listener.clone()
-                );
-                self.handle = Some(SocketHandle::new(image));
-                // }
+                if let Some(timer_listener) = &self.timer_listener {
+                    let image = SocketImage::new(shared,
+                                                 self.local,
+                                                 self.remote,
+                                                 token,
+                                                 self.is_security(),
+                                                 self.closed.clone(),
+                                                 close_listener.clone(),
+                                                 timer_listener.clone()
+                    );
+                    self.handle = Some(SocketHandle::new(image));
+                }
             }
         }
     }
@@ -215,27 +219,6 @@ impl Stream for TcpSocket {
     }
 
     fn get_interest(&self) -> Option<Interest> {
-        // let last_interest = {
-        //     *self.last_interest.borrow()
-        // };
-        //
-        // if let Some(last_interest) = last_interest {
-        //     //存在连接上次感兴趣的事件类型
-        //     let interest = { *self.interest.lock() };
-        //     if last_interest == interest {
-        //         //连接上次感兴趣的事件类型与连接当前感兴趣的事件类型相同，则立即返回空
-        //         None
-        //     } else {
-        //         //连接上次感兴趣的事件类型与连接当前感兴趣的事件类型不同，则更新接上次感兴趣的事件类型，并返回连接当前感兴趣的事件类型
-        //         *self.last_interest.borrow_mut() = Some(interest);
-        //         Some(interest)
-        //     }
-        // } else {
-        //     //不存在连接上次感兴趣的事件类型，则更新接上次感兴趣的事件类型，并返回连接当前感兴趣的事件类型
-        //     let interest = { *self.interest.lock() };
-        //     *self.last_interest.borrow_mut() = Some(interest);
-        //     Some(interest)
-        // }
         Some({ *self.interest.lock() })
     }
 
@@ -269,16 +252,19 @@ impl Stream for TcpSocket {
         self.close_listener = listener;
     }
 
-    fn set_timer_listener(&mut self, listener: Option<Sender<(Token, Option<(usize, SocketEvent)>)>>) {
-
+    fn set_timer_listener(&mut self,
+                          listener: Option<Sender<(Token, Option<(usize, SocketEvent)>)>>) {
+        self.timer_listener = listener;
     }
 
-    fn set_timer_handle(&mut self, timer: usize) -> Option<usize> {
-        None
+    fn set_timer_handle(&mut self, timer_handle: usize) -> Option<usize> {
+        let last_timer_handle = self.unset_timer_handle();
+        self.timer_handle = Some(timer_handle);
+        last_timer_handle
     }
 
     fn unset_timer_handle(&mut self) -> Option<usize> {
-        None
+        self.timer_handle.take()
     }
 
     #[inline]
@@ -566,15 +552,19 @@ impl Socket for TcpSocket {
     }
 
     fn set_timeout(&self, timeout: usize, event: SocketEvent) {
-
+        if let Some(listener) = &self.timer_listener {
+            if let Some(token) = self.token {
+                listener.send((token, Some((timeout, event))));
+            }
+        }
     }
 
     fn unset_timeout(&self) {
-
-    }
-
-    fn init_buffer_capacity(&mut self, read_size: usize, write_size: usize) {
-
+        if let Some(listener) = &self.timer_listener {
+            if let Some(token) = self.token {
+                listener.send((token, None));
+            }
+        }
     }
 
     fn is_security(&self) -> bool {

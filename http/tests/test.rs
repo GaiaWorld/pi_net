@@ -516,8 +516,8 @@ fn test_http_hosts() {
                                1024 * 1024,
                                1024,
                                16,
-                               16777216,
-                               16777216,
+                               16384,
+                               16384,
                                Some(10)) {
         Err(e) => {
             println!("!!!> Http Listener Bind Error, reason: {:?}", e);
@@ -668,8 +668,8 @@ fn test_https_hosts() {
                                1024 * 1024,
                                1024,
                                16,
-                               16777216,
-                               16777216,
+                               16384,
+                               16384,
                                Some(10)) {
         Err(e) => {
             println!("!!!> Https Listener Bind Error, reason: {:?}", e);

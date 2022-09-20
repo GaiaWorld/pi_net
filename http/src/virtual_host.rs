@@ -60,7 +60,9 @@ impl<S: Socket, H: Middleware<S, GatewayContext>> VirtualHostPool<S> for Virtual
             return Ok(());
         }
 
-        Err(Error::new(ErrorKind::Other, format!("add virtual host error, host: {:?}, reason: not writable", name)))
+        Err(Error::new(ErrorKind::Other,
+                       format!("Add virtual host error, host: {:?}, reason: not writable",
+                               name)))
     }
 }
 

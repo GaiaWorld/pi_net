@@ -112,7 +112,11 @@ impl<S: Socket> HttpAcceptor<S> {
                                     } else {
                                         //连接请求中的Url无效，则立即关闭当前连接
                                         handle.close(Err(Error::new(ErrorKind::Other,
-                                                                    format!("http connect failed, url: {:?}, reason: invalid url", url))));
+                                                                    format!("Http connect failed, token: {:?}, remote: {:?}, local: {:?}, url: {:?}, reason: invalid url",
+                                                                        handle.get_token(),
+                                                                        handle.get_remote(),
+                                                                        handle.get_local(),
+                                                                            url))));
                                         return;
                                     }
                                 }
@@ -120,19 +124,29 @@ impl<S: Socket> HttpAcceptor<S> {
                         } else {
                             //连接请求中的主机不存在，则立即关闭当前连接
                             handle.close(Err(Error::new(ErrorKind::Other,
-                                                        format!("http connect failed, host: {:?}, reason: host not exist", host_name))));
+                                                        format!("Http connect failed, token: {:?}, remote: {:?}, local: {:?}, host: {:?}, reason: host not exist",
+                                                                handle.get_token(),
+                                                                handle.get_remote(),
+                                                                handle.get_local(),
+                                                                host_name))));
                             return;
                         }
                     } else {
                         //连接请求的主机头无效，则立即关闭当前连接
                         handle.close(Err(Error::new(ErrorKind::Other,
-                                                    "http connect failed, reason: invalid host header")));
+                                                    format!("Http connect failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid host header",
+                                                            handle.get_token(),
+                                                            handle.get_remote(),
+                                                            handle.get_local()))));
                         return;
                     }
                 } else {
                     //连接请求中没有主机头，则立即关闭当前连接
                     handle.close(Err(Error::new(ErrorKind::Other,
-                                                "http connect failed, reason: host header not exist")));
+                                                format!("Http connect failed, token: {:?}, remote: {:?}, local: {:?}, reason: host header not exist",
+                                                        handle.get_token(),
+                                                        handle.get_remote(),
+                                                        handle.get_local()))));
                     return;
                 }
             }

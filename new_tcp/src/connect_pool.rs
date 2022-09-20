@@ -134,7 +134,10 @@ fn event_loop<S, A>(rt: WorkerRuntime<()>,
             .lock()
             .poll(&mut events, poll_timeout.clone()) {
             //轮询连接事件错误，则立即退出Tcp连接事件循环
-            error!("Tcp socket pool poll failed, timeout: {:?}, ports: {:?}, reason: {:?}", poll_timeout, pool.name, e);
+            error!("Tcp socket pool poll failed, timeout: {:?}, ports: {:?}, reason: {:?}",
+                poll_timeout,
+                pool.name,
+                e);
             return;
         }
 
@@ -180,19 +183,24 @@ async fn handle_accepted<S, A>(rt: &WorkerRuntime<()>,
             .registry()
             .register(socket.get_stream_mut(), token, ready) {
             //连接注册失败
-            warn!("Tcp socket poll register error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, socket.get_remote(), socket.get_local(), e);
+            warn!("Tcp socket poll register error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                token,
+                socket.get_remote(),
+                socket.get_local(),
+                e);
 
             //立即关闭未注册的连接
             if let Err(e) = socket.close(Err(Error::new(ErrorKind::Other, "register socket failed"))) {
-                warn!("Tcp socket close error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, socket.get_remote(), socket.get_local(), e);
+                warn!("Tcp socket close error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                    token,
+                    socket.get_remote(),
+                    socket.get_local(),
+                    e);
             }
         } else {
             //连接注册成功
-            init_socket::<S, A>(&mut socket,
-                                pool.close_sent.clone(),
-                                pool.timer_sent.clone(),
-                                &socket_opts);
-
+            socket.set_close_listener(Some(pool.close_sent.clone())); //为注册成功的连接绑定关闭事件监听器
+            socket.set_timer_listener(Some(pool.timer_sent.clone())); //为注册成功的连接绑定定时事件监听器
             socket.set_runtime(rt.clone()); //为注册成功的连接绑定运行时
             socket.set_token(Some(token)); //为注册成功的连接绑定新的令牌
             socket.set_uid(token.0); //为注册成功的连接设置唯一id
@@ -214,37 +222,6 @@ async fn handle_accepted<S, A>(rt: &WorkerRuntime<()>,
             rt.spawn(rt.alloc(), connected);
         }
     }
-}
-
-// 初始化Tcp连接，为连接绑定唤醒器，并设置连接通用选项
-fn init_socket<S, A>(socket: &mut S,
-                     close_listener: Sender<(Token, Result<()>)>,
-                     timer_listener: Sender<(Token, Option<(usize, SocketEvent)>)>,
-                     socket_opts: &SocketOption)
-    where S: Socket + Stream,
-          A: SocketAdapter<Connect = S> {
-    //连接绑定唤醒器和监听器
-    // socket.set_rouser(Some(wakeup_sent));
-    socket.set_close_listener(Some(close_listener));
-    socket.set_timer_listener(Some(timer_listener));
-
-    //设置连接是否ipv6独占，独占后可以与ipv4共享相同的端口
-    let stream = socket.get_stream_ref();
-    if (socket.get_local().ip().ne(&IpAddr::V6(Ipv6Addr::from_str(DEFAULT_TCP_IP_V6).ok().unwrap()))) && socket.get_local().is_ipv6() {
-        //如果本地地址是ipv6，则设置当前流为ipv6独占
-        // if let Err(e) = stream.set_only_v6(true) {
-        //     panic!("init socket failed, reason: {:?}", e);
-        // }
-    }
-
-    //设置连接通用选项
-    // if let Err(e) = stream.set_recv_buffer_size(socket_opts.recv_buffer_size) {
-    //     panic!("init socket failed, reason: {:?}", e);
-    // }
-    // if let Err(e) = stream.set_send_buffer_size(socket_opts.send_buffer_size) {
-    //     panic!("init socket failed, reason: {:?}", e);
-    // }
-    socket.init_buffer_capacity(socket_opts.read_buffer_capacity, socket_opts.write_buffer_capacity);
 }
 
 // 处理Tcp连接的轮询事件
@@ -279,11 +256,9 @@ async fn handle_poll_events<S, A>(rt: &WorkerRuntime<()>,
                         let mut s = socket_copy.borrow_mut();
                         match s.recv().await {
                             Ok(len) => {
-                                println!("!!!!!!readable, token: {:?}, len: {:?}", s.get_token().unwrap(), len);
                                 //按需接收完成，则重新注册当前Tcp连接关注的事件，并执行已读回调
                                 if let Some(interest) = s.get_interest() {
                                     //需要修改当前连接感兴趣的事件类型
-                                    println!("!!!!!!reset interest, token: {:?}, interest: {:?}", s.get_token().unwrap(), interest);
                                     if let Err(e) = poll
                                         .lock()
                                         .registry()
@@ -296,19 +271,16 @@ async fn handle_poll_events<S, A>(rt: &WorkerRuntime<()>,
                                 }
 
                                 if s.is_wait_wakeup_read_ready() {
-                                    println!("!!!!!!wakeup read ready");
                                     //当前连接有需要唤醒的异步准备读取器，则唤醒当前的异步准备读取器
                                     s.wakeup_read_ready();
                                     mem::drop(s); //因为后续操作在连接引用的作用域内，所以必须显示释放连接引用，以保证后续可以继续借用连接
                                 } else {
                                     if s.is_hibernated() {
-                                        println!("######push hibernated_read_task");
                                         //当前连接已休眠，则将本次读任务加入当前连接的休眠任务队列，等待连接被唤醒后再继续处理
                                         let handle = s.get_handle();
                                         s.push_hibernated_task(adapter.readed(Ok(handle)));
                                         mem::drop(s); //因为后续操作在连接引用的作用域内，所以必须显示释放连接引用，以保证后续可以继续借用连接
                                     } else {
-                                        println!("!!!!!!call readed");
                                         //当前连接没有需要唤醒的异步准备读取器，则调用接收回调
                                         let handle = s.get_handle();
                                         mem::drop(s); //因为后续操作在连接引用的作用域内，所以必须显示释放连接引用，以保证后续可以继续借用连接
@@ -348,10 +320,8 @@ async fn handle_poll_events<S, A>(rt: &WorkerRuntime<()>,
                         let mut s = socket_copy.borrow_mut();
                         match s.send() {
                             Ok(len) => {
-                                println!("!!!!!!writable, token: {:?}, len: {:?}", s.get_token().unwrap(), len);
                                 //发送完成，并执行已写回调
                                 if let Some(interest) = s.get_interest() {
-                                    println!("!!!!!!reset interest, token: {:?}, interest: {:?}", s.get_token().unwrap(), interest);
                                     // 需要修改当前连接感兴趣的事件类型
                                     if let Err(e) = poll
                                         .lock()
@@ -363,13 +333,11 @@ async fn handle_poll_events<S, A>(rt: &WorkerRuntime<()>,
                                 }
 
                                 if s.is_hibernated() {
-                                    println!("######push hibernated_write_task");
                                     //当前连接已休眠，则将本次写任务加入当前连接的休眠任务队列，等待连接被唤醒后再继续处理
                                     let handle = s.get_handle();
                                     s.push_hibernated_task(adapter.writed(Ok(handle)));
                                     mem::drop(s); //因为后续操作在连接引用的作用域内，所以必须显示释放连接引用，以保证后续可以继续借用连接
                                 } else {
-                                    println!("!!!!!!call writed");
                                     //调用发送回调
                                     let handle = s.get_handle();
                                     mem::drop(s); //因为后续操作在连接引用的作用域内，所以必须显示释放连接引用，以保证后续可以继续借用连接

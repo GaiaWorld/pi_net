@@ -42,10 +42,7 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
     pub fn reply<B>(&self, buf: B) -> Result<()>
         where B: AsRef<[u8]> + Send + 'static {
         //首先回应本次Http请求
-        self.handle.write_ready(buf)?;
-
-        //然后重置当前连接感兴趣的事件
-        self.handle.reregister_interest(Ready::Writable)
+        self.handle.write_ready(buf)
     }
 
     /// 更新Http连接的超时时长
@@ -76,9 +73,6 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
 
         //首先回应本次Http请求
         self.reply(vec![header, body].concat())?;
-
-        //然后重置当前连接感兴趣的事件
-        self.handle.reregister_interest(Ready::Writable)?;
 
         //关闭当前Http连接
         self.close(Err(reason))

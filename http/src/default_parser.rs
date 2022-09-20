@@ -180,7 +180,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
                                                 Err(ref e) if e.is_disconnected() => {
                                                     //编码器通道错误，则立即抛出错误
                                                     return MiddlewareResult::Throw(Error::new(ErrorKind::Other,
-                                                                                              format!("http response body deflate encode failed, reason: {:?}",
+                                                                                              format!("Http response body deflate encode failed, reason: {:?}",
                                                                                                       e)));
                                                 },
                                                 Err(_) => {
@@ -385,7 +385,7 @@ fn produce_deflate(producor: Sender<Compress>, deflate: Compress) -> Result<()> 
     if let Err(e) = producor.send(deflate) {
         //发送编码器失败
         return Err(Error::new(ErrorKind::Other,
-                              format!("new deflate encoding failed, reason: {:?}",
+                              format!("New deflate encoding failed, reason: {:?}",
                                       e)));
     }
 
@@ -401,7 +401,7 @@ fn encode_deflate(deflate: &mut Compress,
         Err(e) => {
             //编码错误
             Err(Error::new(ErrorKind::Other,
-                           format!("http response body deflate encode failed, reason: {:?}",
+                           format!("Http response body deflate encode failed, reason: {:?}",
                                    e)))
         },
         Ok(status) => {
@@ -409,7 +409,7 @@ fn encode_deflate(deflate: &mut Compress,
                 Status::BufError => {
                     //输入缓冲区错误
                     Err(Error::new(ErrorKind::Other,
-                                   format!("http response body deflate encode failed, reason: buf error")))
+                                   format!("Http response body deflate encode failed, reason: buf error")))
                 },
                 Status::Ok => {
                     //输出缓冲区已满
@@ -421,7 +421,7 @@ fn encode_deflate(deflate: &mut Compress,
                     }
 
                     Err(Error::new(ErrorKind::Other,
-                                   format!("http response body deflate encode failed, reason: buf full")))
+                                   format!("Http response body deflate encode failed, reason: buf full")))
                 },
                 Status::StreamEnd => {
                     //因输入流结束，强制完成编码，则调整输出缓冲大小，并返回编码成功

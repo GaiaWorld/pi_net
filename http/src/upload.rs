@@ -63,7 +63,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
                     } else {
                         return MiddlewareResult::Throw(Error::new(
                             ErrorKind::NotFound,
-                            "remove file error, reason: empty relative path",
+                            "Remove file error, reason: empty relative path",
                         ));
                     }
                 }
@@ -76,7 +76,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
                 } else {
                     return MiddlewareResult::Throw(Error::new(
                         ErrorKind::NotFound,
-                        "upload file error, reason: empty relative path",
+                        "Upload file error, reason: empty relative path",
                     ));
                 }
 
@@ -97,7 +97,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
                 //不是相对路径
                 return MiddlewareResult::Throw(Error::new(
                     ErrorKind::NotFound,
-                    "upload file error, reason: invalid relative path",
+                    "Upload file error, reason: invalid relative path",
                 ));
             }
 
@@ -109,7 +109,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
                         //标准化后根路径被改变
                         return MiddlewareResult::Throw(Error::new(
                             ErrorKind::Other,
-                            "upload file error, reason: absolute path overflow",
+                            "Upload file error, reason: absolute path overflow",
                         ));
                     }
                 }
@@ -120,7 +120,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
                         //文件不存在，则立即中止文件上传处理，并返回响应
                         return MiddlewareResult::Throw(Error::new(
                             ErrorKind::Other,
-                            "remove file error, reason: invalid file",
+                            "Remove file error, reason: invalid file",
                         ));
                     } else {
                         if let Err(e) =
@@ -140,7 +140,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
                             //创建子目录失败
                             return MiddlewareResult::Throw(Error::new(
                                 ErrorKind::Other,
-                                "upload file error, reason: make relative path failed",
+                                "Upload file error, reason: make relative path failed",
                             ));
                         }
                     }
@@ -158,7 +158,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
                 //无效的绝对路径
                 return MiddlewareResult::Throw(Error::new(
                     ErrorKind::Other,
-                    "upload file error, reason: invalid absolute path",
+                    "Upload file error, reason: invalid absolute path",
                 ));
             }
 
@@ -264,7 +264,7 @@ async fn async_remove_file(files_async_runtime: MultiTaskRuntime<()>,
                     //移除文件成功
                     if let Err(e) = resp_handler.finish().await {
                         warn!(
-                            "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                            "Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
                             path_copy,
                             e
                         );
@@ -273,7 +273,7 @@ async fn async_remove_file(files_async_runtime: MultiTaskRuntime<()>,
                 Err(e) => {
                     //移除文件失败
                     warn!(
-                        "!!!> Http Async Remove File Failed, file: {:?}, reason: {:?}",
+                        "Http Async Remove File Failed, file: {:?}, reason: {:?}",
                         path_copy,
                         e
                     );
@@ -281,14 +281,14 @@ async fn async_remove_file(files_async_runtime: MultiTaskRuntime<()>,
                         format!("remove file error, reason: {:?}", e).as_bytes(),
                     )).await {
                         warn!(
-                            "!!!> Http Body Mut Write Failed, file: {:?}, reason: {:?}",
+                            "Http Body Mut Write Failed, file: {:?}, reason: {:?}",
                             path_copy,
                             e
                         );
                     } else {
                         if let Err(e) = resp_handler.finish().await {
                             warn!(
-                                "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                "Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
                                 path_copy,
                                 e
                             );
@@ -297,7 +297,7 @@ async fn async_remove_file(files_async_runtime: MultiTaskRuntime<()>,
                 }
             }
         }) {
-            warn!("!!!> Http Async Open File Failed, reason: {:?}",
+            warn!("Http Async Open File Failed, reason: {:?}",
                 e);
         }
 
@@ -306,7 +306,7 @@ async fn async_remove_file(files_async_runtime: MultiTaskRuntime<()>,
 
     Err(Error::new(
         ErrorKind::Other,
-        "remove file error, reason: invalid response body",
+        "Remove file error, reason: invalid response body",
     ))
 }
 
@@ -334,7 +334,7 @@ async fn async_save_file(files_async_runtime: MultiTaskRuntime<()>,
                         Ok(_) => {
                             //写文件成功
                             if let Err(e) = resp_handler.finish().await {
-                                warn!("!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                warn!("Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
                                     path_copy,
                                     e);
                             }
@@ -342,21 +342,21 @@ async fn async_save_file(files_async_runtime: MultiTaskRuntime<()>,
                         Err(e) => {
                             //写文件失败
                             warn!(
-                                "!!!> Http Async Write File Failed, file: {:?}, reason: {:?}",
+                                "Http Async Write File Failed, file: {:?}, reason: {:?}",
                                 path_copy,
                                 e
                             );
                             if let Err(e) = resp_handler.write(Vec::from(
-                                format!("upload file error, reason: {:?}", e).as_bytes(),
+                                format!("Upload file error, reason: {:?}", e).as_bytes(),
                             )).await {
                                 warn!(
-                                    "!!!> Http Body Mut Write Failed, file: {:?}, reason: {:?}",
+                                    "Http Body Mut Write Failed, file: {:?}, reason: {:?}",
                                     path_copy,
                                     e
                                 );
                             } else {
                                 if let Err(e) = resp_handler.finish().await {
-                                    warn!("!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                    warn!("Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
                                         path_copy,
                                         e);
                                 }
@@ -367,22 +367,22 @@ async fn async_save_file(files_async_runtime: MultiTaskRuntime<()>,
                 Err(e) => {
                     //打开文件失败
                     warn!(
-                        "!!!> Http Async Open File Failed, file: {:?}, reason: {:?}",
+                        "Http Async Open File Failed, file: {:?}, reason: {:?}",
                         path_copy,
                         e
                     );
                     if let Err(e) = resp_handler.write(Vec::from(
-                        format!("upload file error, reason: {:?}", e).as_bytes(),
+                        format!("Upload file error, reason: {:?}", e).as_bytes(),
                     )).await {
                         warn!(
-                            "!!!> Http Body Mut Write Failed, file: {:?}, reason: {:?}",
+                            "Http Body Mut Write Failed, file: {:?}, reason: {:?}",
                             path_copy,
                             e
                         );
                     } else {
                         if let Err(e) = resp_handler.finish().await {
                             warn!(
-                                "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                "Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
                                 path_copy,
                                 e
                             );
@@ -392,7 +392,7 @@ async fn async_save_file(files_async_runtime: MultiTaskRuntime<()>,
             }
         }) {
             warn!(
-                "!!!> Http Async Open File Failed, reason: {:?}",
+                "Http Async Open File Failed, reason: {:?}",
                 e
             );
         }
@@ -401,6 +401,6 @@ async fn async_save_file(files_async_runtime: MultiTaskRuntime<()>,
 
     Err(Error::new(
         ErrorKind::Other,
-        "upload file error, reason: invalid response body",
+        "Upload file error, reason: invalid response body",
     ))
 }

@@ -314,7 +314,10 @@ pub fn publish_topic(broker_name: String,
 
                     if let Err(e) = v311::broadcast_packet(&connects[..], &packet) {
                         //发布消息失败，则立即返回错误原因
-                        return Err(Error::new(ErrorKind::BrokenPipe, format!("Mqtt broker broadcast failed, broker: {:?}, reason: {:?}", broker_name, e)));
+                        return Err(Error::new(ErrorKind::BrokenPipe,
+                                              format!("Mqtt broker broadcast failed, broker: {:?}, reason: {:?}",
+                                                      broker_name,
+                                                      e)));
                     }
                 }
 
@@ -344,7 +347,10 @@ pub fn publish_topic(broker_name: String,
 
                     if let Err(e) = tls_v311::broadcast_packet(&connects[..], &packet) {
                         //发布消息失败，则立即返回错误原因
-                        return Err(Error::new(ErrorKind::BrokenPipe, format!("Mqtt broker broadcast failed, broker: {:?}, reason: {:?}", broker_name, e)));
+                        return Err(Error::new(ErrorKind::BrokenPipe,
+                                              format!("Mqtt broker broadcast failed, broker: {:?}, reason: {:?}",
+                                                      broker_name,
+                                                      e)));
                     }
                 }
 
@@ -352,6 +358,8 @@ pub fn publish_topic(broker_name: String,
             },
         }
     } else {
-        Err(Error::new(ErrorKind::Other, format!("Mqtt broker broadcast failed, broker: {:?}, reason: broker not exist", broker_name)))
+        Err(Error::new(ErrorKind::Other,
+                       format!("Mqtt broker broadcast failed, broker: {:?}, reason: broker not exist",
+                               broker_name)))
     }
 }

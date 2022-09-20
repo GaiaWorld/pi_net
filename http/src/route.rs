@@ -84,13 +84,13 @@ impl<S: Socket, Context: Send + Sync + 'static, Handler: Middleware<S, Context>>
         if let Some(vec) = Arc::get_mut(&mut self.route) {
             vec.push(route);
         } else {
-            panic!("add wildcard route error, get mut ref failed");
+            panic!("Add wildcard route error, get mut ref failed");
         }
 
         if let Some(vec) = Arc::get_mut(&mut self.handlers) {
             vec.push(Arc::new(handler));
         } else {
-            panic!("add wildcard route handler error, get mut ref failed");
+            panic!("Add wildcard route handler error, get mut ref failed");
         }
     }
 
@@ -103,7 +103,8 @@ impl<S: Socket, Context: Send + Sync + 'static, Handler: Middleware<S, Context>>
         match RegexSetBuilder::new(route.as_slice()).build() {
             Err(e) => {
                 Err(Error::new(ErrorKind::Other,
-                               format!("finish wildcard router failed, reason: {:?}", e)))
+                               format!("Finish wildcard router failed, reason: {:?}",
+                                       e)))
             },
             Ok(set) => {
                 //构建指定路由的匹配器成功
@@ -205,7 +206,7 @@ impl<S: Socket, Context: Send + Sync + 'static, Handler: Middleware<S, Context>>
                 let atom = Atom::from(route);
                 map.insert(atom.clone(), Arc::new(handler));
             } else {
-                panic!("add route error, get mut ref failed");
+                panic!("Add route error, get mut ref failed");
             }
         }
 

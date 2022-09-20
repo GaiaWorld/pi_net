@@ -250,7 +250,7 @@ fn parse_part_headers_body<'a>(context: &'a mut GatewayContext, part: &'a [u8]) 
         Err(e) => {
             //解析部分数据的头错误，则立即返回错误原因
             Err(Error::new(ErrorKind::Other,
-                           format!("parse multi parts headers failed, reason: {:?}",
+                           format!("Parse multi parts headers failed, reason: {:?}",
                                    e)))
         },
         Ok(status) if status.is_complete() => {
@@ -264,14 +264,14 @@ fn parse_part_headers_body<'a>(context: &'a mut GatewayContext, part: &'a [u8]) 
                 match HeaderName::try_from(header.name) {
                     Err(e) => {
                         return Err(Error::new(ErrorKind::InvalidData,
-                                              format!("parse multi parts headers name failed, reason: {:?}",
+                                              format!("Parse multi parts headers name failed, reason: {:?}",
                                                       e)));
                     },
                     Ok(key) => {
                         match HeaderValue::from_bytes(header.value) {
                             Err(e) => {
                                 return Err(Error::new(ErrorKind::InvalidData,
-                                                      format!("parse multi parts headers value failed, reason: {:?}",
+                                                      format!("Parse multi parts headers value failed, reason: {:?}",
                                                               e)));
                             },
                             Ok(value) => {
@@ -339,7 +339,7 @@ fn parse_part_headers_body<'a>(context: &'a mut GatewayContext, part: &'a [u8]) 
         _ => {
             //解析部分数据不完整，则立即返回错误原因
             Err(Error::new(ErrorKind::Other,
-                           "parse multi parts headers failed, reason: part not enough"))
+                           "Parse multi parts headers failed, reason: part not enough"))
         }
     }
 }

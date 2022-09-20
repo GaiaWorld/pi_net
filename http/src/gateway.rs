@@ -198,7 +198,7 @@ impl<S: Socket, H: Middleware<S, GatewayContext>> HttpService<S> for HttpGateway
                             _ => {
                                 //无效的请求返回，则立即返回错误
                                 Err(Error::new(ErrorKind::Other,
-                                               "invalid middleware result"))
+                                               "Invalid middleware result"))
                             }
                         }
                     },
@@ -209,13 +209,13 @@ impl<S: Socket, H: Middleware<S, GatewayContext>> HttpService<S> for HttpGateway
                     _ => {
                         //无效的请求返回，则立即返回错误
                         Err(Error::new(ErrorKind::Other,
-                                       "invalid middleware result"))
+                                       "Invalid middleware result"))
                     },
                 }
             } else {
                 //路由错误，则立即返回错误原因
                 Err(Error::new(ErrorKind::Other,
-                               "invalid route"))
+                               "Invalid route"))
             }
         };
         future.boxed()

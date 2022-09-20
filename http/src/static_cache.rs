@@ -39,14 +39,14 @@ pub fn is_unmodified<S: Socket>(cache: &StaticCache,
         match value.to_str() {
             Err(e) => {
                 return Err(Error::new(ErrorKind::Other,
-                                      format!("valid http cache unmodified failed, reason: {:?}",
+                                      format!("Valid http cache unmodified failed, reason: {:?}",
                                               e)));
             },
             Ok(date) => {
                 match parse_http_date(date) {
                     Err(e) => {
                         return Err(Error::new(ErrorKind::Other,
-                                              format!("valid http cache unmodified failed, reason: {:?}",
+                                              format!("Valid http cache unmodified failed, reason: {:?}",
                                                       e)));
                     },
                     Ok(client_last_modified) => {
@@ -63,7 +63,7 @@ pub fn is_unmodified<S: Socket>(cache: &StaticCache,
         match value.to_str() {
             Err(e) => {
                 return Err(Error::new(ErrorKind::Other,
-                                      format!("valid http cache match failed, reason: {:?}",
+                                      format!("Valid http cache match failed, reason: {:?}",
                                               e)));
             },
             Ok(client_sign_str) => {
@@ -98,14 +98,14 @@ pub fn is_modified<S: Socket>(cache: &StaticCache,
         match value.to_str() {
             Err(e) => {
                 return Err(Error::new(ErrorKind::Other,
-                                      format!("valid http cache modified failed, reason: {:?}",
+                                      format!("Valid http cache modified failed, reason: {:?}",
                                               e)));
             },
             Ok(date) => {
                 match parse_http_date(date) {
                     Err(e) => {
                         return Err(Error::new(ErrorKind::Other,
-                                              format!("valid http cache modified failed, reason: {:?}",
+                                              format!("Valid http cache modified failed, reason: {:?}",
                                                       e)));
                     },
                     Ok(client_last_modified) => {
@@ -121,7 +121,9 @@ pub fn is_modified<S: Socket>(cache: &StaticCache,
     if let Some(value) = req.headers().get(IF_NONE_MATCH.as_str()) {
         match value.to_str() {
             Err(e) => {
-                return Err(Error::new(ErrorKind::Other, format!("valid http cache match failed, reason: {:?}", e)));
+                return Err(Error::new(ErrorKind::Other,
+                                      format!("Valid http cache match failed, reason: {:?}",
+                                              e)));
             },
             Ok(client_sign_str) => {
                 if let CacheRes::Cache((_, _, sign, _)) = cache.get(owner, key) {
@@ -166,7 +168,7 @@ pub fn request_get_cache<S: Socket>(cache: &StaticCache,
                         match any.split('=').collect::<Vec<&str>>()[1].parse::<u64>() {
                             Err(e) => {
                                 return Err(Error::new(ErrorKind::Other,
-                                                      format!("http request get cache failed, reason: {:?}",
+                                                      format!("Http request get cache failed, reason: {:?}",
                                                               e)));
                             },
                             Ok(age) => {
@@ -331,7 +333,7 @@ impl StaticCache {
                 //设置缓存的整理状态为已运行
                 if cache.is_running.compare_and_swap(false, true, Ordering::SeqCst) {
                     //当前缓存的整理状态为已运行，则忽略
-                    warn!("!!!> Http Static Cache Already Continue, name: {:?}, reason: compare swap failed",
+                    warn!("Http Static Cache Already Continue, name: {:?}, reason: compare swap failed",
                         thread_name);
                     return;
                 }
@@ -346,7 +348,7 @@ impl StaticCache {
                             CollectCmd::Continue(reason) => {
                                 if !is_collect {
                                     is_collect = true; //当前不整理，则设置为整理
-                                    warn!("!!!> Http Static Cache Already Continue, name: {:?}, reason: {:?}",
+                                    warn!("Http Static Cache Already Continue, name: {:?}, reason: {:?}",
                                         thread_name,
                                         reason);
                                 }
@@ -355,7 +357,7 @@ impl StaticCache {
                                 if is_collect {
                                     //当前整理，则设置为不整理
                                     is_collect = false;
-                                    warn!("!!!> Http Static Cache Already Pause, name: {:?}, reason: {:?}",
+                                    warn!("Http Static Cache Already Pause, name: {:?}, reason: {:?}",
                                         thread_name,
                                         reason);
                                 }
@@ -363,7 +365,7 @@ impl StaticCache {
                             CollectCmd::Stop(reason) => {
                                 //停止缓存的整理
                                 is_runing = false;
-                                warn!("!!!> Http Static Cache Already Stop, name: {:?}, reason: {:?}",
+                                warn!("Http Static Cache Already Stop, name: {:?}, reason: {:?}",
                                     thread_name,
                                     reason);
                             },
@@ -515,7 +517,7 @@ impl StaticCache {
             //已超过指定的缓存大小限制，则强制缓存进行整理，并返回错误
             self.collect_sent.send(CollectCmd::Clear(value_size));
             return Err(Error::new(ErrorKind::Other,
-                                  format!("insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: cache size full",
+                                  format!("Insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: cache size full",
                                           owner,
                                           max_age,
                                           mime,
@@ -527,7 +529,7 @@ impl StaticCache {
             //已超过指定的缓存数量限制，则强制缓存进行整理，返回错误
             self.collect_sent.send(CollectCmd::Clear(0));
             return Err(Error::new(ErrorKind::Other,
-                                  format!("insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: cache length full",
+                                  format!("Insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: cache length full",
                                           owner,
                                           max_age,
                                           mime,
@@ -538,7 +540,7 @@ impl StaticCache {
         match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
             Err(e) => {
                 Err(Error::new(ErrorKind::Other,
-                               format!("insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: {:?}",
+                               format!("Insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: {:?}",
                                        owner,
                                        max_age,
                                        mime,
@@ -615,7 +617,7 @@ impl StaticCache {
                 }
 
                 Err(Error::new(ErrorKind::Other,
-                               format!("insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: invalid max age",
+                               format!("Insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: invalid max age",
                                        owner,
                                        max_age,
                                        mime,
@@ -678,7 +680,7 @@ impl StaticCache {
 
         if let Err(e) = self.collect_sent.send(CollectCmd::Pause(reason)) {
             return Err(Error::new(ErrorKind::ConnectionAborted,
-                                  format!("pause http static cache collect failed, reason: {:?}",
+                                  format!("Pause http static cache collect failed, reason: {:?}",
                                           e)));
         }
 
@@ -694,7 +696,7 @@ impl StaticCache {
 
         if let Err(e) = self.collect_sent.send(CollectCmd::Continue(reason)) {
             return Err(Error::new(ErrorKind::ConnectionAborted,
-                                  format!("continue http static cache collect failed, reason: {:?}",
+                                  format!("Continue http static cache collect failed, reason: {:?}",
                                           e)));
         }
 

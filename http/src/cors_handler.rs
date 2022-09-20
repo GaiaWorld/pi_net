@@ -114,7 +114,7 @@ impl CORSHandler {
         match Host::parse(&host) {
             Err(e) => {
                 Err(Error::new(ErrorKind::AddrNotAvailable,
-                               format!("add allow origin failed, host: {:?}, reason: {:?}",
+                               format!("Add allow origin failed, host: {:?}, reason: {:?}",
                                        host,
                                        e)))
             },
@@ -126,7 +126,7 @@ impl CORSHandler {
                     match Method::from_str(method.as_str()) {
                         Err(e) => {
                             return Err(Error::new(ErrorKind::AddrNotAvailable,
-                                                  format!("add allow origin failed, method: {:?}, reason: {:?}",
+                                                  format!("Add allow origin failed, method: {:?}, reason: {:?}",
                                                           method,
                                                           e)));
                         },
@@ -148,7 +148,7 @@ impl CORSHandler {
                         match HeaderName::from_str(header.as_str()) {
                             Err(e) => {
                                 return Err(Error::new(ErrorKind::AddrNotAvailable,
-                                                      format!("add allow origin failed, header: {:?}, reason: {:?}",
+                                                      format!("Add allow origin failed, header: {:?}, reason: {:?}",
                                                               header,
                                                               e)));
                             },
@@ -185,7 +185,7 @@ fn get_origin(origin: &HeaderValue) -> Result<Origin> {
         Err(e) => {
             //无效的请求源
             Err(Error::new(ErrorKind::AddrNotAvailable,
-                           format!("invalid CORS request origin, reason: {:?}",
+                           format!("Invalid CORS request origin, reason: {:?}",
                                    e)))
         },
         Ok(url) => {
@@ -214,7 +214,7 @@ fn get_origin(origin: &HeaderValue) -> Result<Origin> {
                 Err(e) => {
                     //无效的主机
                     Err(Error::new(ErrorKind::AddrNotAvailable,
-                                   format!("invalid CORS request host, reason: {:?}",
+                                   format!("Invalid CORS request host, reason: {:?}",
                                            e)))
                 },
                 Ok(h) => {
@@ -269,8 +269,11 @@ fn handle_options_request<S: Socket>(handler: &CORSHandler,
                                 }
 
                                 //不支持，则不允许当前源跨域访问，并设置响应体长度后立即返回
-                                error!("Http handle CORS failed, host: {:?}, origin: {:?}, reason: not support methods",
-                                       req.headers().get(HOST),
+                                error!("Http handle CORS failed, token: {:?}, remote: {:?}, local: {:?}, host: {:?}, origin: {:?}, reason: not support methods",
+                                    req.get_handle().get_token(),
+                                    req.get_handle().get_remote(),
+                                    req.get_handle().get_local(),
+                                    req.headers().get(HOST),
                                     key);
                                 resp.header(CONTENT_LENGTH.as_str(), "0");
                                 return MiddlewareResult::Break(resp);
@@ -320,8 +323,11 @@ fn handle_options_request<S: Socket>(handler: &CORSHandler,
                         }
 
                         //不允许客户端请求的源进行跨域访问，则不设置任何允许的跨域访问的请求头，客户端会自动判断为不允许当前源跨域访问
-                        error!("Http handle CORS failed, host: {:?}, origin: {:?}, reason: not allow client cross domain",
-                               req.headers().get(HOST),
+                        error!("Http handle CORS failed, token: {:?}, remote: {:?}, local: {:?}, host: {:?}, origin: {:?}, reason: not allow client cross domain",
+                            req.get_handle().get_token(),
+                            req.get_handle().get_remote(),
+                            req.get_handle().get_local(),
+                            req.headers().get(HOST),
                             key);
                     }
 
@@ -368,8 +374,11 @@ fn handle_simple_request<S: Socket, >(handler: &CORSHandler,
                                 handler.allowed.write().insert(origin.to_string(), None);
                             } else {
                                 //简单验证失败，则不允许客户端指定的源进行指定的跨域访问，则立即返回响应
-                                error!("Http handle CORS failed, host: {:?}, origin: {:?}, reason: simple check error",
-                                       req.headers().get(HOST),
+                                error!("Http handle CORS failed, token: {:?}, remote: {:?}, local: {:?}, host: {:?}, origin: {:?}, reason: simple check error",
+                                    req.get_handle().get_token(),
+                                    req.get_handle().get_remote(),
+                                    req.get_handle().get_local(),
+                                    req.headers().get(HOST),
                                     key);
                                 let mut resp = HttpResponse::new(2);
                                 resp.header(CONTENT_LENGTH.as_str(), "0");
@@ -384,14 +393,17 @@ fn handle_simple_request<S: Socket, >(handler: &CORSHandler,
                         Err(e) => {
                             //验证允许的过期时间错误，则立即抛出错误
                             return MiddlewareResult::Throw(Error::new(ErrorKind::Other,
-                                                                      format!("simple CORS request failed, reason: {:?}",
+                                                                      format!("Simple CORS request failed, reason: {:?}",
                                                                               e)));
                         },
                         Ok(elapsed) => {
                             if elapsed.as_secs() > timeout as u64 {
                                 //已过期，则立即返回响应
-                                error!("Http handle CORS failed, host: {:?}, origin: {:?}, reason: auth timeout",
-                                       req.headers().get(HOST),
+                                error!("Http handle CORS failed, token: {:?}, remote: {:?}, local: {:?}, host: {:?}, origin: {:?}, reason: auth timeout",
+                                    req.get_handle().get_token(),
+                                    req.get_handle().get_remote(),
+                                    req.get_handle().get_local(),
+                                    req.headers().get(HOST),
                                     req.headers().get(ORIGIN));
                                 let mut resp = HttpResponse::new(2);
                                 resp.header(CONTENT_LENGTH.as_str(), "0");

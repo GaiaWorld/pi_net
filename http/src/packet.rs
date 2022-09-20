@@ -48,7 +48,10 @@ impl UpStreamHeader {
             Err(e) => {
                 //解析Http头错误
                 handle.close(Err(Error::new(ErrorKind::Other,
-                                            format!("http server parse header failed, reason: {:?}",
+                                            format!("Http server parse header failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                                    handle.get_token(),
+                                                    handle.get_remote(),
+                                                    handle.get_local(),
                                                     e))));
                 return None;
             },
@@ -58,7 +61,10 @@ impl UpStreamHeader {
                     Some(ver) if ver != DEFAULT_SUPPORT_HTTP_VERSION => {
                         //不合法的Http版本号
                         handle.close(Err(Error::new(ErrorKind::Other,
-                                                    format!("http server parse header failed, version: {}, reason: not support http version",
+                                                    format!("http server parse header failed, token: {:?}, remote: {:?}, local: {:?}, version: {}, reason: not support http version",
+                                                            handle.get_token(),
+                                                            handle.get_remote(),
+                                                            handle.get_local(),
                                                             ver))));
                         return None;
                     },

@@ -203,7 +203,8 @@ fn make_server_config(client_auth_path: Option<&Path>,
                     if let Err(e) = client_auth_roots.add(&root) {
                         //缓存客户端授权的根证书错误，则立即返回错误原因
                         return Err(Error::new(ErrorKind::Other,
-                                              format!("Save client auth root failed, reason: {:?}", e)));
+                                              format!("Save client auth root failed, reason: {:?}",
+                                                      e)));
                     }
                 }
 
@@ -253,7 +254,8 @@ fn make_server_config(client_auth_path: Option<&Path>,
         Err(e) => {
             //设置单证书链错误，则立即返回错误原因
             return Err(Error::new(ErrorKind::Other,
-                                  format!("bad certificates or private key, reason: {:?}", e)));
+                                  format!("bad certificates or private key, reason: {:?}",
+                                          e)));
         },
         Ok(cfg) => cfg,
     };
@@ -264,7 +266,8 @@ fn make_server_config(client_auth_path: Option<&Path>,
             Err(e) => {
                 //选择指定名称的密码套件错误，则立即返回错误原因
                 return Err(Error::new(ErrorKind::Other,
-                                      format!("Select suites failed, reason: {:?}", e)));
+                                      format!("Select suites failed, reason: {:?}",
+                                              e)));
             },
             Ok(suites) => {
                 //选择指定名称的密码套件成功
@@ -278,7 +281,8 @@ fn make_server_config(client_auth_path: Option<&Path>,
             Err(e) => {
                 //选择指定名称的Tls版本错误，则立即返回错误原因
                 return Err(Error::new(ErrorKind::Other,
-                                      format!("Select version failed, reason: {:?}", e)));
+                                      format!("Select version failed, reason: {:?}",
+                                              e)));
             },
             Ok(versions) => {
                 //选择指定名称的Tls版本成功
@@ -342,7 +346,8 @@ fn load_private_key<P: AsRef<Path>>(file_path: P) -> IOResult<PrivateKey> {
         Err(e) => {
             return Err(Error::new(ErrorKind::Other,
                                   format!("Open private key failed, path: {:?}, reason: {:?}",
-                                          file_path.as_ref(), e)));
+                                          file_path.as_ref(),
+                                          e)));
         },
         Ok(file) => {
             file
@@ -359,7 +364,8 @@ fn load_private_key<P: AsRef<Path>>(file_path: P) -> IOResult<PrivateKey> {
             Err(e) => {
                 return Err(Error::new(ErrorKind::Other,
                                       format!("Load private key failed, path: {:?}, reason: {:?}",
-                                              file_path.as_ref(), e)));
+                                              file_path.as_ref(),
+                                              e)));
             },
             _ => {
                 return Err(Error::new(ErrorKind::Other,
@@ -383,7 +389,8 @@ fn load_ocsp<P: AsRef<Path>>(file_path: &Option<P>) -> IOResult<Vec<u8>> {
             Err(e) => {
                 return Err(Error::new(ErrorKind::Other,
                                       format!("Open ocsp failed, path: {:?}, reason: {:?}",
-                                              path.as_ref(), e)));
+                                              path.as_ref(),
+                                              e)));
             },
             Ok(mut file) => {
                 file.read_to_end(&mut ret).unwrap();
@@ -401,7 +408,7 @@ fn select_suites(suites: &[String]) -> Result<Vec<&'static rustls::SupportedCiph
         if let Some(suite) = find_suite(cs_name) {
             result.push(suite);
         } else {
-            return Err(format!("cannot select ciphersuite '{}'", cs_name));
+            return Err(format!("Cannot select ciphersuite '{}'", cs_name));
         }
     }
 
@@ -429,7 +436,7 @@ fn select_versions(versions: &[String]) -> Result<Vec<rustls::ProtocolVersion>, 
             "1.2" => ProtocolVersion::TLSv1_2,
             "1.3" => ProtocolVersion::TLSv1_3,
             _ => {
-                return Err(format!("cannot select tls version '{}', valid are '1.2' and '1.3'", vname));
+                return Err(format!("Cannot select tls version '{}', valid are '1.2' and '1.3'", vname));
             },
         };
         result.push(version);

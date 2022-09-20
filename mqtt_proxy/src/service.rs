@@ -320,7 +320,11 @@ impl<S: Socket> MqttBrokerListener<S> for MqttProxyListener {
               reason: Result<()>) {
         //Mqtt连接已关闭
         if let Err(e) = &reason {
-            warn!("!!!> Mqtt proxy connect close by error, reason: {:?}", e);
+            warn!("Mqtt proxy connect close by error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                connect.get_token(),
+                connect.get_remote_addr(),
+                connect.get_local_addr(),
+                e);
         }
 
         if let Some(handler) = &self.connect_handler {

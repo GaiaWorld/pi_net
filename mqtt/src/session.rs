@@ -357,7 +357,7 @@ impl<S: Socket> MqttConnect<S> for QosZeroSession<S> {
             if let Err(e) = buf.write_packet(&packet) {
                 //序列化Mqtt报文失败
                 return Err(Error::new(ErrorKind::InvalidData,
-                                      format!("mqtt session send failed, reason: {:?}",
+                                      format!("Mqtt session send failed, reason: {:?}",
                                               e)));
             }
 

@@ -42,7 +42,10 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
             if let SocketStatus::Connected(Err(e)) = status {
                 //Tcp连接失败
                 handle.close(Err(Error::new(ErrorKind::Other,
-                                            format!("http server connect failed, reason: {:?}",
+                                            format!("Http server connect failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                                    handle.get_token(),
+                                                    handle.get_remote(),
+                                                    handle.get_local(),
                                                     e))));
                 return;
             }
@@ -61,7 +64,10 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
             //Tcp读数据失败
             return async move {
                 handle.close(Err(Error::new(ErrorKind::Other,
-                                            format!("Http server read failed, reason: {:?}",
+                                            format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                                    handle.get_token(),
+                                                    handle.get_remote(),
+                                                    handle.get_local(),
                                                     e))));
             }.boxed();
         }
@@ -89,7 +95,10 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 } else {
                     //请求没有连接上下文，则立即关闭当前Tcp连接
                     handle.close(Err(Error::new(ErrorKind::ConnectionRefused,
-                                                "http server read failed, reason: invalid http connect context")));
+                                                format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid http connect context",
+                                                        handle.get_token(),
+                                                        handle.get_remote(),
+                                                        handle.get_local()))));
                     return;
                 }
 
@@ -142,7 +151,10 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                                             } else {
                                                 //请求的Url无效，则立即关闭当前Tcp连接
                                                 handle.close(Err(Error::new(ErrorKind::ConnectionRefused,
-                                                                            format!("http server read failed, url: {:?}, reason: invalid url",
+                                                                            format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, url: {:?}, reason: invalid url",
+                                                                                    handle.get_token(),
+                                                                                    handle.get_remote(),
+                                                                                    handle.get_local(),
                                                                                     url))));
                                                 return;
                                             }
@@ -151,13 +163,19 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                                 } else {
                                     //请求的主机头无效，则立即关闭当前连接
                                     handle.close(Err(Error::new(ErrorKind::Other,
-                                                                "http server read failed, reason: invalid host header")));
+                                                                format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid host header",
+                                                                        handle.get_token(),
+                                                                        handle.get_remote(),
+                                                                        handle.get_local()))));
                                     return;
                                 }
                             } else {
                                 //请求没有主机头，则立即关闭当前连接
                                 handle.close(Err(Error::new(ErrorKind::Other,
-                                                            "http server read failed, reason: host header not exist")));
+                                                            format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: host header not exist",
+                                                                    handle.get_token(),
+                                                                    handle.get_remote(),
+                                                                    handle.get_local()))));
                                 return;
                             }
                         }
@@ -170,7 +188,10 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 } else {
                     //请求没有绑定Http连接，则立即关闭当前Tcp连接
                     handle.close(Err(Error::new(ErrorKind::ConnectionRefused,
-                                                "http server read failed, reason: invalid http connect")));
+                                                format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid http connect",
+                                                        handle.get_token(),
+                                                        handle.get_remote(),
+                                                        handle.get_local()))));
                 }
             }.boxed()
         }
@@ -183,7 +204,10 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
             if let SocketStatus::Writed(Err(e)) = status {
                 //Tcp写数据失败，则立即关闭当前Http连接
                 handle.close(Err(Error::new(ErrorKind::Other,
-                                            format!("http server write failed, reason: {:?}",
+                                            format!("Http server write failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                                    handle.get_token(),
+                                                    handle.get_remote(),
+                                                    handle.get_local(),
                                                     e))));
                 return;
             }
@@ -199,9 +223,10 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 if let Err(e) = result {
                     if e.kind() != ErrorKind::UnexpectedEof {
                         //Http连接非正常关闭
-                        warn!("!!!> Http Connect Close by Error, local: {:?}, remote: {:?}, reason: {:?}",
-                            handle.get_local(),
+                        warn!("Http Connect Close by Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                            handle.get_token(),
                             handle.get_remote(),
+                            handle.get_local(),
                             e);
                     }
                 }
@@ -210,10 +235,10 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 if let Err(e) = handle
                     .get_context_mut()
                     .remove::<HttpConnect<S, <<P as VirtualHostPool<S>>::Host as ServiceFactory<S>>::Service>>() {
-                    warn!("!!!> Free Context Failed by Http Connect Close, token: {:?}, local: {:?}, remote: {:?}, reason: {:?}",
+                    warn!("Free Context Failed by Http Connect Close, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                         handle.get_token(),
-                        handle.get_local(),
                         handle.get_remote(),
+                        handle.get_local(),
                         e);
                 }
             }
@@ -228,10 +253,11 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
             if let SocketStatus::Timeout(event) = status {
                 //Http连接超时，则立即关闭当前Http连接
                 handle.close(Ok(()));
-                warn!("!!!> Http Connect Timeout, keep_alive: {:?}, local: {:?}, remote: {:?}",
-                    event.get::<usize>(),
+                warn!("Http Connect Timeout, token: {:?}, remote: {:?}, local: {:?}, keep_alive: {:?}",
+                    handle.get_token(),
+                    handle.get_remote(),
                     handle.get_local(),
-                    handle.get_remote());
+                    event.get::<usize>());
             }
         };
         future.boxed()

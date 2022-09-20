@@ -60,7 +60,9 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
             match TcpListener::bind(addr.clone()) {
                 Err(e) => {
                     //绑定指定地址失败，则继续绑定其它地址
-                    warn!("Tcp acceptor bind address failed, addr: {:?}, reason: {:?}", addr, e);
+                    warn!("Tcp acceptor bind address failed, addr: {:?}, reason: {:?}",
+                        addr,
+                        e);
                     len -= 1;
                 },
                 Ok(mut listener) => {
@@ -73,7 +75,9 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
                     if let Err(e) = poll
                         .registry()
                         .register(&mut listener, token, Interest::READABLE) {
-                        warn!("Tcp acceptor poll register failed, addr: {:?}, reason: {:?}", addr, e);
+                        warn!("Tcp acceptor poll register failed, addr: {:?}, reason: {:?}",
+                            addr,
+                            e);
                         len -= 1;
                         continue;
                     }
@@ -173,7 +177,10 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
     let mut events = Events::with_capacity(event_size);
     loop {
         if let Err(e) = acceptor.poll.poll(&mut events, poll_timeout) {
-            warn!("Tcp acceptor poll failed, timeout: {:?}, ports: {:?}, reason: {:?}", poll_timeout, &acceptor_name, e);
+            warn!("Tcp acceptor poll failed, timeout: {:?}, ports: {:?}, reason: {:?}",
+                poll_timeout,
+                &acceptor_name,
+                e);
             break;
         }
 
@@ -186,10 +193,13 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
                         let now = Instant::now();
                         info!("Pause tcp acceptor start, ports: {:?}", &acceptor_name);
                         thread::sleep(Duration::from_millis(time as u64));
-                        info!("Pause tcp acceptor finish, time: {:?}, ports: {:?}", Instant::now() - now, &acceptor_name);
+                        info!("Pause tcp acceptor finish, time: {:?}, ports: {:?}",
+                            Instant::now() - now,
+                            &acceptor_name);
                     },
                     AcceptorCmd::Close(reason) => {
-                        info!("Close tcp acceptor ok, ports: {:?}, reason: {:?}", &acceptor_name, reason);
+                        info!("Close tcp acceptor ok, ports: {:?}, reason: {:?}",
+                            &acceptor_name, reason);
                         break;
                     }
                 }
@@ -214,7 +224,10 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
                             //连接成功，则路由连接到连接池
                             if let Err(e) = context.driver.route(socket) {
                                 //严重错误，则输出日志后，立即退出进程
-                                warn!("Tcp acceptor listen failed, port: {:?}, token: {:?}, reason: {:?}", context.listener.local_addr(), token, e);
+                                warn!("Tcp acceptor listen failed, port: {:?}, token: {:?}, reason: {:?}",
+                                    context.listener.local_addr(),
+                                    token,
+                                    e);
                                 std::process::exit(1);
                             }
 
@@ -228,17 +241,24 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
                         },
                         Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                             //连接将阻塞，则等待下次事件轮询时，完成连接，并继续处理下一个连接事件
-                            warn!("Tcp acceptor listen would block, port: {:?}, token: {:?}", context.listener.local_addr(), token);
+                            warn!("Tcp acceptor listen would block, port: {:?}, token: {:?}",
+                                context.listener.local_addr(),
+                                token);
                         },
                         Err(e) => {
                             //连接失败
                             is_error = true; //标记当前Tcp连接监听器出错
-                            warn!("Tcp acceptor listen failed, port: {:?}, token: {:?}, reason: {:?}", context.listener.local_addr(), token, e);
+                            warn!("Tcp acceptor listen failed, port: {:?}, token: {:?}, reason: {:?}",
+                                context.listener.local_addr(),
+                                token,
+                                e);
                         },
                     }
                 } else {
                     //无效的事件准备状态，则继续处理下一个连接事件
-                    warn!("Tcp acceptor listen failed, port: {:?}, token: {:?}, reason: invalid ready", context.listener.local_addr(), token);
+                    warn!("Tcp acceptor listen failed, port: {:?}, token: {:?}, reason: invalid ready",
+                        context.listener.local_addr(),
+                        token);
                 }
             }
 
@@ -253,7 +273,10 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
                             .registry()
                             .deregister(&mut error_context.listener) {
                             //从轮询器中注销出错的Tcp连接监听器失败
-                            warn!("Tcp acceptor unregister listen failed, port: {:?}, token: {:?}, reason: {:?}", addr, token, e);
+                            warn!("Tcp acceptor unregister listen failed, port: {:?}, token: {:?}, reason: {:?}",
+                                addr,
+                                token,
+                                e);
                         }
 
                         (&mut acceptor.listeners).remove(addr);

@@ -468,7 +468,8 @@ pub trait Stream: Sized + Send + 'static {
     fn set_close_listener(&mut self, listener: Option<Sender<(Token, Result<()>)>>);
 
     /// 设置定时器监听器
-    fn set_timer_listener(&mut self, listener: Option<Sender<(Token, Option<(usize, SocketEvent)>)>>);
+    fn set_timer_listener(&mut self,
+                          listener: Option<Sender<(Token, Option<(usize, SocketEvent)>)>>);
 
     /// 设置定时器句柄，返回上个定时器句柄
     fn set_timer_handle(&mut self, timer: usize) -> Option<usize>;
@@ -525,9 +526,6 @@ pub trait Socket: Sized + Send + 'static {
 
     /// 取消连接的未超时超时定时器
     fn unset_timeout(&self);
-
-    /// 设置连接读写缓冲区容量
-    fn init_buffer_capacity(&mut self, read_size: usize, write_size: usize);
 
     /// 是否是安全的连接
     fn is_security(&self) -> bool;
@@ -675,12 +673,15 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> SocketDriver<S, A> {
 
             match router.try_send(socket) {
                 Err(e) => {
-                    Err(Error::new(ErrorKind::BrokenPipe, format!("tcp socket route failed, e: {:?}", e)))
+                    Err(Error::new(ErrorKind::BrokenPipe,
+                                   format!("tcp socket route failed, e: {:?}",
+                                           e)))
                 },
                 Ok(_) => Ok(()),
             }
         } else {
-            Err(Error::new(ErrorKind::Interrupted, format!("tcp socket route failed, e: invalid accept token")))
+            Err(Error::new(ErrorKind::Interrupted,
+                           format!("tcp socket route failed, e: invalid accept token")))
         }
     }
 
@@ -746,12 +747,18 @@ impl<S: Socket> SocketHandle<S> {
 
     /// 线程安全的设置超时定时器
     pub fn set_timeout(&self, timeout: usize, event: SocketEvent) {
-        // self.0.timer_listener.send((self.0.token, Some((timeout, event))));
+        self
+            .0
+            .timer_listener
+            .send((self.0.token, Some((timeout, event))));
     }
 
     /// 线程安全的取消超时定时器
     pub fn unset_timeout(&self) {
-        // self.0.timer_listener.send((self.0.token, None));
+        self
+            .0
+            .timer_listener
+            .send((self.0.token, None));
     }
 
     /// 线程安全的判断是否是安全连接
@@ -875,7 +882,7 @@ pub struct SocketImage<S: Socket> {
     security:       bool,                                           //Tcp连接是否安全
     closed:         Rc<AtomicBool>,                                 //Tcp连接关闭状态
     close_listener: Sender<(Token, Result<()>)>,                    //关闭事件监听器
-    // timer_listener: Sender<(Token, Option<(usize, SocketEvent)>)>,  //定时事件监听器
+    timer_listener: Sender<(Token, Option<(usize, SocketEvent)>)>,  //定时事件监听器
 }
 
 unsafe impl<S: Socket> Send for SocketImage<S> {}
@@ -890,7 +897,7 @@ impl<S: Socket> SocketImage<S> {
                security: bool,
                closed: Rc<AtomicBool>,
                close_listener: Sender<(Token, Result<()>)>,
-               // timer_listener: Sender<(Token, Option<(usize, SocketEvent)>)>
+               timer_listener: Sender<(Token, Option<(usize, SocketEvent)>)>
     ) -> Self {
         SocketImage {
             inner: shared.as_ptr() as *const S,
@@ -900,7 +907,7 @@ impl<S: Socket> SocketImage<S> {
             security,
             closed,
             close_listener,
-            // timer_listener,
+            timer_listener,
         }
     }
 }

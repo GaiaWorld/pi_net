@@ -91,6 +91,8 @@ pub struct TlsSocket {
     context:            SocketContext,                                      //连接上下文
     closed:             Rc<AtomicBool>,                                     //连接关闭状态
     close_listener:     Option<Sender<(Token, Result<()>)>>,                //连接关闭事件监听器
+    timer_handle:       Option<usize>,                                          //定时器句柄
+    timer_listener:     Option<Sender<(Token, Option<(usize, SocketEvent)>)>>,  //定时事件监听器
 }
 
 unsafe impl Send for TlsSocket {}
@@ -199,6 +201,8 @@ impl Stream for TlsSocket {
             context,
             closed,
             close_listener: None,
+            timer_handle: None,
+            timer_listener: None,
         };
         result.set_interest(result.event_set()); //设置Tls连接初始感兴趣的事件
 
@@ -212,18 +216,18 @@ impl Stream for TlsSocket {
     fn set_handle(&mut self, shared: &Arc<RefCell<Self>>) {
         if let Some(token) = self.token {
             if let Some(close_listener) = &self.close_listener {
-                // if let Some(timer_listener) = &self.timer_listener {
-                let image = SocketImage::new(shared,
-                                             self.local,
-                                             self.remote,
-                                             token,
-                                             self.is_security(),
-                                             self.closed.clone(),
-                                             close_listener.clone(),
-                                             // timer_listener.clone()
-                );
-                self.handle = Some(SocketHandle::new(image));
-                // }
+                if let Some(timer_listener) = &self.timer_listener {
+                    let image = SocketImage::new(shared,
+                                                 self.local,
+                                                 self.remote,
+                                                 token,
+                                                 self.is_security(),
+                                                 self.closed.clone(),
+                                                 close_listener.clone(),
+                                                 timer_listener.clone()
+                    );
+                    self.handle = Some(SocketHandle::new(image));
+                }
             }
         }
     }
@@ -306,15 +310,17 @@ impl Stream for TlsSocket {
     }
 
     fn set_timer_listener(&mut self, listener: Option<Sender<(Token, Option<(usize, SocketEvent)>)>>) {
-
+        self.timer_listener = listener;
     }
 
-    fn set_timer_handle(&mut self, timer: usize) -> Option<usize> {
-        None
+    fn set_timer_handle(&mut self, timer_handle: usize) -> Option<usize> {
+        let last_timer_handle = self.unset_timer_handle();
+        self.timer_handle = Some(timer_handle);
+        last_timer_handle
     }
 
     fn unset_timer_handle(&mut self) -> Option<usize> {
-        None
+        self.timer_handle.take()
     }
 
     #[inline]
@@ -452,15 +458,19 @@ impl Socket for TlsSocket {
     }
 
     fn set_timeout(&self, timeout: usize, event: SocketEvent) {
-
+        if let Some(listener) = &self.timer_listener {
+            if let Some(token) = self.token {
+                listener.send((token, Some((timeout, event))));
+            }
+        }
     }
 
     fn unset_timeout(&self) {
-
-    }
-
-    fn init_buffer_capacity(&mut self, read_size: usize, write_size: usize) {
-
+        if let Some(listener) = &self.timer_listener {
+            if let Some(token) = self.token {
+                listener.send((token, None));
+            }
+        }
     }
 
     fn is_security(&self) -> bool {

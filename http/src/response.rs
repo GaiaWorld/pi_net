@@ -110,7 +110,7 @@ impl RespBody {
     pub async fn body(&self) -> HttpRecvResult<Vec<(u64, Vec<u8>)>> {
         if self.buf.is_some() {
             return HttpRecvResult::Err(Error::new(ErrorKind::Other,
-                                                  "receive body failed, reason: invalid body consumer"));
+                                                  "Receive body failed, reason: invalid body consumer"));
         }
 
         self.consumer.recv().await

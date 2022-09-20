@@ -68,7 +68,7 @@ impl<S: Socket> WsSocket<S> {
             return Ok(());
         }
 
-        Err(Error::new(ErrorKind::InvalidData, "invalid payload"))
+        Err(Error::new(ErrorKind::InvalidData, "Invalid payload"))
     }
 
     /// 线程安全的判断连接是否关闭
@@ -125,7 +125,7 @@ impl<S: Socket> WsSocket<S> {
             return self.socket.write_ready(buf);
         }
 
-        Err(Error::new(ErrorKind::InvalidData, "invalid payload"))
+        Err(Error::new(ErrorKind::InvalidData, "Invalid payload"))
     }
 
     /// 线程安全的异步休眠当前连接，直到被唤醒，返回空表示连接已关闭

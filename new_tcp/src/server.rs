@@ -288,7 +288,8 @@ impl<S, F> SocketListener<S, F>
     ) -> Result<SocketDriver<S, PortsAdapter<S>>> {
         if runtimes.is_empty() {
             //至少需要一个工作者
-            return Err(Error::new(ErrorKind::Other, format!("Bind listener failed, reason: require runtime")));
+            return Err(Error::new(ErrorKind::Other,
+                                  format!("Bind listener failed, reason: require runtime")));
         }
 
         let addrs = config.addrs();

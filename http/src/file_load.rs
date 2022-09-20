@@ -71,7 +71,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FileLoad {
                 //无法获取有效文件路径的字符串，则立即抛出错误
                 return MiddlewareResult::Throw(Error::new(
                     ErrorKind::Other,
-                    "file load failed, reason: invaild file path",
+                    "File load failed, reason: invaild file path",
                 ));
             }
 
@@ -408,21 +408,21 @@ async fn async_load_file(files_async_runtime: MultiTaskRuntime<()>,
                         Ok(bin) => {
                             //读文件成功
                             if let Err(e) = resp_handler.write(bin).await {
-                                warn!("!!!> Http Body Mut Write Failed, file: {:?}, reason: {:?}", path, e);
+                                warn!("Http Body Mut Write Failed, file: {:?}, reason: {:?}", path, e);
                             } else {
                                 if let Err(e) = resp_handler.finish().await {
-                                    warn!("!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}", path, e);
+                                    warn!("Http Body Mut Finish Failed, file: {:?}, reason: {:?}", path, e);
                                 }
                             }
                         }
                         Err(e) => {
                             warn!(
-                                "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                "Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
                                 path, e
                             );
                             if let Err(e) = resp_handler.finish().await {
                                 warn!(
-                                    "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                                    "Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
                                     path, e
                                 );
                             }
@@ -431,12 +431,12 @@ async fn async_load_file(files_async_runtime: MultiTaskRuntime<()>,
                 }
                 Err(e) => {
                     warn!(
-                        "!!!> Http Async Open File Failed, file: {:?}, reason: {:?}",
+                        "Http Async Open File Failed, file: {:?}, reason: {:?}",
                         path, e
                     );
                     if let Err(e) = resp_handler.finish().await {
                         warn!(
-                            "!!!> Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
+                            "Http Body Mut Finish Failed, file: {:?}, reason: {:?}",
                             path, e
                         );
                     }
@@ -444,7 +444,7 @@ async fn async_load_file(files_async_runtime: MultiTaskRuntime<()>,
             }
         }) {
             warn!(
-                "!!!> Http Async Open File Failed, reason: {:?}",
+                "Http Async Open File Failed, reason: {:?}",
                 e
             );
         }
@@ -453,6 +453,6 @@ async fn async_load_file(files_async_runtime: MultiTaskRuntime<()>,
 
     Err(Error::new(
         ErrorKind::NotFound,
-        "load file error, reason: invalid response body",
+        "Load file error, reason: invalid response body",
     ))
 }

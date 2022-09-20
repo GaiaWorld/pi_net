@@ -108,7 +108,11 @@ impl ChildProtocol<TcpSocket> for WsMqtt311 {
         //连接已关闭，则立即释放Ws会话的上下文
         match context.get_context_mut().remove::<BrokerSession>() {
             Err(e) => {
-                warn!("!!!> Free Context Failed of Mqtt Close, reason: {:?}", e);
+                warn!("Free Context Failed of Mqtt Close, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                    connect.get_token(),
+                    connect.get_remote(),
+                    connect.get_local(),
+                    e);
             },
             Ok(opt) => {
                 if let Some(context) = opt {
@@ -139,11 +143,11 @@ impl ChildProtocol<TcpSocket> for WsMqtt311 {
         if let Err(e) = send_packet(&connect, &Packet::Disconnect) {
             //发送关闭连接报文失败，则立即返回错误原因
             return Err(Error::new(ErrorKind::BrokenPipe,
-                                  format!("mqtt send failed by disconnect, reason: {:?}",
+                                  format!("Mqtt send failed by disconnect, reason: {:?}",
                                           e)));
         }
 
-        warn!("!!!> Mqtt Session Timeout, token: {:?}, local: {:?}, remote: {:?}",
+        warn!("Mqtt Session Timeout, token: {:?}, local: {:?}, remote: {:?}",
             connect.get_token(),
             connect.get_local(),
             connect.get_remote());
@@ -168,7 +172,7 @@ fn send_packet(connect: &WsSocket<TcpSocket>,
     if let Err(e) = buf.write_packet(packet) {
         //序列化Mqtt报文失败
         return Err(Error::new(ErrorKind::InvalidData,
-                              format!("mqtt send failed, reason: {:?}",
+                              format!("Mqtt send failed, reason: {:?}",
                                       e)));
     }
 
@@ -188,7 +192,7 @@ pub fn broadcast_packet(connects: &[WsSocket<TcpSocket>],
     if let Err(e) = buf.write_packet(packet) {
         //序列化Mqtt报文失败
         return Err(Error::new(ErrorKind::InvalidData,
-                              format!("mqtt send failed, reason: {:?}",
+                              format!("Mqtt send failed, reason: {:?}",
                                       e)));
     }
 
@@ -220,7 +224,7 @@ async fn accept(protocol: WsMqtt311,
             if session.is_accepted() {
                 //当前客户端已连接，则立即返回错误原因
                 return Err(Error::new(ErrorKind::AlreadyExists,
-                                      "mqtt connect failed, reason: connect already exist"));
+                                      "Mqtt connect failed, reason: connect already exist"));
             }
         }
     }
@@ -247,12 +251,12 @@ async fn accept(protocol: WsMqtt311,
         if let Err(e) = send_packet(&connect, &Packet::Connack(ack)) {
             //发送回应失败，则立即返回错误原因
             return Err(Error::new(ErrorKind::BrokenPipe,
-                                  format!("mqtt send failed by connect, reason: {:?}",
+                                  format!("Mqtt send failed by connect, reason: {:?}",
                                           e)));
         }
 
         return Err(Error::new(ErrorKind::ConnectionAborted,
-                              "mqtt connect failed, reason: invalid protocol version"));
+                              "Mqtt connect failed, reason: invalid protocol version"));
     }
 
     //在Ws连接会话中绑定当前连接与当前客户端会话
@@ -295,10 +299,9 @@ async fn accept(protocol: WsMqtt311,
     if let Err(e) = send_packet(&connect, &Packet::Connack(ack)) {
         //发送回应失败，则立即返回错误原因
         return Err(Error::new(ErrorKind::BrokenPipe,
-                              format!("mqtt send failed by connect, reason: {:?}",
+                              format!("Mqtt send failed by connect, reason: {:?}",
                                       e)));
     }
-    println!("!!!!!!accept ok");
 
     Ok(())
 }
@@ -333,7 +336,7 @@ fn get_client_context(connect: &WsSocket<TcpSocket>) -> Result<(String, u16)> {
     } else {
         //Ws连接绑定的客户端不存在，则立即返回错误原因
         Err(Error::new(ErrorKind::ConnectionRefused,
-                       "mqtt subscribe failed, reason: invalid connect"))
+                       "Mqtt subscribe failed, reason: invalid connect"))
     }
 }
 
@@ -355,7 +358,7 @@ async fn publish(protocol: WsMqtt311,
     if qos > protocol.get_qos().to_u8() {
         //如果客户端要求的发布消息的Qos大于服务端支持的最大Qos，则立即返回错误原因
         return Err(Error::new(ErrorKind::InvalidData,
-                              "mqtt publish failed, reason: invalid qos"));
+                              "Mqtt publish failed, reason: invalid qos"));
     }
 
     let topic_path = if let Ok(path) = TopicPath::from_str(packet.topic_name.as_str()) {
@@ -364,13 +367,13 @@ async fn publish(protocol: WsMqtt311,
     } else {
         //解析发布的主题失败，则立即返回错误原因
         return Err(Error::new(ErrorKind::InvalidData,
-                              format!("mqtt publish failed, topic: {:?}, reason: parse topic error",
+                              format!("Mqtt publish failed, topic: {:?}, reason: parse topic error",
                                       packet.topic_name)));
     };
     if topic_path.wildcards || topic_path.path.is_empty() {
         //发布消息的主题为空，或者有通匹符，则立即返回错误原因
         return Err(Error::new(ErrorKind::InvalidData,
-                              "mqtt publish failed, reason: invalid topic"));
+                              "Mqtt publish failed, reason: invalid topic"));
     }
 
     //修改需要待发送的发布消息报文，并向订阅了指定主题的客户端发送当前报文
@@ -424,7 +427,7 @@ async fn publish(protocol: WsMqtt311,
                                          &Packet::Publish(packet)) {
             //发布消息失败，则立即返回错误原因
             return Err(Error::new(ErrorKind::BrokenPipe,
-                                  format!("mqtt broadcast failed by publish, reason: {:?}",
+                                  format!("Mqtt broadcast failed by publish, reason: {:?}",
                                           e)));
         }
     }
@@ -503,7 +506,7 @@ async fn subscribe(protocol: WsMqtt311,
     if let Err(e) = send_packet(&connect, &Packet::Suback(ack)) {
         //发送回应失败，则立即返回错误原因
         return Err(Error::new(ErrorKind::BrokenPipe,
-                              format!("mqtt send failed by subscribe, reason: {:?}",
+                              format!("Mqtt send failed by subscribe, reason: {:?}",
                                       e)));
     }
 
@@ -545,7 +548,7 @@ fn unsubscribe(protocol: WsMqtt311,
         if let Some(session) = protocol.broker.get_session(&client_id) {
             if let Err(e) = service.0.unsubscribe(MqttBrokerProtocol::WsMqtt311(Arc::new(protocol)), session, topics.clone()) {
                 return Err(Error::new(ErrorKind::BrokenPipe,
-                                      format!("mqtt unsubscribe failed, reason: {:?}",
+                                      format!("Mqtt unsubscribe failed, reason: {:?}",
                                               e)));
             }
         }
@@ -563,7 +566,7 @@ fn unsubscribe(protocol: WsMqtt311,
     if let Err(e) = send_packet(&connect, &Packet::Unsuback(pkid)) {
         //发送回应失败，则立即返回错误原因
         return Err(Error::new(ErrorKind::BrokenPipe,
-                              format!("mqtt send failed by unsubscribe, reason: {:?}",
+                              format!("Mqtt send failed by unsubscribe, reason: {:?}",
                                       e)));
     }
 
@@ -583,7 +586,7 @@ fn ping_req(connect: WsSocket<TcpSocket>) -> Result<()> {
 
     if let Err(e) = send_packet(&connect, &Packet::Pingresp) {
         //发送回应失败，则立即返回错误原因
-        return Err(Error::new(ErrorKind::BrokenPipe, format!("mqtt send failed by ping, reason: {:?}", e)));
+        return Err(Error::new(ErrorKind::BrokenPipe, format!("Mqtt send failed by ping, reason: {:?}", e)));
     }
 
     Ok(())

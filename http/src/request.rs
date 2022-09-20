@@ -41,13 +41,13 @@ impl StartLine {
                version: Version) -> Option<Self> {
         match Method::from_str(method) {
             Err(e) => {
-                warn!("!!!> Create Http Start Line Failed, reason: {:?}", e);
+                warn!("Create Http Start Line Failed, reason: {:?}", e);
                 None
             },
             Ok(method) => {
                 match Url::from_str(url) {
                     Err(e) => {
-                        warn!("!!!> Create Http Start Line Failed, reason: {:?}", e);
+                        warn!("Create Http Start Line Failed, reason: {:?}", e);
                         None
                     },
                     Ok(url) => {
