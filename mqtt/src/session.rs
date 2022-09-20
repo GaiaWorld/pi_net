@@ -87,9 +87,6 @@ pub trait MqttSession: Debug + Send + Sync + 'static {
 /// Mqtt连接
 ///
 pub trait MqttConnect<S: Socket>: Debug + Send + Sync + 'static {
-    /// 获取连接的唯一id
-    fn get_uid(&self) -> Option<usize>;
-
     /// 获取连接的令牌
     fn get_token(&self) -> Option<usize>;
 
@@ -289,14 +286,6 @@ impl<S: Socket> MqttSession for QosZeroSession<S> {
 }
 
 impl<S: Socket> MqttConnect<S> for QosZeroSession<S> {
-    fn get_uid(&self) -> Option<usize> {
-        if let Some(connect) = &self.connect {
-            return Some(connect.get_uid())
-        }
-
-        None
-    }
-
     fn get_token(&self) -> Option<usize> {
         if let Some(connect) = &self.connect {
             return Some(connect.get_token().0);

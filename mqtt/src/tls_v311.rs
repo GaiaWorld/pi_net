@@ -146,8 +146,8 @@ impl ChildProtocol<TlsSocket> for WssMqtt311 {
                                           e)));
         }
 
-        warn!("!!!> Mqtt Session Timeout, uid: {:?}, local: {:?}, remote: {:?}",
-            connect.get_uid(),
+        warn!("!!!> Mqtt Session Timeout, token: {:?}, local: {:?}, remote: {:?}",
+            connect.get_token(),
             connect.get_local(),
             connect.get_remote());
         Ok(())

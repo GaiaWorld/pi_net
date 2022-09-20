@@ -676,18 +676,29 @@ impl Socket for TcpSocket {
                 .fetch_add(buf.as_ref().len(), Ordering::Relaxed); //首先要同步增加需要发送的字节数
 
             //再派发填充当前连接写缓冲区的异步任务
-            let interest = self.interest.clone();
+            let interest = self
+                .interest
+                .lock()
+                .add(Interest::WRITABLE); //设置连接当前对写事件感兴趣
             let write_buf = self.write_buf.clone();
             rt.spawn(rt.alloc(), async move {
                 let bin = buf.as_ref();
                 if let Some(write_buf) = &mut *write_buf.lock() {
                     write_buf.put_slice(bin);
                 }
-
-                interest
-                    .lock()
-                    .add(Interest::WRITABLE); //设置连接当前对写事件感兴趣
             });
+
+            //强制重置连接当前感兴趣的事件
+            let token = self.get_token().unwrap().clone();
+            return self
+                .poll
+                .as_ref()
+                .unwrap()
+                .lock()
+                .registry()
+                .reregister(&mut self.stream,
+                            token,
+                            interest);
         }
 
         Ok(())

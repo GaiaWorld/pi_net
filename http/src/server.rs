@@ -210,8 +210,8 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 if let Err(e) = handle
                     .get_context_mut()
                     .remove::<HttpConnect<S, <<P as VirtualHostPool<S>>::Host as ServiceFactory<S>>::Service>>() {
-                    warn!("!!!> Free Context Failed by Http Connect Close, uid: {:?}, local: {:?}, remote: {:?}, reason: {:?}",
-                        handle.get_uid(),
+                    warn!("!!!> Free Context Failed by Http Connect Close, token: {:?}, local: {:?}, remote: {:?}, reason: {:?}",
+                        handle.get_token(),
                         handle.get_local(),
                         handle.get_remote(),
                         e);

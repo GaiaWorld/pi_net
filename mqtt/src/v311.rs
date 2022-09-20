@@ -143,7 +143,10 @@ impl ChildProtocol<TcpSocket> for WsMqtt311 {
                                           e)));
         }
 
-        warn!("!!!> Mqtt Session Timeout, uid: {:?}, local: {:?}, remote: {:?}", connect.get_uid(), connect.get_local(), connect.get_remote());
+        warn!("!!!> Mqtt Session Timeout, token: {:?}, local: {:?}, remote: {:?}",
+            connect.get_token(),
+            connect.get_local(),
+            connect.get_remote());
         Ok(())
     }
 }

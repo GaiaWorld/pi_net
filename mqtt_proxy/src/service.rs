@@ -63,7 +63,7 @@ impl<S: Socket> GrayVersion for MqttConnectHandle<S> {
 
     // 获取连接唯一id
     fn get_id(&self) -> usize {
-        if let Some(uid) = self.connect.get_uid() {
+        if let Some(uid) = self.connect.get_token() {
             return uid;
         }
 

@@ -84,7 +84,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for HttpPort {
                    -> BoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             //处理请求
-            let uid = req.get_handle().get_uid(); //获取当前http连接的唯一id
+            let uid = req.get_handle().get_token().0; //获取当前http连接的唯一id
             let gray = self.get_gray(); //获取当前灰度
             let remote_addr = req.get_handle().get_remote().clone(); //获取当前http连接的对端地址
             let headers = req.share_headers(); //获取当前http请求头

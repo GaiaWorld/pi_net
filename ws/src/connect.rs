@@ -101,11 +101,6 @@ impl<S: Socket> WsSocket<S> {
         return self.socket.get_context().get::<WsSession>()
     }
 
-    /// 线程安全的获取Tcp连接的唯一id
-    pub fn get_uid(&self) -> usize {
-        self.socket.get_uid()
-    }
-
     /// 线程安全的设置Tcp连接超时定时器
     pub fn set_timeout(&self, timeout: usize, event: SocketEvent) {
         self.socket.set_timeout(timeout, event);
@@ -197,75 +192,81 @@ impl<S: Socket> WsSocket<S> {
         }
 
         //读数据，并填充帧数据
-        let mut frame = WsFrame::<S>::default();
-        WsFrame::read_head(handle, window_bits, &mut frame).await;
-
-        if let Some(context) = h.as_mut() {
-            //根据帧类型，处理帧数据
-            if let WsPayload::Raw(payload) = frame.payload() {
-                //当前帧有祼负载，则缓冲负载
-                context.fill_msg(payload);
-            }
-
-            let head = frame.get_head();
-            if head.is_single() {
-                //数据帧，且只有单帧，则设置帧类型，并开始消息处理
-                context.set_type(head.get_type());
-                context.finish_msg();
-
-                if let Err(e) = protocol
-                    .decode_protocol(Self::new(handle.clone(), window_bits),
-                                     context).await {
-                    //协议处理失败，则立即关闭当前Ws连接
-                    close::<S>(handle, Err(e));
-                }
-
-                //重置当前连接的当前帧，并继续读后续帧
-                context.reset();
-                return;
-            } else if head.is_first() {
-                //数据帧，当前是首帧，则设置帧类型，并继续读后续帧
-                context.set_type(head.get_type());
-                return;
-            } else if head.is_next() {
-                //数据帧，当前是后续帧，则继续读后续帧
-                return;
-            } else if head.is_finish() {
-                //数据帧，当前是结束帧，则开始消息处理
-                context.finish_msg();
-
-                if let Err(e) = protocol
-                    .decode_protocol(Self::new(handle.clone(), window_bits),
-                                     context).await {
-                    //协议处理失败，则立即关闭当前Ws连接
-                    close::<S>(handle, Err(e));
-                }
-
-                //重置当前连接的当前帧，并继续读后续帧
-                context.reset();
-                return;
-            } else {
-                //控制帧，则设置帧类型
-                context.set_type(head.get_type());
-            }
-        } else {
-            //无法获取会话的可写引用，则表示有异常，立即关闭Ws连接
-            close::<S>(handle, Err(Error::new(ErrorKind::Other,
-                                              format!("Websocket Read Failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid writable context",
-                                                      handle.get_token(),
-                                                      handle.get_remote(),
-                                                      handle.get_local()))));
-            return;
+        let mut frames = Vec::new();
+        while handle.get_read_buffer_mut().try_fill().await > 0 {
+            let mut frame = WsFrame::<S>::default();
+            WsFrame::read_head(handle, window_bits, &mut frame).await;
+            frames.push(frame);
         }
 
-        //控制帧，则开始控制处理
-        WsSocket::handle_control(handle, window_bits, h).await;
+        for mut frame in frames {
+            if let Some(context) = h.as_mut() {
+                //根据帧类型，处理帧数据
+                if let WsPayload::Raw(payload) = frame.payload() {
+                    //当前帧有祼负载，则缓冲负载
+                    context.fill_msg(payload);
+                }
+
+                let head = frame.get_head();
+                if head.is_single() {
+                    //数据帧，且只有单帧，则设置帧类型，并开始消息处理
+                    context.set_type(head.get_type());
+                    context.finish_msg();
+
+                    if let Err(e) = protocol
+                        .decode_protocol(Self::new(handle.clone(), window_bits),
+                                         context).await {
+                        //协议处理失败，则立即关闭当前Ws连接
+                        close::<S>(handle, Err(e));
+                    }
+
+                    //重置当前连接的当前帧，并继续读后续帧
+                    context.reset();
+                    continue;
+                } else if head.is_first() {
+                    //数据帧，当前是首帧，则设置帧类型，并继续读后续帧
+                    context.set_type(head.get_type());
+                    continue;
+                } else if head.is_next() {
+                    //数据帧，当前是后续帧，则继续读后续帧
+                    continue;
+                } else if head.is_finish() {
+                    //数据帧，当前是结束帧，则开始消息处理
+                    context.finish_msg();
+
+                    if let Err(e) = protocol
+                        .decode_protocol(Self::new(handle.clone(), window_bits),
+                                         context).await {
+                        //协议处理失败，则立即关闭当前Ws连接
+                        close::<S>(handle, Err(e));
+                    }
+
+                    //重置当前连接的当前帧，并继续读后续帧
+                    context.reset();
+                    continue;
+                } else {
+                    //控制帧，则设置帧类型
+                    context.set_type(head.get_type());
+                }
+            } else {
+                //无法获取会话的可写引用，则表示有异常，立即关闭Ws连接
+                close::<S>(handle, Err(Error::new(ErrorKind::Other,
+                                                  format!("Websocket Read Failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid writable context",
+                                                          handle.get_token(),
+                                                          handle.get_remote(),
+                                                          handle.get_local()))));
+                continue;
+            }
+
+            //控制帧，则开始控制处理
+            WsSocket::handle_control(handle, window_bits, &mut h).await;
+        }
     }
 
     /// 异步处理控制帧
     async fn handle_control(handle: &SocketHandle<S>,
                             window_bits: u8,
-                            mut h: ContextHandle<WsSession>) {
+                            h: &mut ContextHandle<WsSession>) {
         let frame_type = h.as_ref().get_type();
         match frame_type {
             wft@WsFrameType::Close => {

@@ -279,6 +279,7 @@ async fn handle_poll_events<S, A>(rt: &WorkerRuntime<()>,
                         let mut s = socket_copy.borrow_mut();
                         match s.recv().await {
                             Ok(len) => {
+                                println!("!!!!!!readable, token: {:?}, len: {:?}", s.get_token().unwrap(), len);
                                 //按需接收完成，则重新注册当前Tcp连接关注的事件，并执行已读回调
                                 if let Some(interest) = s.get_interest() {
                                     //需要修改当前连接感兴趣的事件类型
