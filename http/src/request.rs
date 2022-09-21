@@ -192,7 +192,7 @@ impl<S: Socket> HttpRequest<S> {
             Some(len) => {
                 //本次Http请求，有请求体，还有Http块数据需要读取，则异步读取
                 loop {
-                    let current_body_len = self.handle.get_read_buffer_mut().try_fill().await;
+                    let current_body_len = unsafe { (&mut *self.handle.get_read_buffer().get()).try_fill().await };
                     if current_body_len < len {
                         //当前缓冲区还没有接收到指定长度的请求体，则异步准备读取后，继续尝试接收剩余请求体
                         let require_len = len
@@ -213,15 +213,11 @@ impl<S: Socket> HttpRequest<S> {
                     }
 
                     //读请求体成功，则更新Http体的当前长度，并退出本次异步读取请求体
-                    self.body_len = self
-                        .handle
-                        .get_read_buffer()
-                        .as_ref()
-                        .len();
+                    self.body_len = unsafe { (&*self.handle.get_read_buffer().get()).as_ref().len() };
                     break;
                 }
 
-                Some(self.handle.get_read_buffer().as_ref())
+                Some(unsafe { (&*self.handle.get_read_buffer().get()).as_ref() })
             },
             _ => {
                 //本次Http请求，没有请求体或是请求体流
@@ -243,7 +239,7 @@ impl<S: Socket> HttpRequest<S> {
         }
 
         loop {
-            if self.handle.get_read_buffer_mut().try_fill().await == 0 {
+            if unsafe { (&mut *self.handle.get_read_buffer().get()).try_fill().await } == 0 {
                 //当前缓冲区还没有请求的数据，则异步准备读取后，继续尝试接收请求数据
                 if let Ok(value) = self.handle.read_ready(0) {
                     if value.await == 0 {
@@ -255,7 +251,7 @@ impl<S: Socket> HttpRequest<S> {
                 continue;
             }
 
-            if let Some(part) = self.handle.get_read_buffer_mut().try_get(block_size).await {
+            if let Some(part) = unsafe { (&mut *self.handle.get_read_buffer().get()).try_get(block_size).await } {
                 //当前连接读缓冲区中有请求体数据，则更新Http体的当前长度
                 self.body_len += part.remaining();
                 return Some(part);

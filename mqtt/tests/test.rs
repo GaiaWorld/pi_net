@@ -3,11 +3,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::io::{ErrorKind, Result, Error};
 
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use mqtt311::{TopicPath, Topic};
 use env_logger;
 
-use pi_async::rt::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue};
+use pi_async::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue}};
 
 use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
           connect::TcpSocket,
@@ -63,7 +63,7 @@ struct TestBrokerService;
 impl<S: Socket> MqttBrokerListener<S> for TestBrokerService {
     fn connected(&self,
                  protocol: MqttBrokerProtocol,
-                 connect: Arc<dyn MqttConnect<S>>) -> BoxFuture<'static, Result<()>> {
+                 connect: Arc<dyn MqttConnect<S>>) -> LocalBoxFuture<'static, Result<()>> {
         async move{
             println!("mqtt connected, connect: {:?}", connect);
 
@@ -86,7 +86,7 @@ impl<S: Socket> MqttBrokerListener<S> for TestBrokerService {
 
             println!("mqtt connected finish, connect: {:?}", connect);
             Ok(())
-        }.boxed()
+        }.boxed_local()
     }
 
     fn closed(&self,
@@ -107,7 +107,7 @@ impl<S: Socket> MqttBrokerService<S> for TestBrokerService {
     fn subscribe(&self,
                  protocol: MqttBrokerProtocol,
                  connect: Arc<dyn MqttConnect<S>>,
-                 topics: Vec<(String, u8)>) -> BoxFuture<'static, Result<()>> {
+                 topics: Vec<(String, u8)>) -> LocalBoxFuture<'static, Result<()>> {
         async move {
             println!("mqtt subscribe, connect: {:?}", connect);
 
@@ -130,7 +130,7 @@ impl<S: Socket> MqttBrokerService<S> for TestBrokerService {
 
             println!("mqtt subscribe finish, connect: {:?}", connect);
             Ok(())
-        }.boxed()
+        }.boxed_local()
     }
 
     //指定Mqtt客户端取消订阅指定主题的服务
@@ -263,14 +263,14 @@ struct TestPassiveBrokerService;
 impl<S: Socket> MqttBrokerListener<S> for TestPassiveBrokerService {
     fn connected(&self,
                  protocol: MqttBrokerProtocol,
-                 connect: Arc<dyn MqttConnect<S>>) -> BoxFuture<'static, Result<()>> {
+                 connect: Arc<dyn MqttConnect<S>>) -> LocalBoxFuture<'static, Result<()>> {
         async move {
             println!("mqtt connected, connect: {:?}", connect);
 
             connect.passive_receive(true);
 
             Ok(())
-        }.boxed()
+        }.boxed_local()
     }
 
     fn closed(&self,
@@ -291,11 +291,11 @@ impl<S: Socket> MqttBrokerService<S> for TestPassiveBrokerService {
     fn subscribe(&self,
                  protocol: MqttBrokerProtocol,
                  connect: Arc<dyn MqttConnect<S>>,
-                 topics: Vec<(String, u8)>) -> BoxFuture<'static, Result<()>> {
+                 topics: Vec<(String, u8)>) -> LocalBoxFuture<'static, Result<()>> {
         async move {
             println!("mqtt subscribe, connect: {:?}, topic: {:?}", connect, topics);
             Ok(())
-        }.boxed()
+        }.boxed_local()
     }
 
     //指定Mqtt客户端取消订阅指定主题的服务

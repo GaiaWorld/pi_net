@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 
 use env_logger;
 
-use pi_async::rt::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue};
+use pi_async::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue}};
 use pi_atom::Atom;
 use pi_gray::GrayVersion;
 use pi_handler::{Args, Handler};

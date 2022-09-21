@@ -112,18 +112,11 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
                     //回应成功
                     if let Some(content_len) = content_len {
                         //本次请求是指定长度的请求体，则清理本次请求体的数据
-                        let _ = self.handle
-                            .get_read_buffer_mut()
-                            .try_get(content_len)
-                            .await; //消耗请求体的数据
+                        let _ = unsafe { (&mut *self.handle.get_read_buffer().get()).try_get(content_len).await }; //消耗请求体的数据
                     }
 
                     //继续尝试填充当前Http连接的后续请求数据
-                    let _ = self
-                        .handle
-                        .get_read_buffer_mut()
-                        .try_fill()
-                        .await;
+                    let _ = unsafe { (&mut *self.handle.get_read_buffer().get()).try_fill().await };
                 }
             },
         }

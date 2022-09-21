@@ -7,7 +7,7 @@ use mime::{APPLICATION, WWW_FORM_URLENCODED, JSON, OCTET_STREAM, PDF, TEXT, CHAR
 use https::{Method, header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, CONTENT_LENGTH}, StatusCode};
 use flate2::{Compression, FlushCompress, Compress, Status, write::GzEncoder};
 use serde_json::{Result as JsonResult, Map, Value};
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use crossbeam_channel::{Sender, Receiver, unbounded, TryRecvError};
 
 use pi_handler::SGenType;
@@ -49,7 +49,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
     fn request<'a>(&'a self,
                    context: &'a mut GatewayContext,
                    req: HttpRequest<S>)
-                   -> BoxFuture<'a, MiddlewareResult<S>> {
+                   -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let mut request = req;
         let future = async move {
             //当前请求有查询，则分析查询，并写入参数表
@@ -125,13 +125,13 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
             //继续请求处理
             MiddlewareResult::ContinueRequest(request)
         };
-        future.boxed()
+        future.boxed_local()
     }
 
     fn response<'a>(&'a self,
                     context: &'a mut GatewayContext, req: HttpRequest<S>,
                     resp: HttpResponse)
-                    -> BoxFuture<'a, MiddlewareResult<S>> {
+                    -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let mut response = resp;
         let future = async move {
             if response.as_body().is_none() {
@@ -334,7 +334,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
             }
             MiddlewareResult::ContinueResponse((req, response))
         };
-        future.boxed()
+        future.boxed_local()
     }
 }
 

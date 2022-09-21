@@ -6,7 +6,7 @@ use std::io::{Error, Result, ErrorKind};
 
 use mime::Mime;
 use bytes::BufMut;
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 
 use pi_hash::XHashMap;
 use pi_handler::SGenType;
@@ -163,7 +163,7 @@ impl<S: Socket, H: Middleware<S, GatewayContext>> HttpService<S> for HttpGateway
     type Error = Error;
 
     fn call(&mut self, req: HttpRequest<S>)
-            -> BoxFuture<'static, GenResult<HttpResponse, Self::Error>> {
+            -> LocalBoxFuture<'static, GenResult<HttpResponse, Self::Error>> {
         let middleware = self
             .router_tab
             .match_route(req.method(),
@@ -218,7 +218,7 @@ impl<S: Socket, H: Middleware<S, GatewayContext>> HttpService<S> for HttpGateway
                                "Invalid route"))
             }
         };
-        future.boxed()
+        future.boxed_local()
     }
 }
 

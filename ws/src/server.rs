@@ -11,7 +11,7 @@ use std::io::{ErrorKind, Result, Error};
 use fnv::FnvBuildHasher;
 use http::Response;
 use httparse::{EMPTY_HEADER, Request};
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 
 use tcp::{Socket, AsyncService, SocketStatus, SocketHandle,
           utils::SocketContext};
@@ -32,7 +32,7 @@ pub struct WebsocketListener<S: Socket> {
 impl<S: Socket> AsyncService<S> for WebsocketListener<S> {
     fn handle_connected(&self,
                         handle: SocketHandle<S>,
-                        status: SocketStatus) -> BoxFuture<'static, ()> {
+                        status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         async move {
             if let SocketStatus::Connected(Err(e)) = status {
                 //Tcp连接失败
@@ -46,13 +46,13 @@ impl<S: Socket> AsyncService<S> for WebsocketListener<S> {
             }
 
             //Tcp连接成功，则预填充连接读缓冲区
-            handle.get_read_buffer_mut().try_fill().await;
-        }.boxed()
+            unsafe { (&mut *handle.get_read_buffer().get()).try_fill().await; }
+        }.boxed_local()
     }
 
     fn handle_readed(&self,
                      handle: SocketHandle<S>,
-                     status: SocketStatus) -> BoxFuture<'static, ()> {
+                     status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         if let SocketStatus::Readed(Err(e)) = status {
             //Tcp读数据失败
             return async move {
@@ -62,10 +62,10 @@ impl<S: Socket> AsyncService<S> for WebsocketListener<S> {
                                                     handle.get_remote(),
                                                     handle.get_local(),
                                                     e))));
-            }.boxed();
+            }.boxed_local();
         }
 
-        if handle.get_context().is_empty() {
+        if unsafe { (&*handle.get_context().get()).is_empty() } {
             //当前Websocket连接还未握手，则开始Websocket连接握手
             let support_protocol = self.protocol.clone();
             let acceptor = self.acceptor.clone();
@@ -74,7 +74,7 @@ impl<S: Socket> AsyncService<S> for WebsocketListener<S> {
                 WsAcceptor::<S>::accept(handle.clone(),
                                         acceptor,
                                         support_protocol).await;
-            }.boxed()
+            }.boxed_local()
         } else {
             //当前Websocket连接已完成握手
             let window_bits = self.acceptor.window_bits();
@@ -83,13 +83,13 @@ impl<S: Socket> AsyncService<S> for WebsocketListener<S> {
                 WsSocket::<S>::handle_readed(&handle,
                                              window_bits,
                                              protocol).await;
-            }.boxed()
+            }.boxed_local()
         }
     }
 
     fn handle_writed(&self,
                      handle: SocketHandle<S>,
-                     status: SocketStatus) -> BoxFuture<'static, ()> {
+                     status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         async move {
             if let SocketStatus::Writed(Err(e)) = status {
                 //Tcp写数据失败
@@ -103,12 +103,12 @@ impl<S: Socket> AsyncService<S> for WebsocketListener<S> {
             }
 
             WsSocket::handle_writed(handle).await;
-        }.boxed()
+        }.boxed_local()
     }
 
     fn handle_closed(&self,
                      handle: SocketHandle<S>,
-                     status: SocketStatus) -> BoxFuture<'static, ()> {
+                     status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         let window_bits = self.acceptor.window_bits();
         let protocol = self.protocol.clone();
 
@@ -119,12 +119,12 @@ impl<S: Socket> AsyncService<S> for WebsocketListener<S> {
                                         protocol,
                                         result).await;
             }
-        }.boxed()
+        }.boxed_local()
     }
 
     fn handle_timeouted(&self,
                         handle: SocketHandle<S>,
-                        status: SocketStatus) -> BoxFuture<'static, ()> {
+                        status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         let window_bits = self.acceptor.window_bits();
         let protocol = self.protocol.clone();
 
@@ -135,7 +135,7 @@ impl<S: Socket> AsyncService<S> for WebsocketListener<S> {
                                            protocol,
                                            event).await;
             }
-        }.boxed()
+        }.boxed_local()
     }
 }
 

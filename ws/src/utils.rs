@@ -6,7 +6,7 @@ use std::collections::{VecDeque, HashMap};
 use bytes::BufMut;
 use httparse::Request;
 use fnv::FnvBuildHasher;
-use futures::future::BoxFuture;
+use futures::future::LocalBoxFuture;
 
 use tcp::{Socket, SocketHandle, SocketEvent,
           utils::SocketContext};
@@ -33,7 +33,7 @@ pub trait ChildProtocol<S: Socket>: Send + Sync + 'static {
     }
 
     /// 解码子协议，返回错误将立即关闭当前连接
-    fn decode_protocol(&self, connect: WsSocket<S>, context: &mut WsSession) -> BoxFuture<'static, Result<()>>;
+    fn decode_protocol(&self, connect: WsSocket<S>, context: &mut WsSession) -> LocalBoxFuture<'static, Result<()>>;
 
     /// 关闭子协议
     fn close_protocol(&self, connect: WsSocket<S>, context: WsSession, reason: Result<()>);

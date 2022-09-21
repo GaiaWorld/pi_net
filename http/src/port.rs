@@ -6,7 +6,7 @@ use std::collections::hash_map::Entry;
 use std::io::{Error, Result, ErrorKind};
 
 use https::{StatusCode, header::CONTENT_LENGTH, HeaderMap};
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 
 use pi_gray::GrayVersion;
 use parking_lot::RwLock;
@@ -81,7 +81,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for HttpPort {
     fn request<'a>(&'a self,
                    context: &'a mut GatewayContext,
                    req: HttpRequest<S>)
-                   -> BoxFuture<'a, MiddlewareResult<S>> {
+                   -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             //处理请求
             let uid = req.get_handle().get_token().0; //获取当前http连接的唯一id
@@ -122,14 +122,14 @@ impl<S: Socket> Middleware<S, GatewayContext> for HttpPort {
             //完成请求处理
             MiddlewareResult::Finish((req, resp))
         };
-        future.boxed()
+        future.boxed_local()
     }
 
     fn response<'a>(&'a self,
                     context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
-                    -> BoxFuture<'a, MiddlewareResult<S>> {
+                    -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let mut body_bufs: Vec<Vec<u8>> = Vec::new();
         let mut response = resp;
         let future = async move {
@@ -165,7 +165,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for HttpPort {
             //继续响应处理
             MiddlewareResult::ContinueResponse((req, response))
         };
-        future.boxed()
+        future.boxed_local()
     }
 }
 

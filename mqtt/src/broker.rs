@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::io::Result;
 
-use futures::future::BoxFuture;
+use futures::future::LocalBoxFuture;
 use parking_lot::RwLock;
 use mqtt311::{TopicPath, Publish};
 
@@ -27,7 +27,7 @@ pub trait MqttBrokerListener<S: Socket>: Send + Sync + 'static {
     /// 处理Mqtt客户端已连接事件
     fn connected(&self,
                  protocol: MqttBrokerProtocol,
-                 connect: Arc<dyn MqttConnect<S>>) -> BoxFuture<'static, Result<()>>;
+                 connect: Arc<dyn MqttConnect<S>>) -> LocalBoxFuture<'static, Result<()>>;
 
     /// 处理Mqtt客户端关闭事件
     fn closed(&self,
@@ -45,7 +45,7 @@ pub trait MqttBrokerService<S: Socket>: Send + Sync + 'static {
     fn subscribe(&self,
                  protocol: MqttBrokerProtocol,
                  connect: Arc<dyn MqttConnect<S>>,
-                 topics: Vec<(String, u8)>) -> BoxFuture<'static, Result<()>>;
+                 topics: Vec<(String, u8)>) -> LocalBoxFuture<'static, Result<()>>;
 
     /// 指定Mqtt客户端取消订阅指定主题的服务
     fn unsubscribe(&self,

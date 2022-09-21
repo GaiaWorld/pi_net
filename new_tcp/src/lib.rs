@@ -6,19 +6,19 @@ use std::rc::Rc;
 use std::task::Waker;
 use std::str::FromStr;
 use std::future::Future;
-use std::cell::{Ref, RefCell};
+use std::cell::UnsafeCell;
 use std::result::Result as GenResult;
 use std::io::{Error, Result, ErrorKind};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::net::{SocketAddr, IpAddr, Ipv4Addr, Ipv6Addr};
 
-use futures::future::BoxFuture;
+use futures::future::LocalBoxFuture;
 use crossbeam_channel::Sender;
 use mio::{Token, Interest, Poll,
           net::TcpStream};
 
 use pi_async::{lock::spin_lock::SpinLock,
-               rt::{AsyncValue, worker_thread::WorkerRuntime}};
+               rt::{serial::AsyncValue, serial_worker_thread::WorkerRuntime}};
 use pi_async_buffer::ByteBuffer;
 use pi_hash::XHashMap;
 
@@ -62,24 +62,24 @@ pub trait SocketAdapter: Send + Sync + 'static {
 
     /// 已连接
     fn connected(&self,
-                 result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()>;
+                 result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()>;
 
     /// 已读
     fn readed(&self,
-              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()>;
+              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()>;
 
     /// 已写
     fn writed(&self,
-              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()>;
+              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()>;
 
     /// 已关闭
     fn closed(&self,
-              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()>;
+              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()>;
 
     /// 已超时
     fn timeouted(&self,
                  handle: SocketHandle<Self::Connect>,
-                 event: SocketEvent) -> BoxFuture<'static, ()>;
+                 event: SocketEvent) -> LocalBoxFuture<'static, ()>;
 }
 
 ///
@@ -414,7 +414,7 @@ impl SocketEvent {
 ///
 /// Tcp流
 ///
-pub trait Stream: Sized + Send + 'static {
+pub trait Stream: Sized + 'static {
     /// 构建Tcp流
     fn new(local: &SocketAddr,
            remote: &SocketAddr,
@@ -429,7 +429,7 @@ pub trait Stream: Sized + Send + 'static {
     fn set_runtime(&mut self, rt: WorkerRuntime<()>);
 
     /// 设置Tcp流句柄
-    fn set_handle(&mut self, shared: &Arc<RefCell<Self>>);
+    fn set_handle(&mut self, shared: &Arc<SpinLock<Self>>);
 
     /// 获取连接流
     fn get_stream_ref(&self) -> &TcpStream;
@@ -481,7 +481,7 @@ pub trait Stream: Sized + Send + 'static {
     fn is_require_recv(&self) -> bool;
 
     /// 接收流中的数据，返回成功，则表示本次接收了需要的字节数，并返回本次接收的字节数，否则返回接收错误
-    fn recv(&mut self) -> BoxFuture<'static, Result<usize>>;
+    fn recv(&mut self) -> LocalBoxFuture<'static, Result<usize>>;
 
     /// 发送数据到流，返回成功，则返回本次发送了多少字节数，否则返回发送错误原因
     fn send(&mut self) -> Result<usize>;
@@ -490,7 +490,7 @@ pub trait Stream: Sized + Send + 'static {
 ///
 /// Tcp连接
 ///
-pub trait Socket: Sized + Send + 'static {
+pub trait Socket: Sized + 'static {
     /// 线程安全的判断是否已关闭Tcp连接
     fn is_closed(&self) -> bool;
 
@@ -516,10 +516,7 @@ pub trait Socket: Sized + Send + 'static {
     fn get_uid(&self) -> Option<&usize>;
 
     //获取连接上下文只读引用
-    fn get_context(&self) -> &SocketContext;
-
-    //获取连接上下文的可写引用
-    fn get_context_mut(&mut self) -> &mut SocketContext;
+    fn get_context(&self) -> Rc<UnsafeCell<SocketContext>>;
 
     /// 设置连接的超时定时器，同时只允许设置一个定时器，新的定时器会覆盖未超时的旧定时器
     fn set_timeout(&self, timeout: usize, event: SocketEvent);
@@ -550,14 +547,11 @@ pub trait Socket: Sized + Send + 'static {
     fn wakeup_read_ready(&mut self);
 
     /// 获取连接的输入缓冲区的只读引用
-    fn get_read_buffer(&self) -> &ByteBuffer;
-
-    /// 获取连接的输入缓冲区的可写引用
-    fn get_read_buffer_mut(&mut self) -> &mut ByteBuffer;
+    fn get_read_buffer(&self) -> Rc<UnsafeCell<ByteBuffer>>;
 
     /// 通知连接写就绪，可以开始发送指定的数据
     fn write_ready<B>(&mut self, buf: B) -> Result<()>
-        where B: AsRef<[u8]> + Send + 'static;
+        where B: AsRef<[u8]> + 'static;
 
     /// 重新注册当前流感兴趣的事件
     fn reregister_interest(&mut self, ready: Ready) -> Result<()>;
@@ -568,7 +562,7 @@ pub trait Socket: Sized + Send + 'static {
     /// 当前连接已休眠，则新的任务必须加入等待任务队列中
     fn push_hibernated_task<F>(&self,
                                task: F)
-        where F: Future<Output = ()> + Send + 'static;
+        where F: Future<Output = ()> + 'static;
 
     /// 开始执行连接休眠时加入的任务，当前任务执行完成后自动执行下一个任务，直到任务队列为空
     fn run_hibernated_tasks(&self);
@@ -766,108 +760,118 @@ impl<S: Socket> SocketHandle<S> {
         self.0.security
     }
 
-    /// 非线程安全的获取Tcp连接上下文的只读引用
-    pub fn get_context(&self) -> &SocketContext {
-        unsafe {
-            (&*self.0.inner).get_context()
-        }
+    /// 线程安全的获取Tcp连接上下文的只读引用
+    pub fn get_context(&self) -> Rc<UnsafeCell<SocketContext>> {
+        self
+            .0
+            .inner
+            .lock()
+            .get_context()
     }
 
-    /// 非线程安全的获取Tcp连接上下文的可写引用
-    pub fn get_context_mut(&self) -> &mut SocketContext {
-        unsafe {
-            (&mut *(self.0.inner as *mut S)).get_context_mut()
-        }
-    }
-
-    /// 非线程安全的准备读
+    /// 线程安全的准备读
     pub fn read_ready(&self, size: usize) -> GenResult<AsyncValue<usize>, usize> {
-        unsafe {
-            (&mut *(self.0.inner as *mut S)).read_ready(size)
-        }
+        self
+            .0
+            .inner
+            .lock()
+            .read_ready(size)
     }
 
-    /// 非线程安全的强制准备读
+    /// 线程安全的强制准备读
     pub fn read_all_ready(&self) -> GenResult<AsyncValue<usize>, usize> {
-        unsafe {
-            (&mut *(self.0.inner as *mut S)).read_all_ready()
-        }
+        self
+            .0
+            .inner
+            .lock()
+            .read_all_ready()
     }
 
-    /// 非线程安全的获取连接的接收缓冲区的只读引用
-    pub fn get_read_buffer(&self) -> &ByteBuffer {
-        unsafe {
-            (&*(self.0.inner as *mut S)).get_read_buffer()
-        }
-    }
-
-    /// 非线程安全的获取连接的接收缓冲区的可写引用
-    pub fn get_read_buffer_mut(&self) -> &mut ByteBuffer {
-        unsafe {
-            (&mut *(self.0.inner as *mut S)).get_read_buffer_mut()
-        }
+    /// 线程安全的获取连接的接收缓冲区的引用
+    pub fn get_read_buffer(&self) -> Rc<UnsafeCell<ByteBuffer>> {
+        self
+            .0
+            .inner
+            .lock()
+            .get_read_buffer()
     }
 
     /// 线程安全的写
     pub fn write_ready<B>(&self, buf: B) -> Result<()>
-        where B: AsRef<[u8]> + Send + 'static {
-        unsafe {
-            (&mut *(self.0.inner as *mut S)).write_ready(buf)
-        }
+        where B: AsRef<[u8]> + 'static {
+        self
+            .0
+            .inner
+            .lock()
+            .write_ready(buf)
     }
 
-    /// 非线程安全的重新注册当前流感兴趣的事件
+    /// 重新注册当前流感兴趣的事件
     pub fn reregister_interest(&self, ready: Ready) -> Result<()> {
-        unsafe {
-            (&mut *(self.0.inner as *mut S)).reregister_interest(ready)
-        }
+        self
+            .0
+            .inner
+            .lock()
+            .reregister_interest(ready)
     }
 
     /// 线程安全的开始执行连接休眠时加入的任务，当前任务执行完成后自动执行下一个任务，直到任务队列为空
     pub fn run_hibernated_tasks(&self) {
-        unsafe {
-            (&*(self.0.inner as *mut S)).run_hibernated_tasks();
-        }
+        self
+            .0
+            .inner
+            .lock()
+            .run_hibernated_tasks();
     }
 
     /// 线程安全的异步休眠当前连接，直到被唤醒
     pub fn hibernate(&self,
                      handle: SocketHandle<S>,
                      ready: Ready) -> Option<Hibernate<S>> {
-        unsafe {
-            (&*(self.0.inner as *mut S)).hibernate(handle,
-                                                   ready)
-        }
+        self
+            .0
+            .inner
+            .lock()
+            .hibernate(handle,
+                       ready)
     }
 
-    /// 非线程安全的设置当前连接的休眠对象
+    /// 线程安全的设置当前连接的休眠对象
     pub fn set_hibernate(&self, hibernate: Hibernate<S>) -> bool {
-        unsafe {
-            (&*(self.0.inner as *mut S)).set_hibernate(hibernate)
-        }
+        self
+            .0
+            .inner
+            .lock()
+            .set_hibernate(hibernate)
     }
 
     /// 线程安全的设置当前连接在休眠时挂起的其它休眠对象的唤醒器
     fn set_hibernate_wakers(&self, waker: Waker) {
-        unsafe {
-            (&*(self.0.inner as *mut S)).set_hibernate_wakers(waker);
-        }
+        self
+            .0
+            .inner
+            .lock()
+            .set_hibernate_wakers(waker);
     }
 
     /// 线程安全的非阻塞的唤醒被休眠的当前连接，如果当前连接未被休眠，则忽略
     /// 还会唤醒当前连接正在休眠时，当前连接的所有其它休眠对象的唤醒器
     /// 唤醒过程可能会被阻塞，这不会导致线程阻塞而是返回假，调用者可以继续尝试唤醒，直到返回真
     pub fn wakeup(&self, result: Result<()>) -> bool {
-        unsafe {
-            (&mut *(self.0.inner as *mut S)).wakeup(result)
-        }
+        self
+            .0
+            .inner
+            .lock()
+            .wakeup(result)
     }
 
     /// 线程安全的关闭连接
     pub fn close(&self, reason: Result<()>) -> Result<()> {
-        unsafe {
-            (&mut *(self.0.inner as *mut S)).close(reason)
-        }
+        self
+            .0
+            .inner
+            .lock()
+            .close(reason)
     }
 }
 
@@ -875,12 +879,12 @@ impl<S: Socket> SocketHandle<S> {
 /// Tcp连接镜像
 ///
 pub struct SocketImage<S: Socket> {
-    inner:          *const S,                                       //Tcp连接指针
+    inner:          Arc<SpinLock<S>>,                               //Tcp连接指针
     local:          SocketAddr,                                     //TCP连接本地地址
     remote:         SocketAddr,                                     //TCP连接远端地址
     token:          Token,                                          //Tcp连接令牌
     security:       bool,                                           //Tcp连接是否安全
-    closed:         Rc<AtomicBool>,                                 //Tcp连接关闭状态
+    closed:         Arc<AtomicBool>,                                //Tcp连接关闭状态
     close_listener: Sender<(Token, Result<()>)>,                    //关闭事件监听器
     timer_listener: Sender<(Token, Option<(usize, SocketEvent)>)>,  //定时事件监听器
 }
@@ -890,17 +894,17 @@ unsafe impl<S: Socket> Sync for SocketImage<S> {}
 
 impl<S: Socket> SocketImage<S> {
     /// 构建Tcp连接镜像
-    pub fn new(shared: &Arc<RefCell<S>>,
+    pub fn new(shared: &Arc<SpinLock<S>>,
                local: SocketAddr,
                remote: SocketAddr,
                token: Token,
                security: bool,
-               closed: Rc<AtomicBool>,
+               closed: Arc<AtomicBool>,
                close_listener: Sender<(Token, Result<()>)>,
                timer_listener: Sender<(Token, Option<(usize, SocketEvent)>)>
     ) -> Self {
         SocketImage {
-            inner: shared.as_ptr() as *const S,
+            inner: shared.clone(),
             local,
             remote,
             token,
@@ -917,17 +921,17 @@ impl<S: Socket> SocketImage<S> {
 ///
 pub trait AsyncService<S: Socket>: Send + Sync + 'static {
     /// 异步处理已连接
-    fn handle_connected(&self, handle: SocketHandle<S>, status: SocketStatus) -> BoxFuture<'static, ()>;
+    fn handle_connected(&self, handle: SocketHandle<S>, status: SocketStatus) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已读
-    fn handle_readed(&self, handle: SocketHandle<S>, status: SocketStatus) -> BoxFuture<'static, ()>;
+    fn handle_readed(&self, handle: SocketHandle<S>, status: SocketStatus) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已写
-    fn handle_writed(&self, handle: SocketHandle<S>, status: SocketStatus) -> BoxFuture<'static, ()>;
+    fn handle_writed(&self, handle: SocketHandle<S>, status: SocketStatus) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已关闭
-    fn handle_closed(&self, handle: SocketHandle<S>, status: SocketStatus) -> BoxFuture<'static, ()>;
+    fn handle_closed(&self, handle: SocketHandle<S>, status: SocketStatus) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已超时
-    fn handle_timeouted(&self, handle: SocketHandle<S>, status: SocketStatus) -> BoxFuture<'static, ()>;
+    fn handle_timeouted(&self, handle: SocketHandle<S>, status: SocketStatus) -> LocalBoxFuture<'static, ()>;
 }

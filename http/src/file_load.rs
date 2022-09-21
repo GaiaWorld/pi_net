@@ -4,7 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use futures::future::{BoxFuture, FutureExt, MapErr};
+use futures::future::{FutureExt, LocalBoxFuture};
 use https::{
     header::{CONTENT_LENGTH, CONTENT_TYPE},
     StatusCode,
@@ -56,7 +56,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FileLoad {
         &'a self,
         context: &'a mut GatewayContext,
         req: HttpRequest<S>,
-    ) -> BoxFuture<'a, MiddlewareResult<S>> {
+    ) -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             let mut resp = HttpResponse::new(2);
 
@@ -208,7 +208,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FileLoad {
             //完成请求处理
             MiddlewareResult::Finish((req, resp))
         };
-        future.boxed()
+        future.boxed_local()
     }
 
     fn response<'a>(
@@ -216,7 +216,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FileLoad {
         context: &'a mut GatewayContext,
         req: HttpRequest<S>,
         resp: HttpResponse,
-    ) -> BoxFuture<'a, MiddlewareResult<S>> {
+    ) -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let mut body_bufs: Vec<Vec<u8>> = Vec::new();
         let mut response = resp;
         let future = async move {
@@ -312,7 +312,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FileLoad {
             //继续响应处理
             MiddlewareResult::ContinueResponse((req, response))
         };
-        future.boxed()
+        future.boxed_local()
     }
 }
 

@@ -10,7 +10,7 @@ use std::io::{ErrorKind, Result, Error};
 
 use https::{Version, Response, HeaderMap, header::HOST};
 use httparse::{EMPTY_HEADER, Request};
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use bytes::{Buf, BufMut, BytesMut};
 use log::warn;
 
@@ -36,7 +36,7 @@ pub struct HttpListener<S: Socket, P: VirtualHostPool<S>> {
 impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
     fn handle_connected(&self,
                         handle: SocketHandle<S>,
-                        status: SocketStatus) -> BoxFuture<'static, ()> {
+                        status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         //处理Http连接
         let future = async move {
             if let SocketStatus::Connected(Err(e)) = status {
@@ -51,14 +51,14 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
             }
 
             //Tcp连接成功，则预填充连接读缓冲区
-            handle.get_read_buffer_mut().try_fill().await;
+            unsafe { (&mut *handle.get_read_buffer().get()).try_fill().await; }
         };
-        future.boxed()
+        future.boxed_local()
     }
 
     fn handle_readed(&self,
                      handle: SocketHandle<S>,
-                     status: SocketStatus) -> BoxFuture<'static, ()> {
+                     status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         //处理Http后续请求
         if let SocketStatus::Readed(Err(e)) = status {
             //Tcp读数据失败
@@ -69,10 +69,10 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                                                     handle.get_remote(),
                                                     handle.get_local(),
                                                     e))));
-            }.boxed();
+            }.boxed_local();
         }
 
-        if handle.get_context().is_empty() {
+        if unsafe { (&*handle.get_read_buffer().get()).is_empty() } {
             //当前是连接的首个Http请求
             let acceptor = self.acceptor.clone();
             let factory = self.hosts.clone();
@@ -83,13 +83,13 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                                           acceptor,
                                           factory,
                                           keep_alive).await;
-            }.boxed()
+            }.boxed_local()
         } else {
             //Http连接已建立
             async move {
                 //获取Http请求绑定的Http连接
                 let mut context;
-                if let Some(cx) = handle.get_context().get::<HttpConnect<S, <<P as VirtualHostPool<S>>::Host as ServiceFactory<S>>::Service>>() {
+                if let Some(cx) = unsafe { (&*handle.get_context().get()).get::<HttpConnect<S, <<P as VirtualHostPool<S>>::Host as ServiceFactory<S>>::Service>>() } {
                     //需要将handle中获取的上下文句柄移动到外部，避免if let语句导致handle引用不会即时释放，从而导致在在后续使用handle的代码中出现编译时错误
                     context = cx;
                 } else {
@@ -107,7 +107,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                     let mut http_request_result = None;
                     let mut buf: &[u8] = &[]; //初始化本地缓冲区
                     loop {
-                        if handle.get_read_buffer_mut().try_fill().await == 0 {
+                        if unsafe { (&mut *handle.get_read_buffer().get()).try_fill().await } == 0 {
                             //当前缓冲区还没有请求的数据，则异步准备读取后，继续尝试接收请求数据
                             if let Ok(value) = handle.read_ready(0) {
                                 if value.await == 0 {
@@ -123,7 +123,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                         let mut header = [EMPTY_HEADER; MAX_CONNECT_HTTP_HEADER_LIMIT];
                         let mut req = Request::new(&mut header);
 
-                        buf = handle.get_read_buffer().as_ref(); //填充本地缓冲区
+                        buf = unsafe { (&*handle.get_read_buffer().get()).as_ref() }; //填充本地缓冲区
                         if let Some(_body_offset) = UpStreamHeader::read_header(handle.clone(),
                                                                                buf,
                                                                                &mut req,
@@ -193,13 +193,13 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                                                         handle.get_remote(),
                                                         handle.get_local()))));
                 }
-            }.boxed()
+            }.boxed_local()
         }
     }
 
     fn handle_writed(&self,
                      handle: SocketHandle<S>,
-                     status: SocketStatus) -> BoxFuture<'static, ()> {
+                     status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         let future = async move {
             if let SocketStatus::Writed(Err(e)) = status {
                 //Tcp写数据失败，则立即关闭当前Http连接
@@ -212,12 +212,12 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 return;
             }
         };
-        future.boxed()
+        future.boxed_local()
     }
 
     fn handle_closed(&self,
                      handle: SocketHandle<S>,
-                     status: SocketStatus) -> BoxFuture<'static, ()> {
+                     status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         let future = async move {
             if let SocketStatus::Closed(result) = status {
                 if let Err(e) = result {
@@ -232,9 +232,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 }
 
                 //连接已关闭，则立即释放Tcp连接的上下文
-                if let Err(e) = handle
-                    .get_context_mut()
-                    .remove::<HttpConnect<S, <<P as VirtualHostPool<S>>::Host as ServiceFactory<S>>::Service>>() {
+                if let Err(e) = unsafe { (&mut *handle.get_context().get()).remove::<HttpConnect<S, <<P as VirtualHostPool<S>>::Host as ServiceFactory<S>>::Service>>() } {
                     warn!("Free Context Failed by Http Connect Close, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                         handle.get_token(),
                         handle.get_remote(),
@@ -243,12 +241,12 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 }
             }
         };
-        future.boxed()
+        future.boxed_local()
     }
 
     fn handle_timeouted(&self,
                         handle: SocketHandle<S>,
-                        status: SocketStatus) -> BoxFuture<'static, ()> {
+                        status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         let future = async move {
             if let SocketStatus::Timeout(event) = status {
                 //Http连接超时，则立即关闭当前Http连接
@@ -260,7 +258,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                     event.get::<usize>());
             }
         };
-        future.boxed()
+        future.boxed_local()
     }
 }
 

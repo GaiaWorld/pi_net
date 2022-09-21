@@ -8,7 +8,7 @@ use std::error::Error as StdError;
 use std::task::{Context, Poll, Waker};
 
 use mio::Token;
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 
 use tcp::Socket;
 
@@ -32,7 +32,7 @@ pub trait HttpService<S: Socket>: Send + Sync + 'static {
 
     //调用服务
     fn call(&mut self, req: HttpRequest<S>)
-        -> BoxFuture<'static, Result<HttpResponse, Self::Error>>;
+        -> LocalBoxFuture<'static, Result<HttpResponse, Self::Error>>;
 }
 
 ///
@@ -40,11 +40,11 @@ pub trait HttpService<S: Socket>: Send + Sync + 'static {
 ///
 pub fn block_call<S, F, Error>(fun: F,
                                req: HttpRequest<S>)
-    -> BoxFuture<'static, Result<HttpResponse, Error>>
+    -> LocalBoxFuture<'static, Result<HttpResponse, Error>>
     where S: Socket,
           F: FnOnce(HttpRequest<S>) -> Result<HttpResponse, Error> + Send + 'static {
     let future = async move {
         fun(req)
     };
-    future.boxed()
+    future.boxed_local()
 }

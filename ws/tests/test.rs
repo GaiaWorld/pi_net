@@ -3,12 +3,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::io::{ErrorKind, Result, Error};
 
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use httparse::{EMPTY_HEADER, Request};
 use bytes::{Buf, BufMut, BytesMut};
 use env_logger;
 
-use pi_async::rt::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue};
+use pi_async::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue}};
 
 use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
           connect::TcpSocket,
@@ -51,7 +51,7 @@ impl<S: Socket> ChildProtocol<S> for TestChildProtocol {
         "echo"
     }
 
-    fn decode_protocol(&self, connect: WsSocket<S>, context: &mut WsSession) -> BoxFuture<'static, Result<()>> {
+    fn decode_protocol(&self, connect: WsSocket<S>, context: &mut WsSession) -> LocalBoxFuture<'static, Result<()>> {
         let msg = context.pop_msg();
         let msg_type = context.get_type();
         println!("!!!!!!receive ok, msg: {:?}", String::from_utf8(msg.clone()));
@@ -82,7 +82,7 @@ impl<S: Socket> ChildProtocol<S> for TestChildProtocol {
 
             println!("reply msg ok");
             Ok(())
-        }.boxed()
+        }.boxed_local()
     }
 
     fn close_protocol(&self, connect: WsSocket<S>, context: WsSession, reason: Result<()>) {

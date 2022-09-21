@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::collections::HashMap;
 use std::io::{Cursor, Result, ErrorKind, Error};
 
-use futures::future::BoxFuture;
+use futures::future::{FutureExt, LocalBoxFuture};
 use mio::Token;
 use fnv::FnvBuildHasher;
 use mqtt311::{MqttWrite, MqttRead, Protocol, ConnectReturnCode, Packet, Connect,
@@ -24,7 +24,6 @@ use crate::{server::MqttBrokerProtocol,
             broker::{Retain, MqttBroker},
             session::{MqttConnect, MqttSession, QosZeroSession},
             utils::BrokerSession};
-use futures::FutureExt;
 
 // /*
 // * 全局Tls Mqtt3.1.1协议代理
@@ -54,7 +53,7 @@ impl ChildProtocol<TlsSocket> for WssMqtt311 {
 
     fn decode_protocol(&self,
                        connect: WsSocket<TlsSocket>,
-                       context: &mut WsSession) -> BoxFuture<'static, Result<()>> {
+                       context: &mut WsSession) -> LocalBoxFuture<'static, Result<()>> {
         let ws_mqtt = self.clone();
         match context
             .pop_msg()
@@ -64,7 +63,7 @@ impl ChildProtocol<TlsSocket> for WssMqtt311 {
                 //解码Mqtt报文失败，则立即返回错误原因
                 async move {
                     Err(Error::new(ErrorKind::Other, format!("Websocket decode child protocol failed, protocol: {:?}, reason: {:?}", ws_mqtt.protocol_name, e)))
-                }.boxed()
+                }.boxed_local()
             },
             Ok(packet) => {
                 let future = async move {
@@ -93,7 +92,7 @@ impl ChildProtocol<TlsSocket> for WssMqtt311 {
                         },
                     }
                 };
-                future.boxed()
+                future.boxed_local()
             },
         }
     }

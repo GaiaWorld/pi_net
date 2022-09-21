@@ -23,8 +23,8 @@ use rustls::{ALL_CIPHER_SUITES, ProtocolVersion, RootCertStore, Certificate, Pri
 use rustls_pemfile;
 
 use pi_async::{lock::spin_lock::SpinLock,
-               rt::{AsyncRuntime, AsyncWaitResult,
-                    worker_thread::WorkerRuntime}};
+               rt::{serial::{AsyncRuntime, AsyncWaitResult},
+                    serial_worker_thread::WorkerRuntime}};
 use pi_hash::XHashMap;
 
 use crate::{Socket, SocketHandle, Stream};

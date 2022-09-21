@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::io::{Error, Result, ErrorKind};
 
 use https::{header::{RANGE, ACCEPT_RANGES, CONTENT_RANGE, CONTENT_LENGTH}, StatusCode};
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use log::warn;
 
 use pi_handler::SGenType;
@@ -27,19 +27,19 @@ impl<S: Socket> Middleware<S, GatewayContext> for RangeLoad {
     fn request<'a>(&'a self,
                    context: &'a mut GatewayContext,
                    req: HttpRequest<S>)
-                   -> BoxFuture<'a, MiddlewareResult<S>> {
+                   -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             //继续请求处理
             MiddlewareResult::ContinueRequest(req)
         };
-        future.boxed()
+        future.boxed_local()
     }
 
     fn response<'a>(&'a self,
                     context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
-                    -> BoxFuture<'a, MiddlewareResult<S>> {
+                    -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let mut response = resp;
         let future = async move {
             if let Some(range_value) = req.headers().get(RANGE) {
@@ -109,7 +109,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for RangeLoad {
             //继续响应处理
             MiddlewareResult::ContinueResponse((req, response))
         };
-        future.boxed()
+        future.boxed_local()
     }
 }
 

@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::collections::HashMap;
 use std::io::{Cursor, Result, ErrorKind, Error};
 
-use futures::future::BoxFuture;
+use futures::future::{FutureExt, LocalBoxFuture};
 use mio::Token;
 use fnv::FnvBuildHasher;
 use mqtt311::{MqttWrite, MqttRead, Protocol, ConnectReturnCode, Packet, Connect,
@@ -22,10 +22,8 @@ use ws::{connect::WsSocket,
 
 use crate::{server::MqttBrokerProtocol,
             broker::{Retain, MqttBroker},
-            session::{MqttSession, QosZeroSession},
+            session::{MqttConnect, MqttSession, QosZeroSession},
             utils::BrokerSession};
-use futures::FutureExt;
-use crate::session::MqttConnect;
 
 // /*
 // * 全局Mqtt3.1.1协议代理
@@ -55,7 +53,7 @@ impl ChildProtocol<TcpSocket> for WsMqtt311 {
 
     fn decode_protocol(&self,
                        connect: WsSocket<TcpSocket>,
-                       context: &mut WsSession) -> BoxFuture<'static, Result<()>> {
+                       context: &mut WsSession) -> LocalBoxFuture<'static, Result<()>> {
         let ws_mqtt = self.clone();
         match context
             .pop_msg()
@@ -68,7 +66,7 @@ impl ChildProtocol<TcpSocket> for WsMqtt311 {
                                    format!("Websocket decode child protocol failed, protocol: {:?}, reason: {:?}",
                                            ws_mqtt.protocol_name,
                                            e)))
-                }.boxed()
+                }.boxed_local()
             },
             Ok(packet) => {
                 let future = async move {
@@ -97,7 +95,7 @@ impl ChildProtocol<TcpSocket> for WsMqtt311 {
                         },
                     }
                 };
-                future.boxed()
+                future.boxed_local()
             },
         }
     }

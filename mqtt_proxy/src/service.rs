@@ -4,7 +4,7 @@ use std::result::Result as GenResult;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use log::warn;
 
 use pi_atom::Atom;
@@ -271,7 +271,7 @@ unsafe impl Send for MqttProxyListener {}
 impl<S: Socket> MqttBrokerListener<S> for MqttProxyListener {
     fn connected(&self,
                  protocol: MqttBrokerProtocol,
-                 connect: Arc<dyn MqttConnect<S>>) -> BoxFuture<'static, Result<()>> {
+                 connect: Arc<dyn MqttConnect<S>>) -> LocalBoxFuture<'static, Result<()>> {
         //Mqtt已连接
         if let Some(handler) = &self.connect_handler {
             let handler = handler.clone();
@@ -303,13 +303,13 @@ impl<S: Socket> MqttBrokerListener<S> for MqttProxyListener {
                 }
 
                 Ok(())
-            }.boxed()
+            }.boxed_local()
         } else {
             async move {
                 Err(Error::new(ErrorKind::Other,
                                format!("Mqtt proxy connect failed, connect: {:?}, reason: handle connect error",
                                        connect)))
-            }.boxed()
+            }.boxed_local()
         }
     }
 
@@ -411,7 +411,7 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
     fn subscribe(&self,
                  protocol: MqttBrokerProtocol,
                  connect: Arc<dyn MqttConnect<S>>,
-                 topics: Vec<(String, u8)>) -> BoxFuture<'static, Result<()>> {
+                 topics: Vec<(String, u8)>) -> LocalBoxFuture<'static, Result<()>> {
         //Mqtt订阅主题
         if let Some(handler) = &self.request_handler {
             let handler = handler.clone();
@@ -440,13 +440,13 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
                 }
 
                 Ok(())
-            }.boxed()
+            }.boxed_local()
         } else {
             async move {
                 Err(Error::new(ErrorKind::Other,
                                format!("Mqtt proxy subscribe failed, connect: {:?}, reason: handle subscribe error",
                                        connect)))
-            }.boxed()
+            }.boxed_local()
         }
     }
 

@@ -6,10 +6,10 @@ use std::thread;
 use time::Duration;
 use std::collections::VecDeque;
 
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use env_logger;
 
-use pi_async::rt::{AsyncRuntime, AsyncRuntimeBuilder};
+use pi_async::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder}};
 
 use new_tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus,
               connect::TcpSocket,
@@ -47,7 +47,7 @@ struct TestService;
 impl<S: Socket> AsyncService<S> for TestService {
     fn handle_connected(&self,
                         handle: SocketHandle<S>,
-                        status: SocketStatus) -> BoxFuture<'static, ()> {
+                        status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         async move {
             let token = handle.get_token().clone();
             match status {
@@ -66,7 +66,7 @@ impl<S: Socket> AsyncService<S> for TestService {
                     // } else {
                         //直接异步读
                         println!("!!!!!!connected, try_get 0");
-                        if let Some(buf) = handle.get_read_buffer_mut().try_get(0).await {
+                        if let Some(buf) = unsafe { (&mut *handle.get_read_buffer().get()).try_get(0).await } {
                             println!("!!!!!!try get ok");
                             println!("===> Socket Connected Read Ok, token: {:?}, data: {:?}", token, String::from_utf8_lossy(buf.as_ref()));
 
@@ -92,12 +92,12 @@ impl<S: Socket> AsyncService<S> for TestService {
                 },
                 _ => unimplemented!(),
             }
-        }.boxed()
+        }.boxed_local()
     }
 
     fn handle_readed(&self,
                      handle: SocketHandle<S>,
-                     status: SocketStatus) -> BoxFuture<'static, ()> {
+                     status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         async move {
             println!("!!!!!!callback readed");
             let token = handle.get_token().clone();
@@ -109,7 +109,7 @@ impl<S: Socket> AsyncService<S> for TestService {
                     println!("===> Socket Receive Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.get_remote(), handle.get_local());
 
                     let mut ready_len = 0;
-                    if let Some(buf) = handle.get_read_buffer_mut().try_get(ready_len).await {
+                    if let Some(buf) = unsafe { (&mut *handle.get_read_buffer().get()).try_get(ready_len).await } {
                         if buf.len() == 0 {
                             //当前读缓冲中没有数据，则异步准备读取数据
                             println!("!!!!!!readed, read ready start, len: 0");
@@ -141,12 +141,12 @@ impl<S: Socket> AsyncService<S> for TestService {
                 },
                 _ => unimplemented!(),
             }
-        }.boxed()
+        }.boxed_local()
     }
 
     fn handle_writed(&self,
                      handle: SocketHandle<S>,
-                     status: SocketStatus) -> BoxFuture<'static, ()> {
+                     status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         async move {
             let token = handle.get_token().clone();
             match status {
@@ -158,12 +158,12 @@ impl<S: Socket> AsyncService<S> for TestService {
                 },
                 _ => unimplemented!(),
             }
-        }.boxed()
+        }.boxed_local()
     }
 
     fn handle_closed(&self,
                      handle: SocketHandle<S>,
-                     status: SocketStatus) -> BoxFuture<'static, ()> {
+                     status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         async move {
             let token = handle.get_token().clone();
             match status {
@@ -175,16 +175,16 @@ impl<S: Socket> AsyncService<S> for TestService {
                 },
                 _ => unimplemented!(),
             }
-        }.boxed()
+        }.boxed_local()
     }
 
     fn handle_timeouted(&self,
                         handle: SocketHandle<S>,
-                        _status: SocketStatus) -> BoxFuture<'static, ()> {
+                        _status: SocketStatus) -> LocalBoxFuture<'static, ()> {
         async move {
             let token = handle.get_token().clone();
             println!("!!!> Socket Timeout, token: {:?}, remote: {:?}, local: {:?}", token, handle.get_remote(), handle.get_local());
-        }.boxed()
+        }.boxed_local()
     }
 }
 

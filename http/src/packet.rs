@@ -8,7 +8,7 @@ use std::task::{Context, Poll, Waker};
 use std::io::{Error, Result, ErrorKind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use crossbeam_channel::{Sender, Receiver, unbounded, TryRecvError};
 use bytes::{Buf, BufMut, BytesMut};
 use url::Url;
@@ -77,10 +77,7 @@ impl UpStreamHeader {
             Ok(status) => {
                 //全部头数据已到达，则继续读取，并解析体数据
                 if let Status::Complete(len) = status {
-                    let _ = handle
-                        .get_read_buffer_mut()
-                        .try_get(len)
-                        .await; //消耗请求头的数据
+                    let _ = unsafe { (&mut *handle.get_read_buffer().get()).try_get(len).await }; //消耗请求头的数据
 
                     if let Err(e) = fill_headers(headers, req) {
                         handle.close(Err(e));

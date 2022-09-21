@@ -8,7 +8,7 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use futures::future::{BoxFuture, FutureExt, MapErr};
+use futures::future::{FutureExt, LocalBoxFuture};
 use https::{
     header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
     StatusCode,
@@ -63,7 +63,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
         &'a self,
         context: &'a mut GatewayContext,
         req: HttpRequest<S>,
-    ) -> BoxFuture<'a, MiddlewareResult<S>> {
+    ) -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             //获取请求参数
             let mut ds = String::from("");
@@ -245,7 +245,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
             //完成请求处理
             MiddlewareResult::Finish((req, resp))
         };
-        future.boxed()
+        future.boxed_local()
     }
 
     fn response<'a>(
@@ -253,7 +253,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
         context: &'a mut GatewayContext,
         req: HttpRequest<S>,
         resp: HttpResponse,
-    ) -> BoxFuture<'a, MiddlewareResult<S>> {
+    ) -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let total_size = context.get_files_size(); //需要异步加载文件的总大小
         let total_len = context.get_files_len(); //需要异步加载文件的总数量
         let mut loaded_size = 0; //已加载成功的文件大小
@@ -385,7 +385,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
             //继续响应处理
             MiddlewareResult::ContinueResponse((req, response))
         };
-        future.boxed()
+        future.boxed_local()
     }
 }
 

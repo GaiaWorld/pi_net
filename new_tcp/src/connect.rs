@@ -1,10 +1,11 @@
+use std::borrow::{Borrow, BorrowMut};
 use std::rc::Rc;
 use std::task::Waker;
 use std::future::Future;
-use std::cell::{Ref, RefCell};
 use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
 use std::result::Result as GenResult;
+use std::cell::{Ref, RefCell, UnsafeCell};
 use std::io::{Error, Result, ErrorKind, Read, Write};
 use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
 
@@ -12,13 +13,13 @@ use mio::{Token, Interest, Poll,
           net::TcpStream};
 use crossbeam_channel::Sender;
 use futures::{sink::SinkExt,
-              future::{FutureExt, BoxFuture}};
+              future::{FutureExt, LocalBoxFuture}};
 use bytes::{Buf, BufMut, BytesMut};
 use log::warn;
 
 use pi_async::{lock::spin_lock::SpinLock,
-               rt::{AsyncRuntime, AsyncValue,
-                    worker_thread::WorkerRuntime,
+               rt::{serial::{AsyncRuntime, AsyncValue},
+                    serial_worker_thread::WorkerRuntime,
                     async_pipeline::{AsyncReceiverExt, AsyncPipeLineExt, PipeSender, channel}}};
 use pi_async_buffer::ByteBuffer;
 
@@ -59,13 +60,12 @@ pub struct TcpSocket {
     remote:             SocketAddr,                                             //连接远端地址
     token:              Option<Token>,                                          //连接令牌
     stream:             TcpStream,                                              //连接流
-    last_interest:      RefCell<Option<Interest>>,                              //连接上次感兴趣的事件类型
     interest:           Arc<SpinLock<Interest>>,                                //连接当前感兴趣的事件类型
     wait_recv_len:      usize,                                                  //连接需要接收的字节数
     recv_len:           usize,                                                  //连接已接收的字节数
     read_len:           Arc<AtomicUsize>,                                       //连接读取块大小
     readed_read_limit:  Arc<AtomicUsize>,                                       //已读读缓冲大小限制
-    read_buf:           ByteBuffer,                                             //连接读缓冲
+    read_buf:           Rc<UnsafeCell<ByteBuffer>>,                             //连接读缓冲
     reader:             Arc<SpinLock<PipeSender<Arc<Vec<u8>>>>>,                //连接读缓冲输入器
     wait_ready_len:     usize,                                                  //连接异步准备读取的字节数
     ready_len:          usize,                                                  //连接异步准备读取已就绪的字节数
@@ -79,10 +79,10 @@ pub struct TcpSocket {
     poll:               Option<Arc<SpinLock<Poll>>>,                            //连接所在轮询器
     hibernate:          SpinLock<Option<Hibernate<Self>>>,                      //连接异步休眠对象
     hibernate_wakers:   SpinLock<VecDeque<Waker>>,                              //连接正在休眠时，其它休眠对象的唤醒器队列
-    hibernated_queue:   Arc<SpinLock<VecDeque<BoxFuture<'static, ()>>>>,        //连接休眠时任务队列
+    hibernated_queue:   Arc<SpinLock<VecDeque<LocalBoxFuture<'static, ()>>>>,        //连接休眠时任务队列
     handle:             Option<SocketHandle<Self>>,                             //连接句柄
-    context:            SocketContext,                                          //连接上下文
-    closed:             Rc<AtomicBool>,                                         //连接关闭状态
+    context:            Rc<UnsafeCell<SocketContext>>,                          //连接上下文
+    closed:             Arc<AtomicBool>,                                        //连接关闭状态
     close_listener:     Option<Sender<(Token, Result<()>)>>,                    //连接关闭事件监听器
     timer_handle:       Option<usize>,                                          //定时器句柄
     timer_listener:     Option<Sender<(Token, Option<(usize, SocketEvent)>)>>,  //定时事件监听器
@@ -121,12 +121,11 @@ impl Stream for TcpSocket {
             readed_write_size_limit
         };
 
-        let last_interest = RefCell::new(None);
         let interest = Arc::new(SpinLock::new(Interest::READABLE));
         let read_len = Arc::new(AtomicUsize::new(DEFAULT_READ_BLOCK_LEN));
         let (sender, receiver) = channel(recv_frame_buf_size);
         let readed_read_limit = Arc::new(AtomicUsize::new(readed_read_size_limit));
-        let read_buf = ByteBuffer::new(receiver.pin_boxed());
+        let read_buf = Rc::new(UnsafeCell::new(ByteBuffer::new(receiver.pin_boxed())));
         let reader = Arc::new(SpinLock::new(sender));
         let wait_sent_len = AtomicUsize::new(0);
         let write_len = Arc::new(AtomicUsize::new(DEFAULT_WRITE_BLOCK_LEN));
@@ -135,8 +134,8 @@ impl Stream for TcpSocket {
         let hibernate = SpinLock::new(None);
         let hibernate_wakers = SpinLock::new(VecDeque::new());
         let hibernated_queue = Arc::new(SpinLock::new(VecDeque::new()));
-        let context = SocketContext::empty();
-        let closed = Rc::new(AtomicBool::new(false));
+        let context = Rc::new(UnsafeCell::new(SocketContext::empty()));
+        let closed = Arc::new(AtomicBool::new(false));
 
         TcpSocket {
             rt: None,
@@ -145,7 +144,6 @@ impl Stream for TcpSocket {
             remote: remote.clone(),
             token,
             stream,
-            last_interest,
             interest,
             wait_recv_len: 0,
             recv_len: 0,
@@ -179,7 +177,7 @@ impl Stream for TcpSocket {
         self.rt = Some(rt);
     }
 
-    fn set_handle(&mut self, shared: &Arc<RefCell<Self>>) {
+    fn set_handle(&mut self, shared: &Arc<SpinLock<Self>>) {
         if let Some(token) = self.token {
             if let Some(close_listener) = &self.close_listener {
                 if let Some(timer_listener) = &self.timer_listener {
@@ -272,7 +270,7 @@ impl Stream for TcpSocket {
         self.wait_recv_len > self.recv_len
     }
 
-    fn recv(&mut self) -> BoxFuture<'static, Result<usize>> {
+    fn recv(&mut self) -> LocalBoxFuture<'static, Result<usize>> {
         if self.is_closed() {
             //连接已关闭，则忽略，并立即返回
             let token = self.get_token().unwrap().clone();
@@ -285,7 +283,7 @@ impl Stream for TcpSocket {
                                        token,
                                        remote,
                                        local)))
-            }.boxed();
+            }.boxed_local();
         }
 
         let mut block_pos = 0; //初始化接收块的已填充位置
@@ -347,9 +345,9 @@ impl Stream for TcpSocket {
 
         if result.is_ok() {
             //本次接收成功
-            if self.read_buf.readed() > self.readed_read_limit.load(Ordering::Relaxed) {
+            if unsafe { (&*self.read_buf.get()).readed() } > self.readed_read_limit.load(Ordering::Relaxed) {
                 //本次接收成功，且已达已读读缓冲大小限制，则清理已读取的读缓冲区，并释放对应的内存
-                let len = self.read_buf.truncate();
+                unsafe { (&mut *self.read_buf.get()).truncate(); }
             }
 
             //向读缓冲写入本次接收到的所有数据
@@ -381,13 +379,13 @@ impl Stream for TcpSocket {
 
                 //返回本次流接收的结果
                 result
-            }.boxed();
+            }.boxed_local();
         }
 
         //返回本次流接收的结果
         async move {
             result
-        }.boxed()
+        }.boxed_local()
     }
 
     fn send(&mut self) -> Result<usize> {
@@ -543,12 +541,8 @@ impl Socket for TcpSocket {
         self.uid.as_ref()
     }
 
-    fn get_context(&self) -> &SocketContext {
-        &self.context
-    }
-
-    fn get_context_mut(&mut self) -> &mut SocketContext {
-        &mut self.context
+    fn get_context(&self) -> Rc<UnsafeCell<SocketContext>> {
+        self.context.clone()
     }
 
     fn set_timeout(&self, timeout: usize, event: SocketEvent) {
@@ -581,13 +575,13 @@ impl Socket for TcpSocket {
         let interest = { *self.interest.lock() }; //保证在调用set_interest时已释放RefCell的只读引用
         self.set_interest(interest.add(Interest::READABLE)); //设置连接当前对读事件感兴趣
 
-        let remaining = self.read_buf.remaining();
+        let remaining = unsafe { (&*self.read_buf.get()).remaining() };
         if remaining >= adjust && remaining > 0 {
             //连接当前读取缓冲区有足够的数据，则立即返回当前读取缓冲区中剩余可读字节的数量
             return Err(remaining);
         }
 
-        if self.read_buf.unreceived().unwrap() > 0 {
+        if unsafe { (&*self.read_buf.get()).unreceived().unwrap() } > 0 {
             //连接当前读取缓冲区没有足够的数据，但读取缓冲区的流中还有未获取的数据，则立即返回至少还有1字节
             return Err(1);
         }
@@ -610,9 +604,9 @@ impl Socket for TcpSocket {
         let interest = { *self.interest.lock() }; //保证在调用set_interest时已释放RefCell的只读引用
         self.set_interest(interest.add(Interest::READABLE)); //设置连接当前对读事件感兴趣
 
-        if self.read_buf.unreceived().unwrap() > 0 {
+        if unsafe { (&*self.read_buf.get()).unreceived().unwrap() } > 0 {
             //连接当前读取缓冲区的流中还有未获取的数据，则立即返回当前缓冲区剩余可读字节数加1字节
-            return Err(self.read_buf.remaining() + 1);
+            return Err(unsafe { (&*self.read_buf.get()).remaining() + 1 });
         }
 
         //连接当前读缓冲区没有足够的数据，则只读需要的字节数
@@ -641,16 +635,12 @@ impl Socket for TcpSocket {
         }
     }
 
-    fn get_read_buffer(&self) -> &ByteBuffer {
-        &self.read_buf
-    }
-
-    fn get_read_buffer_mut(&mut self) -> &mut ByteBuffer {
-        &mut self.read_buf
+    fn get_read_buffer(&self) -> Rc<UnsafeCell<ByteBuffer>> {
+        self.read_buf.clone()
     }
 
     fn write_ready<B>(&mut self, buf: B) -> Result<()>
-        where B: AsRef<[u8]> + Send + 'static {
+        where B: AsRef<[u8]> + 'static {
         if self.is_closed() {
             //连接已关闭，则忽略，并立即返回
             return Err(Error::new(ErrorKind::ConnectionAborted,
@@ -729,10 +719,10 @@ impl Socket for TcpSocket {
 
     fn push_hibernated_task<F>(&self,
                                task: F)
-        where F: Future<Output = ()> + Send + 'static {
+        where F: Future<Output = ()> + 'static {
         let boxed = async move {
             task.await;
-        }.boxed();
+        }.boxed_local();
 
         self.hibernated_queue.lock().push_back(boxed);
     }

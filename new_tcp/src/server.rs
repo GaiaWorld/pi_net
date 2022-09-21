@@ -14,11 +14,11 @@ use std::io::{Result, Error, ErrorKind};
 use mio::Token;
 use fnv::FnvBuildHasher;
 use crossbeam_channel::{Sender, unbounded};
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use dashmap::DashMap;
 use num_cpus;
 
-use pi_async::rt::worker_thread::WorkerRuntime;
+use pi_async::rt::serial_worker_thread::WorkerRuntime;
 
 use crate::{Socket, Stream, SocketAdapter, SocketAdapterFactory, SocketConfig, SocketEvent, SocketDriver, SocketHandle, AsyncService, acceptor::Acceptor, connect_pool::TcpSocketPool, SocketStatus};
 
@@ -40,7 +40,7 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
     type Connect = S;
 
     fn connected(&self,
-                 result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()> {
+                 result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()> {
         let adapter = self.clone();
         async move {
             let task = match result {
@@ -69,11 +69,11 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
             if let Some(task) = task {
                 task.await;
             }
-        }.boxed()
+        }.boxed_local()
     }
 
     fn readed(&self,
-              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()> {
+              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()> {
         let adapter = self.clone();
         async move {
             let task = match result {
@@ -102,11 +102,11 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
             if let Some(task) = task {
                 task.await;
             }
-        }.boxed()
+        }.boxed_local()
     }
 
     fn writed(&self,
-              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()> {
+              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()> {
         let adapter = self.clone();
         async move {
             let task = match result {
@@ -135,11 +135,11 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
             if let Some(task) = task {
                 task.await;
             }
-        }.boxed()
+        }.boxed_local()
     }
 
     fn closed(&self,
-              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()> {
+              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()> {
         let adapter = self.clone();
         async move {
             let task = match result {
@@ -168,12 +168,12 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
             if let Some(task) = task {
                 task.await;
             }
-        }.boxed()
+        }.boxed_local()
     }
 
     fn timeouted(&self,
                  handle: SocketHandle<Self::Connect>,
-                 event: SocketEvent) -> BoxFuture<'static, ()> {
+                 event: SocketEvent) -> LocalBoxFuture<'static, ()> {
         let adapter = self.clone();
         async move {
             let port = handle.get_local().port();
@@ -188,7 +188,7 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
             if let Some(task) = task {
                 task.await;
             }
-        }.boxed()
+        }.boxed_local()
     }
 }
 

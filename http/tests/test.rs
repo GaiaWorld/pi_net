@@ -16,14 +16,15 @@ use std::task::{Context, Poll, Waker};
 use https::HeaderMap;
 use regex::{RegexSetBuilder, RegexSet, RegexBuilder, Regex};
 use route_recognizer::Router;
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use flate2::{Compression, FlushCompress, Compress, Status, write::GzEncoder};
 use twoway::{find_bytes, rfind_bytes};
 use parking_lot::RwLock;
 use env_logger;
 
-use pi_async::rt::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue,
-                   multi_thread::MultiTaskRuntimeBuilder};
+use pi_async::rt::{AsyncRuntime, AsyncValue,
+                   multi_thread::MultiTaskRuntimeBuilder,
+                   serial::{AsyncRuntime as SerialAsyncRuntime, AsyncRuntimeBuilder}};
 use pi_hash::XHashMap;
 use pi_atom::Atom;
 use pi_gray::GrayVersion;
@@ -297,7 +298,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for TestMultiPartsHandler {
     fn request<'a>(&'a self,
                    context: &'a mut GatewayContext,
                    req: HttpRequest<S>)
-                   -> BoxFuture<'a, MiddlewareResult<S>> {
+                   -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             for (key, value) in context.as_parts() {
                 match value {
@@ -313,18 +314,18 @@ impl<S: Socket> Middleware<S, GatewayContext> for TestMultiPartsHandler {
 
             MiddlewareResult::ContinueRequest(req)
         };
-        future.boxed()
+        future.boxed_local()
     }
 
     fn response<'a>(&'a self,
                     context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
-                    -> BoxFuture<'a, MiddlewareResult<S>> {
+                    -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             MiddlewareResult::ContinueResponse((req, resp))
         };
-        future.boxed()
+        future.boxed_local()
     }
 }
 
@@ -505,7 +506,7 @@ fn test_http_hosts() {
 
     let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(80,
-                 HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 10000).new_service());
+                 HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 10000000).new_service());
     let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
 

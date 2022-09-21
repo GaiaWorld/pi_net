@@ -12,8 +12,8 @@ use mio::{
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use log::{info, warn};
 
-use pi_async::rt::{AsyncRuntime, AsyncRuntimeBuilder};
-use pi_async::rt::worker_thread::WorkerRuntime;
+use pi_async::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder},
+                   serial_worker_thread::WorkerRuntime};
 use pi_hash::XHashMap;
 use pi_slotmap::{Key, DefaultKey, KeyData, SlotMap};
 

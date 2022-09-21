@@ -3,7 +3,7 @@ use std::io::{Error, ErrorKind, Result};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::{FutureExt, LocalBoxFuture};
 use https::StatusCode;
 use path_absolutize::Absolutize;
 
@@ -47,7 +47,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
         &'a self,
         context: &'a mut GatewayContext,
         req: HttpRequest<S>,
-    ) -> BoxFuture<'a, MiddlewareResult<S>> {
+    ) -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             let mut is_remove = false;
             let mut file = String::from("");
@@ -165,7 +165,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
             //完成请求处理
             MiddlewareResult::Finish((req, resp))
         };
-        future.boxed()
+        future.boxed_local()
     }
 
     fn response<'a>(
@@ -173,7 +173,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
         context: &'a mut GatewayContext,
         req: HttpRequest<S>,
         resp: HttpResponse,
-    ) -> BoxFuture<'a, MiddlewareResult<S>> {
+    ) -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let mut body_bufs: Vec<Vec<u8>> = Vec::new();
         let mut response = resp;
         let future = async move {
@@ -217,7 +217,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
             //继续响应处理
             MiddlewareResult::ContinueResponse((req, response))
         };
-        future.boxed()
+        future.boxed_local()
     }
 }
 

@@ -739,7 +739,7 @@ impl<S: Socket> WsFrame<S> {
         let mut is_first = true; //是否首次接收
         let mut ready_len = WsHead::READ_HEAD_LEN; //初始化就绪字节数
         loop {
-            if let Some(buf) = handle.get_read_buffer_mut().try_get(ready_len).await {
+            if let Some(buf) = unsafe { (&mut *handle.get_read_buffer().get()).try_get(ready_len).await } {
                 if buf.len() == 0 {
                     //当前缓冲区没有帧头数据，则异步准备读取，并继续尝试读帧头数据
                     match handle.read_ready(ready_len) {
@@ -818,7 +818,7 @@ impl<S: Socket> WsFrame<S> {
         if ready_len > 0 {
             //有负载，则继续异步读负载，并填充Websocket帧
             loop {
-                if let Some(buf) = handle.get_read_buffer_mut().try_get(ready_len).await {
+                if let Some(buf) = unsafe { (&mut *handle.get_read_buffer().get()).try_get(ready_len).await } {
                     if buf.len() == 0 {
                         //当前缓冲区没有负载数据，则异步准备读取，并继续尝试读负载数据
                         match handle.read_ready(ready_len) {

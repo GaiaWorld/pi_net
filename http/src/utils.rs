@@ -10,7 +10,7 @@ use std::io::{Error, Result, ErrorKind};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use bytes::Buf;
-use futures::{future::{FutureExt, BoxFuture}};
+use futures::{future::{FutureExt, LocalBoxFuture}};
 use flume::{Sender, Receiver, bounded};
 
 use tcp::{Socket, SocketHandle,

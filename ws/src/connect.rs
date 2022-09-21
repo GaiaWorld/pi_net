@@ -98,7 +98,7 @@ impl<S: Socket> WsSocket<S> {
 
     /// 获取连接会话的句柄
     pub fn get_session(&self) -> Option<ContextHandle<WsSession>> {
-        return self.socket.get_context().get::<WsSession>()
+        return unsafe { (&*self.socket.get_context().get()).get::<WsSession>() }
     }
 
     /// 线程安全的设置Tcp连接超时定时器
@@ -182,10 +182,7 @@ impl<S: Socket> WsSocket<S> {
     pub async fn handle_readed(handle: &SocketHandle<S>,
                                window_bits: u8,
                                protocol: Arc<dyn ChildProtocol<S>>) {
-        let mut h: ContextHandle<WsSession> = handle
-            .get_context()
-            .get::<WsSession>()
-            .unwrap();
+        let mut h: ContextHandle<WsSession> = unsafe { (&*handle.get_context().get()).get::<WsSession>().unwrap() };
         if h.as_ref().is_closed() || h.as_ref().is_closing() {
             //当前连接已关闭或正在关闭中，则忽略所有读
             return;
@@ -193,7 +190,7 @@ impl<S: Socket> WsSocket<S> {
 
         //读数据，并填充帧数据
         let mut frames = Vec::new();
-        while handle.get_read_buffer_mut().try_fill().await > 0 {
+        while unsafe { (&mut *handle.get_read_buffer().get()).try_fill().await } > 0 {
             let mut frame = WsFrame::<S>::default();
             WsFrame::read_head(handle, window_bits, &mut frame).await;
             frames.push(frame);
@@ -371,7 +368,7 @@ impl<S: Socket> WsSocket<S> {
 
     /// 异步处理Tcp已写事件
     pub async fn handle_writed(handle: SocketHandle<S>) {
-        if let Some(mut h) = handle.get_context().get::<WsSession>() {
+        if let Some(mut h) = unsafe { (&*handle.get_context().get()).get::<WsSession>() } {
             if let Some(context) = h.as_mut() {
                 if context.is_closed() || context.is_handshaked() {
                     //当前连接已关闭或连接已握手，则忽略写成功事件
@@ -406,7 +403,7 @@ impl<S: Socket> WsSocket<S> {
         }
 
         //握手完成或连接正在关闭，准备异步接收客户端发送的Websocket数据帧，则预填充连接读缓冲区
-        handle.get_read_buffer_mut().try_fill().await;
+        unsafe { (&mut *handle.get_read_buffer().get()).try_fill().await; }
     }
 
     /// 异步处理Tcp已关闭事件
@@ -415,7 +412,7 @@ impl<S: Socket> WsSocket<S> {
                                protocol: Arc<dyn ChildProtocol<S>>,
                                result: Result<()>) {
         //连接已关闭，则立即释放Tcp连接的上下文
-        match handle.get_context_mut().remove::<WsSession>() {
+        match unsafe { (&mut *handle.get_context().get()).remove::<WsSession>() } {
             Err(e) => {
                 warn!("Free Context Failed by Websocket Close, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                     handle.get_token(),
@@ -440,7 +437,7 @@ impl<S: Socket> WsSocket<S> {
                                   window_bits: u8,
                                   protocol: Arc<dyn ChildProtocol<S>>,
                                   event: SocketEvent) {
-        let mut h = handle.get_context().get::<WsSession>().unwrap();
+        let mut h = unsafe { (&*handle.get_context().get()).get::<WsSession>().unwrap() };
         if let Some(context) = h.as_mut() {
             if let Err(e) = protocol
                 .protocol_timeout(Self::new(handle.clone(), window_bits),

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::io::Error;
 use std::collections::VecDeque;
 
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use https::{StatusCode, header::CONTENT_LENGTH};
 
 use tcp::Socket;
@@ -28,14 +28,14 @@ pub trait Middleware<S: Socket, Context: Send + Sync + 'static>: Send + Sync + '
     fn request<'a>(&'a self,
                    context: &'a mut Context,
                    req: HttpRequest<S>)
-        -> BoxFuture<'a, MiddlewareResult<S>>;
+        -> LocalBoxFuture<'a, MiddlewareResult<S>>;
 
     //处理指定响应
     fn response<'a>(&'a self,
                     context: &'a mut Context,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
-        -> BoxFuture<'a, MiddlewareResult<S>>;
+        -> LocalBoxFuture<'a, MiddlewareResult<S>>;
 }
 
 ///
@@ -50,7 +50,7 @@ impl<S: Socket, Context: Send + Sync + 'static> Middleware<S, Context> for Arc<M
     fn request<'a>(&'a self,
                    context: &'a mut Context,
                    req: HttpRequest<S>)
-               -> BoxFuture<'a, MiddlewareResult<S>> {
+               -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let chain = &self.chain;
         let future = async move {
             let mut request = req; //请求缓冲
@@ -79,14 +79,14 @@ impl<S: Socket, Context: Send + Sync + 'static> Middleware<S, Context> for Arc<M
             let response = HttpResponse::empty();
             MiddlewareResult::Finish((request, response))
         };
-        future.boxed()
+        future.boxed_local()
     }
 
     fn response<'a>(&'a self,
                     context: &'a mut Context,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
-                -> BoxFuture<'a, MiddlewareResult<S>> {
+                -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let chain = &self.chain;
         let future  = async move {
             let mut request = req; //请求缓冲
@@ -118,7 +118,7 @@ impl<S: Socket, Context: Send + Sync + 'static> Middleware<S, Context> for Arc<M
             //所有响应中间件没有返回完成响应处理，则强制完成并返回
             MiddlewareResult::Finish((request, response))
         };
-        future.boxed()
+        future.boxed_local()
     }
 }
 

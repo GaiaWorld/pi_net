@@ -3,25 +3,25 @@ use std::fs::File;
 use std::path::Path;
 use std::task::Waker;
 use std::future::Future;
-use std::cell::{Ref, RefCell};
 use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
 use std::result::Result as GenResult;
+use std::cell::{Ref, RefCell, UnsafeCell};
 use std::io::{Error, Result, ErrorKind, Read, Write, BufReader};
 use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
 
 use mio::{Token, Interest, Poll,
           net::TcpStream};
 use futures::{sink::SinkExt,
-              future::{FutureExt, BoxFuture}};
+              future::{FutureExt, LocalBoxFuture}};
 use crossbeam_channel::Sender;
 use bytes::{Buf, BufMut, BytesMut};
 use rustls::{ClientConnection, ServerConnection};
 use log::warn;
 
 use pi_async::{lock::spin_lock::SpinLock,
-               rt::{AsyncRuntime, AsyncValue,
-                    worker_thread::WorkerRuntime,
+               rt::{serial::{AsyncRuntime, AsyncValue},
+                    serial_worker_thread::WorkerRuntime,
                     async_pipeline::{AsyncReceiverExt, AsyncPipeLineExt, PipeSender, channel}}};
 use pi_async_buffer::ByteBuffer;
 
@@ -59,38 +59,37 @@ const DEFAULT_TLS_WRITE_BUF_SIZE_MULTIPLE: f64 = 2.0;
 /// Tls连接
 ///
 pub struct TlsSocket {
-    rt:                 Option<WorkerRuntime<()>>,                          //连接所在运行时
-    uid:                Option<usize>,                                      //连接唯一id
-    local:              SocketAddr,                                         //连接本地地址
-    remote:             SocketAddr,                                         //连接远端地址
-    token:              Option<Token>,                                      //连接令牌
-    stream:             TcpStream,                                          //连接流
-    tls_connect:        TlsConnect,                                         //Tls内部连接
-    last_interest:      RefCell<Option<Interest>>,                          //连接上次感兴趣的事件类型
-    interest:           Arc<SpinLock<Interest>>,                            //连接当前感兴趣的事件类型
-    wait_recv_len:      usize,                                              //连接需要接收的字节数
-    recv_len:           usize,                                              //连接已接收的字节数
-    read_len:           Arc<AtomicUsize>,                                   //连接读取块大小
-    readed_read_limit:  Arc<AtomicUsize>,                                   //已读读缓冲大小限制
-    read_buf:           ByteBuffer,                                         //连接读缓冲
-    reader:             Arc<SpinLock<PipeSender<Arc<Vec<u8>>>>>,            //连接读缓冲输入器
-    wait_ready_len:     usize,                                              //连接异步准备读取的字节数
-    ready_len:          usize,                                              //连接异步准备读取已就绪的字节数
-    ready_reader:       Option<AsyncValue<usize>>,                          //异步准备读取器
-    wait_sent_len:      AtomicUsize,                                        //连接需要发送的字节数
-    sent_len:           usize,                                              //连接已发送的字节数
-    write_len:          Arc<AtomicUsize>,                                   //连接写入块大小
-    readed_write_limit: Arc<AtomicUsize>,                                   //已读写缓冲大小限制
-    readed_write_len:   usize,                                              //已读写缓冲大小
-    write_buf:          Arc<SpinLock<Option<BytesMut>>>,                    //连接写缓冲
-    poll:               Option<Arc<SpinLock<Poll>>>,                        //连接所在轮询器
-    hibernate:          SpinLock<Option<Hibernate<Self>>>,                  //连接异步休眠对象
-    hibernate_wakers:   SpinLock<VecDeque<Waker>>,                          //连接正在休眠时，其它休眠对象的唤醒器队列
-    hibernated_queue:   Arc<SpinLock<VecDeque<BoxFuture<'static, ()>>>>,    //连接休眠时任务队列
-    handle:             Option<SocketHandle<Self>>,                         //连接句柄
-    context:            SocketContext,                                      //连接上下文
-    closed:             Rc<AtomicBool>,                                     //连接关闭状态
-    close_listener:     Option<Sender<(Token, Result<()>)>>,                //连接关闭事件监听器
+    rt:                 Option<WorkerRuntime<()>>,                              //连接所在运行时
+    uid:                Option<usize>,                                          //连接唯一id
+    local:              SocketAddr,                                             //连接本地地址
+    remote:             SocketAddr,                                             //连接远端地址
+    token:              Option<Token>,                                          //连接令牌
+    stream:             TcpStream,                                              //连接流
+    tls_connect:        TlsConnect,                                             //Tls内部连接
+    interest:           Arc<SpinLock<Interest>>,                                //连接当前感兴趣的事件类型
+    wait_recv_len:      usize,                                                  //连接需要接收的字节数
+    recv_len:           usize,                                                  //连接已接收的字节数
+    read_len:           Arc<AtomicUsize>,                                       //连接读取块大小
+    readed_read_limit:  Arc<AtomicUsize>,                                       //已读读缓冲大小限制
+    read_buf:           Rc<UnsafeCell<ByteBuffer>>,                             //连接读缓冲
+    reader:             Arc<SpinLock<PipeSender<Arc<Vec<u8>>>>>,                //连接读缓冲输入器
+    wait_ready_len:     usize,                                                  //连接异步准备读取的字节数
+    ready_len:          usize,                                                  //连接异步准备读取已就绪的字节数
+    ready_reader:       Option<AsyncValue<usize>>,                              //异步准备读取器
+    wait_sent_len:      AtomicUsize,                                            //连接需要发送的字节数
+    sent_len:           usize,                                                  //连接已发送的字节数
+    write_len:          Arc<AtomicUsize>,                                       //连接写入块大小
+    readed_write_limit: Arc<AtomicUsize>,                                       //已读写缓冲大小限制
+    readed_write_len:   usize,                                                  //已读写缓冲大小
+    write_buf:          Arc<SpinLock<Option<BytesMut>>>,                        //连接写缓冲
+    poll:               Option<Arc<SpinLock<Poll>>>,                            //连接所在轮询器
+    hibernate:          SpinLock<Option<Hibernate<Self>>>,                      //连接异步休眠对象
+    hibernate_wakers:   SpinLock<VecDeque<Waker>>,                              //连接正在休眠时，其它休眠对象的唤醒器队列
+    hibernated_queue:   Arc<SpinLock<VecDeque<LocalBoxFuture<'static, ()>>>>,        //连接休眠时任务队列
+    handle:             Option<SocketHandle<Self>>,                             //连接句柄
+    context:            Rc<UnsafeCell<SocketContext>>,                          //连接上下文
+    closed:             Arc<AtomicBool>,                                        //连接关闭状态
+    close_listener:     Option<Sender<(Token, Result<()>)>>,                    //连接关闭事件监听器
     timer_handle:       Option<usize>,                                          //定时器句柄
     timer_listener:     Option<Sender<(Token, Option<(usize, SocketEvent)>)>>,  //定时事件监听器
 }
@@ -151,12 +150,11 @@ impl Stream for TlsSocket {
             },
         };
 
-        let last_interest = RefCell::new(None);
         let interest = Arc::new(SpinLock::new(Interest::READABLE));
         let read_len = Arc::new(AtomicUsize::new(DEFAULT_READ_BLOCK_LEN));
         let (sender, receiver) = channel(recv_frame_buf_size);
         let readed_read_limit = Arc::new(AtomicUsize::new(readed_read_size_limit));
-        let read_buf = ByteBuffer::new(receiver.pin_boxed());
+        let read_buf = Rc::new(UnsafeCell::new(ByteBuffer::new(receiver.pin_boxed())));
         let reader = Arc::new(SpinLock::new(sender));
         let wait_sent_len = AtomicUsize::new(0);
         let write_len = Arc::new(AtomicUsize::new(DEFAULT_WRITE_BLOCK_LEN));
@@ -165,8 +163,8 @@ impl Stream for TlsSocket {
         let hibernate = SpinLock::new(None);
         let hibernate_wakers = SpinLock::new(VecDeque::new());
         let hibernated_queue = Arc::new(SpinLock::new(VecDeque::new()));
-        let context = SocketContext::empty();
-        let closed = Rc::new(AtomicBool::new(false));
+        let context = Rc::new(UnsafeCell::new(SocketContext::empty()));
+        let closed = Arc::new(AtomicBool::new(false));
 
         let mut result = TlsSocket {
             rt: None,
@@ -176,7 +174,6 @@ impl Stream for TlsSocket {
             token,
             stream,
             tls_connect,
-            last_interest,
             interest,
             wait_recv_len: 0,
             recv_len: 0,
@@ -213,7 +210,7 @@ impl Stream for TlsSocket {
         self.rt = Some(rt);
     }
 
-    fn set_handle(&mut self, shared: &Arc<RefCell<Self>>) {
+    fn set_handle(&mut self, shared: &Arc<SpinLock<Self>>) {
         if let Some(token) = self.token {
             if let Some(close_listener) = &self.close_listener {
                 if let Some(timer_listener) = &self.timer_listener {
@@ -253,29 +250,6 @@ impl Stream for TlsSocket {
     }
 
     fn get_interest(&self) -> Option<Interest> {
-        // let last_interest = {
-        //     *self.last_interest.borrow()
-        // };
-        //
-        // if let Some(last_interest) = last_interest {
-        //     //存在连接上次感兴趣的事件类型
-        //     let interest = *self.interest.lock();
-        //     if last_interest == interest {
-        //         //连接上次感兴趣的事件类型与连接当前感兴趣的事件类型相同，则立即返回空
-        //         None
-        //     } else {
-        //         //连接上次感兴趣的事件类型与连接当前感兴趣的事件类型不同，则更新接上次感兴趣的事件类型，并返回连接当前感兴趣的事件类型
-        //         *self.last_interest.borrow_mut() = Some(interest);
-        //         Some(interest)
-        //     }
-        // } else {
-        //     //不存在连接上次感兴趣的事件类型，则更新接上次感兴趣的事件类型，并返回连接当前感兴趣的事件类型
-        //     let interest = {
-        //         *self.interest.lock()
-        //     };
-        //     *self.last_interest.borrow_mut() = Some(interest);
-        //     Some(interest)
-        // }
         Some({ *self.interest.lock() })
     }
 
@@ -328,11 +302,11 @@ impl Stream for TlsSocket {
         self.wait_recv_len > self.recv_len
     }
 
-    fn recv(&mut self) -> BoxFuture<'static, Result<usize>> {
+    fn recv(&mut self) -> LocalBoxFuture<'static, Result<usize>> {
         if let Err(e) = self.do_tls_read() {
             return async move {
                 Err(e)
-            }.boxed();
+            }.boxed_local();
         }
         let result = self.try_plain_read();
         self.set_interest(self.event_set()); //设置当前连接感兴趣的事件
@@ -449,12 +423,8 @@ impl Socket for TlsSocket {
         self.uid.as_ref()
     }
 
-    fn get_context(&self) -> &SocketContext {
-        &self.context
-    }
-
-    fn get_context_mut(&mut self) -> &mut SocketContext {
-        &mut self.context
+    fn get_context(&self) -> Rc<UnsafeCell<SocketContext>> {
+        self.context.clone()
     }
 
     fn set_timeout(&self, timeout: usize, event: SocketEvent) {
@@ -482,13 +452,13 @@ impl Socket for TlsSocket {
         let interest = *self.interest.lock(); //保证在调用set_interest时已释放RefCell的只读引用
         self.set_interest(interest.add(Interest::READABLE)); //设置连接当前对读事件感兴趣
 
-        let remaining = self.read_buf.remaining();
+        let remaining = unsafe { (&*self.read_buf.get()).remaining() };
         if remaining >= adjust && remaining > 0 {
             //连接当前读缓冲区有足够的数据，则立即返回当前读取缓冲区中剩余可读字节的数量
             return Err(remaining);
         }
 
-        if self.read_buf.unreceived().unwrap() > 0 {
+        if unsafe { (&*self.read_buf.get()).unreceived().unwrap() } > 0 {
             //连接当前读取缓冲区没有足够的数据，但读取缓冲区的流中还有未获取的数据，则立即返回至少还有1字节
             return Err(1);
         }
@@ -506,9 +476,9 @@ impl Socket for TlsSocket {
         let interest = *self.interest.lock(); //保证在调用set_interest时已释放RefCell的只读引用
         self.set_interest(interest.add(Interest::READABLE)); //设置连接当前对读事件感兴趣
 
-        if self.read_buf.unreceived().unwrap() > 0 {
+        if unsafe { (&*self.read_buf.get()).unreceived().unwrap() } > 0 {
             //连接当前读取缓冲区的流中还有未获取的数据，则立即返回当前缓冲区剩余可读字节数加1字节
-            return Err(self.read_buf.remaining() + 1);
+            return Err(unsafe { (&*self.read_buf.get()).remaining() + 1 });
         }
 
         //连接当前读缓冲区没有足够的数据，则只读需要的字节数
@@ -537,16 +507,12 @@ impl Socket for TlsSocket {
         }
     }
 
-    fn get_read_buffer(&self) -> &ByteBuffer {
-        &self.read_buf
-    }
-
-    fn get_read_buffer_mut(&mut self) -> &mut ByteBuffer {
-        &mut self.read_buf
+    fn get_read_buffer(&self) -> Rc<UnsafeCell<ByteBuffer>> {
+        self.read_buf.clone()
     }
 
     fn write_ready<B>(&mut self, buf: B) -> Result<()>
-        where B: AsRef<[u8]> + Send + 'static {
+        where B: AsRef<[u8]> + 'static {
         if self.is_closed() {
             //连接已关闭，则忽略，并立即返回
             return Err(Error::new(ErrorKind::ConnectionAborted,
@@ -625,10 +591,10 @@ impl Socket for TlsSocket {
 
     fn push_hibernated_task<F>(&self,
                                task: F)
-        where F: Future<Output = ()> + Send + 'static {
+        where F: Future<Output = ()> + 'static {
         let boxed = async move {
             task.await;
-        }.boxed();
+        }.boxed_local();
 
         self.hibernated_queue.lock().push_back(boxed);
     }
@@ -848,7 +814,7 @@ impl TlsSocket {
     }
 
     // 尝试处理Tls连接读缓冲的所有Tls包，并将Tls包解析为明文
-    fn try_plain_read(&mut self) -> BoxFuture<'static, Result<usize>> {
+    fn try_plain_read(&mut self) -> LocalBoxFuture<'static, Result<usize>> {
         match &mut self.tls_connect {
             TlsConnect::Client(con) => {
                 //解析客户端Tls连接读缓冲的Tls包
@@ -869,7 +835,7 @@ impl TlsSocket {
                                                    remote,
                                                    local,
                                                    e)))
-                        }.boxed()
+                        }.boxed_local()
                     },
                     Ok(io_state) => {
                         //在do_tls_read中已经调用过process_new_packets，所以这里只处理成功的情况
@@ -890,9 +856,9 @@ impl TlsSocket {
                                 self.ready_len += plain_bytes_len;
                             }
 
-                            if self.read_buf.readed() > self.readed_read_limit.load(Ordering::Relaxed) {
+                            if unsafe { (&*self.read_buf.get()).readed() } > self.readed_read_limit.load(Ordering::Relaxed) {
                                 //本次接收成功，且已达已读读缓冲大小限制，则清理已读取的读缓冲区，并释放对应的内存
-                                self.read_buf.truncate();
+                                unsafe { (&mut *self.read_buf.get()).truncate(); }
                             }
 
                             //本次接收成功，则异步向读缓冲写入本次接收到的所有数据
@@ -923,12 +889,12 @@ impl TlsSocket {
 
                                 //本次有可读取的未读明文数据，返回本次成功读取的未读明文字节大小
                                 Ok(plain_bytes_len)
-                            }.boxed()
+                            }.boxed_local()
                         } else {
                             //本次没有可读取的未读明文数据
                             async move {
                                 Ok(0)
-                            }.boxed()
+                            }.boxed_local()
                         }
                     },
                 }

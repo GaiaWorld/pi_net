@@ -22,7 +22,7 @@ use mime::{MULTIPART,
 use twoway::{find_bytes, rfind_bytes};
 use httparse::{EMPTY_HEADER, Result as ParseResult, Status, parse_headers};
 use https::{header::{CONTENT_TYPE, CONTENT_DISPOSITION, HeaderName, HeaderValue}, StatusCode};
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 
 use tcp::Socket;
 use pi_handler::SGenType;
@@ -86,7 +86,7 @@ unsafe impl Sync for MutilParts {}
 
 impl<S: Socket> Middleware<S, GatewayContext> for MutilParts {
     fn request<'a>(&'a self, context: &'a mut GatewayContext, req: HttpRequest<S>)
-                   -> BoxFuture<'a, MiddlewareResult<S>> {
+                   -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let block_size = self.block_size;
         let mut request = req;
         let future = async move {
@@ -143,19 +143,19 @@ impl<S: Socket> Middleware<S, GatewayContext> for MutilParts {
             //继续请求处理
             MiddlewareResult::ContinueRequest(request)
         };
-        future.boxed()
+        future.boxed_local()
     }
 
     fn response<'a>(&'a self,
                     context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
-                    -> BoxFuture<'a, MiddlewareResult<S>> {
+                    -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             //继续响应处理
             MiddlewareResult::ContinueResponse((req, resp))
         };
-        future.boxed()
+        future.boxed_local()
     }
 }
 

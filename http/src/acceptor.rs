@@ -64,7 +64,7 @@ impl<S: Socket> HttpAcceptor<S> {
         let mut http_request_result = None;
         let mut buf: &[u8] = &[]; //初始化本地缓冲区
         loop {
-            if handle.get_read_buffer_mut().try_fill().await == 0 {
+            if unsafe { (&mut *handle.get_read_buffer().get()).try_fill().await } == 0 {
                 //当前缓冲区还没有请求的数据，则异步准备读取后，继续尝试接收请求数据
                 if let Ok(value) = handle.read_ready(0) {
                     if value.await == 0 {
@@ -80,7 +80,7 @@ impl<S: Socket> HttpAcceptor<S> {
             let mut header = [EMPTY_HEADER; MAX_CONNECT_HTTP_HEADER_LIMIT];
             let mut req = Request::new(&mut header);
 
-            buf = handle.get_read_buffer().as_ref(); //填充本地缓冲区
+            buf = unsafe { (&*handle.get_read_buffer().get()).as_ref() }; //填充本地缓冲区
             if let Some(_body_offset) = UpStreamHeader::read_header(handle.clone(),
                                                                    buf,
                                                                    &mut req,
@@ -154,7 +154,7 @@ impl<S: Socket> HttpAcceptor<S> {
 
         if let Some((mut connect, request)) = http_request_result {
             connect.run_service(request).await; //运行Http服务
-            handle.get_context_mut().set(connect); //绑定Tcp连接上下文
+            unsafe { (&mut *handle.get_context().get()).set(connect); } //绑定Tcp连接上下文
         }
     }
 }

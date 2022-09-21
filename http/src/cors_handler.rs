@@ -16,7 +16,7 @@ use https::{Uri, StatusCode, Method,
                      ACCESS_CONTROL_ALLOW_METHODS,
                      ACCESS_CONTROL_ALLOW_HEADERS,
                      ACCESS_CONTROL_MAX_AGE}};
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use parking_lot::RwLock;
 use log::error;
 
@@ -53,7 +53,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for CORSHandler {
     fn request<'a>(&'a self,
                    context: &'a mut GatewayContext,
                    req: HttpRequest<S>)
-                   -> BoxFuture<'a, MiddlewareResult<S>> {
+                   -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
             if req.method() == &Method::OPTIONS {
                 //处理Options方法的CORS请求
@@ -64,14 +64,14 @@ impl<S: Socket> Middleware<S, GatewayContext> for CORSHandler {
                 handle_simple_request(self, req)
             }
         };
-        future.boxed()
+        future.boxed_local()
     }
 
     fn response<'a>(&'a self,
                     context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
-                    -> BoxFuture<'a, MiddlewareResult<S>> {
+                    -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let mut response = resp;
         let future = async move {
             if let Some(allow_origin) = req.headers().get(ORIGIN) {
@@ -87,7 +87,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for CORSHandler {
             //继续响应处理
             MiddlewareResult::ContinueResponse((req, response))
         };
-        future.boxed()
+        future.boxed_local()
     }
 }
 
