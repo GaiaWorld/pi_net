@@ -790,7 +790,7 @@ impl Socket for TcpSocket {
             return true;
         }
 
-        let mut r = false;
+        let mut r = true;
         if let Some(hibernate) = self.hibernate.lock().take() {
             r = hibernate.wakeup(result); //唤醒休眠的当前连接
         }
