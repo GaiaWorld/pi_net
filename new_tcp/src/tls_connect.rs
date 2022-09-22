@@ -64,7 +64,7 @@ pub struct TlsSocket {
     local:              SocketAddr,                                             //连接本地地址
     remote:             SocketAddr,                                             //连接远端地址
     token:              Option<Token>,                                          //连接令牌
-    stream:             TcpStream,                                              //连接流
+    stream:             Arc<UnsafeCell<TcpStream>>,                             //连接流
     tls_connect:        TlsConnect,                                             //Tls内部连接
     interest:           Arc<SpinLock<Interest>>,                                //连接当前感兴趣的事件类型
     wait_recv_len:      usize,                                                  //连接需要接收的字节数
@@ -150,6 +150,7 @@ impl Stream for TlsSocket {
             },
         };
 
+        let stream = Arc::new(UnsafeCell::new(stream));
         let interest = Arc::new(SpinLock::new(Interest::READABLE));
         let read_len = Arc::new(AtomicUsize::new(DEFAULT_READ_BLOCK_LEN));
         let (sender, receiver) = channel(recv_frame_buf_size);
@@ -229,12 +230,14 @@ impl Stream for TlsSocket {
         }
     }
 
+    #[inline]
     fn get_stream_ref(&self) -> &TcpStream {
-        &self.stream
+        unsafe { &*self.stream.get() }
     }
 
+    #[inline]
     fn get_stream_mut(&mut self) -> &mut TcpStream {
-        &mut self.stream
+        unsafe { &mut *self.stream.get() }
     }
 
     fn set_token(&mut self, token: Option<Token>) -> Option<Token> {
@@ -533,24 +536,25 @@ impl Socket for TlsSocket {
                 .lock()
                 .add(Interest::WRITABLE); //设置连接当前对写事件感兴趣
             let write_buf = self.write_buf.clone();
+            let token = self.get_token().unwrap().clone();
+            let poll = self.poll.clone();
+            let stream = self.stream.clone();
             rt.spawn(rt.alloc(), async move {
                 let bin = buf.as_ref();
                 if let Some(write_buf) = &mut *write_buf.lock() {
                     write_buf.put_slice(bin);
                 }
-            });
 
-            //强制重置连接当前感兴趣的事件
-            let token = self.get_token().unwrap().clone();
-            return self
-                .poll
-                .as_ref()
-                .unwrap()
-                .lock()
-                .registry()
-                .reregister(&mut self.stream,
-                            token,
-                            interest);
+                //强制重置连接当前感兴趣的事件
+                poll
+                    .as_ref()
+                    .unwrap()
+                    .lock()
+                    .registry()
+                    .reregister(unsafe { (&mut *stream.get()) },
+                                token,
+                                interest);
+            });
         }
 
         Ok(())
@@ -576,7 +580,7 @@ impl Socket for TlsSocket {
                 .unwrap()
                 .lock()
                 .registry()
-                .reregister(&mut self.stream,
+                .reregister(self.get_stream_mut(),
                             token,
                             interest)
         } else {
@@ -767,7 +771,7 @@ impl TlsSocket {
             },
             TlsConnect::Server(con) => {
                 //服务端Tls连接接收数据
-                let len = match con.read_tls(&mut self.stream) {
+                let len = match con.read_tls(unsafe { &mut *self.stream.get() }) {
                     Ok(0) => {
                         //Tls连接流已结束
                         return Err(Error::new(ErrorKind::ConnectionAborted,
@@ -988,7 +992,7 @@ impl TlsSocket {
             },
             TlsConnect::Server(con) => {
                 //服务端Tls连接发送数据
-                con.write_tls(&mut self.stream)
+                con.write_tls(unsafe { &mut *self.stream.get() })
             },
         }
     }

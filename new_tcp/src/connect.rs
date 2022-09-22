@@ -59,7 +59,7 @@ pub struct TcpSocket {
     local:              SocketAddr,                                             //连接本地地址
     remote:             SocketAddr,                                             //连接远端地址
     token:              Option<Token>,                                          //连接令牌
-    stream:             TcpStream,                                              //连接流
+    stream:             Arc<UnsafeCell<TcpStream>>,                             //连接流
     interest:           Arc<SpinLock<Interest>>,                                //连接当前感兴趣的事件类型
     wait_recv_len:      usize,                                                  //连接需要接收的字节数
     recv_len:           usize,                                                  //连接已接收的字节数
@@ -79,7 +79,7 @@ pub struct TcpSocket {
     poll:               Option<Arc<SpinLock<Poll>>>,                            //连接所在轮询器
     hibernate:          SpinLock<Option<Hibernate<Self>>>,                      //连接异步休眠对象
     hibernate_wakers:   SpinLock<VecDeque<Waker>>,                              //连接正在休眠时，其它休眠对象的唤醒器队列
-    hibernated_queue:   Arc<SpinLock<VecDeque<LocalBoxFuture<'static, ()>>>>,        //连接休眠时任务队列
+    hibernated_queue:   Arc<SpinLock<VecDeque<LocalBoxFuture<'static, ()>>>>,   //连接休眠时任务队列
     handle:             Option<SocketHandle<Self>>,                             //连接句柄
     context:            Rc<UnsafeCell<SocketContext>>,                          //连接上下文
     closed:             Arc<AtomicBool>,                                        //连接关闭状态
@@ -121,6 +121,7 @@ impl Stream for TcpSocket {
             readed_write_size_limit
         };
 
+        let stream = Arc::new(UnsafeCell::new(stream));
         let interest = Arc::new(SpinLock::new(Interest::READABLE));
         let read_len = Arc::new(AtomicUsize::new(DEFAULT_READ_BLOCK_LEN));
         let (sender, receiver) = channel(recv_frame_buf_size);
@@ -196,12 +197,14 @@ impl Stream for TcpSocket {
         }
     }
 
+    #[inline]
     fn get_stream_ref(&self) -> &TcpStream {
-        &self.stream
+        unsafe { &*self.stream.get() }
     }
 
+    #[inline]
     fn get_stream_mut(&mut self) -> &mut TcpStream {
-        &mut self.stream
+        unsafe { &mut *self.stream.get() }
     }
 
     fn set_token(&mut self, token: Option<Token>) -> Option<Token> {
@@ -291,7 +294,7 @@ impl Stream for TcpSocket {
         block.resize(self.get_read_block_len(), 0);
         let mut result = Ok(0); //初始化本次接收的结果值
         loop {
-            match self.stream.read(&mut block[block_pos..]) {
+            match self.get_stream_mut().read(&mut block[block_pos..]) {
                 Ok(0) => {
                     //连接流已结束，则立即返回错误原因
                     result = Err(Error::new(ErrorKind::ConnectionAborted,
@@ -416,7 +419,7 @@ impl Stream for TcpSocket {
 
             while !block.is_empty() {
                 //发送块中还有未发送的数据
-                match self.stream.write(block) {
+                match self.get_stream_mut().write(block) {
                     Ok(0) => {
                         //未能向流写入整个发送块，则立即返回错误原因
                         result = Err(Error::new(ErrorKind::WriteZero,
@@ -661,24 +664,25 @@ impl Socket for TcpSocket {
                 .lock()
                 .add(Interest::WRITABLE); //设置连接当前对写事件感兴趣
             let write_buf = self.write_buf.clone();
+            let token = self.get_token().unwrap().clone();
+            let poll = self.poll.clone();
+            let stream = self.stream.clone();
             rt.spawn(rt.alloc(), async move {
                 let bin = buf.as_ref();
                 if let Some(write_buf) = &mut *write_buf.lock() {
                     write_buf.put_slice(bin);
                 }
-            });
 
-            //强制重置连接当前感兴趣的事件
-            let token = self.get_token().unwrap().clone();
-            return self
-                .poll
-                .as_ref()
-                .unwrap()
-                .lock()
-                .registry()
-                .reregister(&mut self.stream,
-                            token,
-                            interest);
+                //强制重置连接当前感兴趣的事件
+                poll
+                    .as_ref()
+                    .unwrap()
+                    .lock()
+                    .registry()
+                    .reregister(unsafe { (&mut *stream.get()) },
+                                token,
+                                interest);
+            });
         }
 
         Ok(())
@@ -704,7 +708,7 @@ impl Socket for TcpSocket {
                 .unwrap()
                 .lock()
                 .registry()
-                .reregister(&mut self.stream,
+                .reregister(self.get_stream_mut(),
                             token,
                             interest)
         } else {
