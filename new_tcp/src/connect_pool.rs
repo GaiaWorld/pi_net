@@ -221,7 +221,6 @@ async fn handle_accepted<S, A>(rt: &WorkerRuntime<()>,
                 .get_adapter()
                 .connected(Ok(handle));
             rt.spawn(rt.alloc(), connected);
-            println!("!!!!!!pool, id: {}, len: {}", pool.uid, pool.sockets.lock().len());
         }
     }
 }
