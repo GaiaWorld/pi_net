@@ -69,7 +69,7 @@ pub struct TcpSocket {
     reader:             Arc<SpinLock<PipeSender<Arc<Vec<u8>>>>>,                //连接读缓冲输入器
     wait_ready_len:     usize,                                                  //连接异步准备读取的字节数
     ready_len:          usize,                                                  //连接异步准备读取已就绪的字节数
-    ready_reader:       Option<AsyncValue<usize>>,                              //异步准备读取器
+    ready_reader:       SpinLock<Option<AsyncValue<usize>>>,                    //异步准备读取器
     wait_sent_len:      AtomicUsize,                                            //连接需要发送的字节数
     sent_len:           usize,                                                  //连接已发送的字节数
     write_len:          Arc<AtomicUsize>,                                       //连接写入块大小
@@ -128,6 +128,7 @@ impl Stream for TcpSocket {
         let readed_read_limit = Arc::new(AtomicUsize::new(readed_read_size_limit));
         let read_buf = Rc::new(UnsafeCell::new(ByteBuffer::new(receiver.pin_boxed())));
         let reader = Arc::new(SpinLock::new(sender));
+        let ready_reader = SpinLock::new(None);
         let wait_sent_len = AtomicUsize::new(0);
         let write_len = Arc::new(AtomicUsize::new(DEFAULT_WRITE_BLOCK_LEN));
         let readed_write_limit = Arc::new(AtomicUsize::new(readed_write_size_limit));
@@ -154,7 +155,7 @@ impl Stream for TcpSocket {
             reader,
             wait_ready_len: 0,
             ready_len: 0,
-            ready_reader: None,
+            ready_reader,
             wait_sent_len,
             sent_len: 0,
             write_len,
@@ -178,7 +179,7 @@ impl Stream for TcpSocket {
         self.rt = Some(rt);
     }
 
-    fn set_handle(&mut self, shared: &Arc<SpinLock<Self>>) {
+    fn set_handle(&mut self, shared: &Arc<UnsafeCell<Self>>) {
         if let Some(token) = self.token {
             if let Some(close_listener) = &self.close_listener {
                 if let Some(timer_listener) = &self.timer_listener {
@@ -307,7 +308,7 @@ impl Stream for TcpSocket {
                 Ok(len) => {
                     //部分接收成功，则继续接收，直到接收完流的当前的所有数据
                     self.recv_len += len; //增加连接已接收的字节数
-                    if self.ready_reader.is_some() {
+                    if self.ready_reader.lock().is_some() {
                         //当前连接设置了异步准备接收器，则记录本次成功接收的字节数
                         self.ready_len += len;
                     }
@@ -592,7 +593,7 @@ impl Socket for TcpSocket {
         //连接当前读缓冲区没有足够的数据，则只读需要的字节数
         let value = AsyncValue::new();
         let value_copy = value.clone();
-        self.ready_reader = Some(value); //设置当前连接的异步准备读取器
+        *self.ready_reader.lock() = Some(value); //设置当前连接的异步准备读取器
         self.wait_ready_len = adjust - remaining; //设置本次异步准备读取实际需要的字节数
 
         Ok(value_copy)
@@ -615,7 +616,7 @@ impl Socket for TcpSocket {
         //连接当前读缓冲区没有足够的数据，则只读需要的字节数
         let value = AsyncValue::new();
         let value_copy = value.clone();
-        self.ready_reader = Some(value); //设置当前连接的异步准备读取器
+        *self.ready_reader.lock() = Some(value); //设置当前连接的异步准备读取器
         self.wait_ready_len = 0; //设置本次异步准备读取实际需要的字节数
 
         Ok(value_copy)
@@ -623,13 +624,13 @@ impl Socket for TcpSocket {
 
     #[inline]
     fn is_wait_wakeup_read_ready(&self) -> bool {
-        self.ready_reader.is_some()
+        self.ready_reader.lock().is_some()
     }
 
     fn wakeup_read_ready(&mut self) {
         if (self.wait_ready_len == 0) || (self.wait_ready_len <= self.ready_len) {
             //已完成异步准备读取指定的字节数
-            if let Some(ready_reader) = self.ready_reader.take() {
+            if let Some(ready_reader) = self.ready_reader.lock().take() {
                 //当前连接已设置了异步准备读取器，则立即移除并唤醒当前异步准备读取器
                 ready_reader.set(self.ready_len); //设置实际读取的字节数
                 self.wait_ready_len = 0; //重置异步准备读取的字节数
@@ -790,7 +791,7 @@ impl Socket for TcpSocket {
             return true;
         }
 
-        let mut r = true;
+        let mut r = false;
         if let Some(hibernate) = self.hibernate.lock().take() {
             r = hibernate.wakeup(result); //唤醒休眠的当前连接
         }
@@ -816,7 +817,7 @@ impl Socket for TcpSocket {
             return Ok(());
         }
 
-        if let Some(value) = self.ready_reader.take() {
+        if let Some(value) = self.ready_reader.lock().take() {
             //当前连接设置了异步准备读取器，则立即移除并唤醒当前异步准备读取器，并设置读取的长度为0
             value.set(0);
             self.wait_ready_len = 0; //重置异步准备读取的字节数

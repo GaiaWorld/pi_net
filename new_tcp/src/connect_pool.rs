@@ -1,9 +1,9 @@
 use std::thread;
 use std::sync::Arc;
 use std::str::FromStr;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+use std::cell::{RefCell, UnsafeCell};
 use std::io::{ErrorKind, Result, Error};
 use std::net::{Shutdown, SocketAddr, IpAddr, Ipv6Addr};
 
@@ -30,7 +30,7 @@ pub struct TcpSocketPool<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
     name:           String,                                                         //Tcp连接池名称
     config:         SocketConfig,                                                   //Tcp连接配置
     poll:           Arc<SpinLock<Poll>>,                                            //Socket事件轮询器
-    sockets:        Arc<SpinLock<SlotMap<DefaultKey, Option<Arc<SpinLock<S>>>>>>,   //Socket连接表
+    sockets:        Arc<SpinLock<SlotMap<DefaultKey, Option<Arc<UnsafeCell<S>>>>>>, //Socket连接表
     map:            XHashMap<SocketAddr, Token>,                                    //Socket映射表
     driver:         Option<SocketDriver<S, A>>,                                     //Socket驱动
     socket_recv:    Receiver<S>,                                                    //Socket接收器
@@ -204,10 +204,12 @@ async fn handle_accepted<S, A>(rt: &WorkerRuntime<()>,
             socket.set_token(Some(token)); //为注册成功的连接绑定新的令牌
             socket.set_uid(token.0); //为注册成功的连接设置唯一id
             socket.set_poll(pool.poll.clone()); //为注册成功的连接设置轮询器
-            let socket_arc = Arc::new(SpinLock::new(socket));
+            let socket_arc = Arc::new(UnsafeCell::new(socket));
             let handle = {
-                socket_arc.lock().set_handle(&socket_arc); //设置连接句柄
-                socket_arc.lock().get_handle()
+                unsafe {
+                    (&mut *socket_arc.get()).set_handle(&socket_arc); //设置连接句柄
+                    (&mut *socket_arc.get()).get_handle()
+                }
             };
             pool.sockets.lock()[id] = Some(socket_arc); //加入连接池上下文
 
@@ -219,6 +221,7 @@ async fn handle_accepted<S, A>(rt: &WorkerRuntime<()>,
                 .get_adapter()
                 .connected(Ok(handle));
             rt.spawn(rt.alloc(), connected);
+            println!("!!!!!!pool, id: {}, len: {}", pool.uid, pool.sockets.lock().len());
         }
     }
 }
@@ -252,7 +255,7 @@ async fn handle_poll_events<S, A>(rt: &WorkerRuntime<()>,
                 rt.spawn(rt.alloc(), async move {
                     let mut close_reason = None;
                     {
-                        let mut s = socket_copy.lock();
+                        let s = unsafe { (&mut *socket_copy.get()) };
                         match s.recv().await {
                             Ok(len) => {
                                 //按需接收完成，则重新注册当前Tcp连接关注的事件，并执行已读回调
@@ -297,14 +300,16 @@ async fn handle_poll_events<S, A>(rt: &WorkerRuntime<()>,
                         if let Some(Some(socket)) = sockets
                             .lock()
                             .get(DefaultKey::from(KeyData::from_ffi(token.0 as u64))) {
-                            let result = socket.lock().close(reason); //保证归还借用的可写引用
+                            let result = unsafe { (&mut *socket.get()).close(reason) }; //保证归还借用的可写引用
                             if let Err(e) = result {
                                 //关闭指定连接失败
-                                warn!("Tcp socket close failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
-                                    socket.lock().get_token(),
-                                    socket.lock().get_remote(),
-                                    socket.lock().get_local(),
+                                unsafe {
+                                    warn!("Tcp socket close failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                    (&*socket.get()).get_token(),
+                                    (&*socket.get()).get_remote(),
+                                    (&*socket.get()).get_local(),
                                     e);
+                                }
                             }
                         }
                     }
@@ -314,7 +319,7 @@ async fn handle_poll_events<S, A>(rt: &WorkerRuntime<()>,
                 rt.spawn(rt.alloc(), async move {
                     let mut close_reason = None;
                     {
-                        let mut s = socket_copy.lock();
+                        let s = unsafe { (&mut *socket_copy.get()) };
                         match s.send() {
                             Ok(len) => {
                                 //发送完成，并执行已写回调
@@ -352,14 +357,16 @@ async fn handle_poll_events<S, A>(rt: &WorkerRuntime<()>,
                         if let Some(Some(socket)) = sockets
                             .lock()
                             .get(DefaultKey::from(KeyData::from_ffi(token.0 as u64))) {
-                            let result = socket.lock().close(reason); //保证归还借用的可写引用
+                            let result = unsafe { (&mut *socket.get()).close(reason) }; //保证归还借用的可写引用
                             if let Err(e) = result {
                                 //关闭指定连接失败
-                                warn!("Tcp socket close failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
-                                    socket.lock().get_token(),
-                                    socket.lock().get_remote(),
-                                    socket.lock().get_local(),
+                                unsafe {
+                                    warn!("Tcp socket close failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                    (&*socket.get()).get_token(),
+                                    (&*socket.get()).get_remote(),
+                                    (&*socket.get()).get_local(),
                                     e);
+                                }
                             }
                         }
                     }
@@ -395,28 +402,29 @@ async fn handle_close_event<S, A>(rt: &WorkerRuntime<()>,
             .unwrap();
 
         //从映射表中移除被关闭Tcp连接的信息
-        pool.map.remove(socket.lock().get_remote());
+        pool.map.remove(unsafe { (&*socket.get()).get_remote() });
 
         //从轮询器中注销Tcp连接
         let r = pool
             .poll
             .lock()
             .registry()
-            .deregister(socket.lock().get_stream_mut());
+            .deregister(unsafe { (&mut *socket.get()).get_stream_mut() });
 
         //关闭流
-        socket
-            .lock()
-            .get_stream_ref()
-            .shutdown(Shutdown::Both);
+        unsafe {
+            (&*socket.get())
+                .get_stream_ref()
+                .shutdown(Shutdown::Both);
+        }
 
         //移除定时器
-        if let Some(timer) = socket.lock().unset_timer_handle() {
+        if let Some(timer) = unsafe { (&mut *socket.get()).unset_timer_handle() } {
             let _ = pool.timer.try_remove(timer);
         }
 
         //异步执行已关闭回调
-        let handle = socket.lock().get_handle();
+        let handle = unsafe { (&*socket.get()).get_handle() };
         let closed = if let Err(e) = reason {
             //因为内部错误，关闭Tcp连接
             pool.driver
@@ -458,19 +466,19 @@ async fn handle_timer<S, A>(pool: &mut TcpSocketPool<S, A>)
                 .sockets
                 .lock()
                 .get_mut(DefaultKey::from(KeyData::from_ffi(token.0 as u64))) {
-                if socket.lock().is_closed() {
+                if unsafe { (&*socket.get()).is_closed() } {
                     //连接已关闭，则忽略
                     continue;
                 }
 
-                if let Some(timer) = socket.lock().unset_timer_handle() {
+                if let Some(timer) = unsafe { (&mut *socket.get()).unset_timer_handle() } {
                     //连接已设置定时器，则先移除指定句柄的定时器
                     let _ = pool.timer.try_remove(timer);
                 }
 
                 //设置指定事件的定时器，并在连接上设置定时器句柄
                 let timer = pool.timer.insert((token, event), timeout as u64);
-                socket.lock().set_timer_handle(timer);
+                unsafe { (&mut *socket.get()).set_timer_handle(timer); }
             }
         } else {
             //为指定令牌的连接取消指定的定时器
@@ -478,13 +486,13 @@ async fn handle_timer<S, A>(pool: &mut TcpSocketPool<S, A>)
                 .sockets
                 .lock()
                 .get_mut(DefaultKey::from(KeyData::from_ffi(token.0 as u64))) {
-                if socket.lock().is_closed() {
+                if unsafe { (&*socket.get()).is_closed() } {
                     //连接已关闭，则忽略
                     continue;
                 }
 
                 //移除连接上的定时器句柄，并移除指定句柄的定时器
-                if let Some(timer) = socket.lock().unset_timer_handle() {
+                if let Some(timer) = unsafe { (&mut *socket.get()).unset_timer_handle() } {
                     let _ = pool.timer.try_remove(timer);
                 }
             }
@@ -501,16 +509,16 @@ async fn handle_timer<S, A>(pool: &mut TcpSocketPool<S, A>)
                 .sockets
                 .lock()
                 .get_mut(DefaultKey::from(KeyData::from_ffi(token.0 as u64))) {
-                if socket.lock().is_closed() {
+                if unsafe { (&*socket.get()).is_closed() } {
                     //连接已关闭，则忽略
                     continue;
                 }
 
                 //移除连接上的定时器句柄
-                socket.lock().unset_timer_handle();
+                unsafe { (&mut *socket.get()).unset_timer_handle(); }
 
                 //连接已超时
-                let handle = socket.lock().get_handle();
+                let handle = unsafe { (&*socket.get()).get_handle() };
                 pool.driver
                     .as_ref()
                     .unwrap()

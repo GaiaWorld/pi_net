@@ -11,6 +11,7 @@ use std::result::Result as GenResult;
 use std::io::{Error, Result, ErrorKind};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::net::{SocketAddr, IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::atomic::AtomicUsize;
 
 use futures::future::LocalBoxFuture;
 use crossbeam_channel::Sender;
@@ -429,7 +430,7 @@ pub trait Stream: Sized + 'static {
     fn set_runtime(&mut self, rt: WorkerRuntime<()>);
 
     /// 设置Tcp流句柄
-    fn set_handle(&mut self, shared: &Arc<SpinLock<Self>>);
+    fn set_handle(&mut self, shared: &Arc<UnsafeCell<Self>>);
 
     /// 获取连接流
     fn get_stream_ref(&self) -> &TcpStream;
@@ -603,6 +604,7 @@ pub enum AcceptorCmd {
 pub struct SocketDriver<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
     addrs:      Rc<XHashMap<SocketAddr, usize>>,                                //驱动器绑定的地址
     controller: Option<Rc<Sender<Box<dyn FnOnce() -> AcceptorCmd + Send>>>>,    //连接接受器的控制器
+    count:      Rc<AtomicUsize>,                                                //内部连接计数器
     router:     Rc<Vec<Sender<S>>>,                                             //连接路由表
     adapter:    Option<Arc<A>>,                                                 //连接协议适配器
 }
@@ -615,6 +617,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Clone for SocketDriver<S
         SocketDriver {
             addrs: self.addrs.clone(),
             controller: self.controller.clone(),
+            count: self.count.clone(),
             router: self.router.clone(),
             adapter: self.adapter.clone(),
         }
@@ -634,10 +637,12 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> SocketDriver<S, A> {
             vec.push(sender.clone());
             index += 1;
         }
+        let count = AtomicUsize::new(0);
 
         SocketDriver {
             addrs: Rc::new(map),
             controller: None,
+            count: Rc::new(count),
             router: Rc::new(vec),
             adapter: None,
         }
@@ -662,8 +667,8 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> SocketDriver<S, A> {
 
     /// 将连接路由到对应的连接池中等待处理
     pub fn route(&self, mut socket: S) -> Result<()> {
-        if let Some(Token(id)) = socket.set_token(None) {
-            let router = &self.router[id % self.router.len()];
+        if let Some(_token) = socket.set_token(None) {
+            let router = &self.router[self.count.fetch_add(1, Ordering::Relaxed) % self.router.len()];
 
             match router.try_send(socket) {
                 Err(e) => {
@@ -762,116 +767,91 @@ impl<S: Socket> SocketHandle<S> {
 
     /// 线程安全的获取Tcp连接上下文的只读引用
     pub fn get_context(&self) -> Rc<UnsafeCell<SocketContext>> {
-        self
-            .0
-            .inner
-            .lock()
-            .get_context()
+        unsafe {
+            (&*self.0.inner.get()).get_context()
+        }
     }
 
     /// 线程安全的准备读
     pub fn read_ready(&self, size: usize) -> GenResult<AsyncValue<usize>, usize> {
-        self
-            .0
-            .inner
-            .lock()
-            .read_ready(size)
+        unsafe {
+            (&mut *self.0.inner.get()).read_ready(size)
+        }
     }
 
     /// 线程安全的强制准备读
     pub fn read_all_ready(&self) -> GenResult<AsyncValue<usize>, usize> {
-        self
-            .0
-            .inner
-            .lock()
-            .read_all_ready()
+        unsafe {
+            (&mut *self.0.inner.get()).read_all_ready()
+        }
     }
 
     /// 线程安全的获取连接的接收缓冲区的引用
     pub fn get_read_buffer(&self) -> Rc<UnsafeCell<ByteBuffer>> {
-        self
-            .0
-            .inner
-            .lock()
-            .get_read_buffer()
+        unsafe {
+            (&*self.0.inner.get()).get_read_buffer()
+        }
     }
 
     /// 线程安全的写
     pub fn write_ready<B>(&self, buf: B) -> Result<()>
         where B: AsRef<[u8]> + 'static {
-        self
-            .0
-            .inner
-            .lock()
-            .write_ready(buf)
+        unsafe {
+            (&mut *self.0.inner.get()).write_ready(buf)
+        }
     }
 
     /// 重新注册当前流感兴趣的事件
     pub fn reregister_interest(&self, ready: Ready) -> Result<()> {
-        self
-            .0
-            .inner
-            .lock()
-            .reregister_interest(ready)
+        unsafe {
+            (&mut *self.0.inner.get()).reregister_interest(ready)
+        }
     }
 
     /// 线程安全的开始执行连接休眠时加入的任务，当前任务执行完成后自动执行下一个任务，直到任务队列为空
     pub fn run_hibernated_tasks(&self) {
-        self
-            .0
-            .inner
-            .lock()
-            .run_hibernated_tasks();
+        unsafe {
+            (&*self.0.inner.get()).run_hibernated_tasks();
+        }
     }
 
     /// 线程安全的异步休眠当前连接，直到被唤醒
     pub fn hibernate(&self,
                      handle: SocketHandle<S>,
                      ready: Ready) -> Option<Hibernate<S>> {
-        self
-            .0
-            .inner
-            .lock()
-            .hibernate(handle,
-                       ready)
+        unsafe {
+            (&*self.0.inner.get()).hibernate(handle, ready)
+        }
     }
 
     /// 线程安全的设置当前连接的休眠对象
     pub fn set_hibernate(&self, hibernate: Hibernate<S>) -> bool {
-        self
-            .0
-            .inner
-            .lock()
-            .set_hibernate(hibernate)
+        unsafe {
+            (&*self.0.inner.get()).set_hibernate(hibernate)
+        }
     }
 
     /// 线程安全的设置当前连接在休眠时挂起的其它休眠对象的唤醒器
     fn set_hibernate_wakers(&self, waker: Waker) {
-        self
-            .0
-            .inner
-            .lock()
-            .set_hibernate_wakers(waker);
+        unsafe {
+            (&*self.0.inner.get()).set_hibernate_wakers(waker);
+        }
     }
 
     /// 线程安全的非阻塞的唤醒被休眠的当前连接，如果当前连接未被休眠，则忽略
     /// 还会唤醒当前连接正在休眠时，当前连接的所有其它休眠对象的唤醒器
     /// 唤醒过程可能会被阻塞，这不会导致线程阻塞而是返回假，调用者可以继续尝试唤醒，直到返回真
     pub fn wakeup(&self, result: Result<()>) -> bool {
-        self
-            .0
-            .inner
-            .lock()
-            .wakeup(result)
+        unsafe {
+            (&mut *self.0.inner.get()).wakeup(result)
+        }
     }
 
     /// 线程安全的关闭连接
     pub fn close(&self, reason: Result<()>) -> Result<()> {
-        self
-            .0
-            .inner
-            .lock()
-            .close(reason)
+        unsafe {
+            (&mut *self.0.inner.get()).close(reason)
+        }
     }
 }
 
@@ -879,7 +859,7 @@ impl<S: Socket> SocketHandle<S> {
 /// Tcp连接镜像
 ///
 pub struct SocketImage<S: Socket> {
-    inner:          Arc<SpinLock<S>>,                               //Tcp连接指针
+    inner:          Arc<UnsafeCell<S>>,                             //Tcp连接指针
     local:          SocketAddr,                                     //TCP连接本地地址
     remote:         SocketAddr,                                     //TCP连接远端地址
     token:          Token,                                          //Tcp连接令牌
@@ -894,7 +874,7 @@ unsafe impl<S: Socket> Sync for SocketImage<S> {}
 
 impl<S: Socket> SocketImage<S> {
     /// 构建Tcp连接镜像
-    pub fn new(shared: &Arc<SpinLock<S>>,
+    pub fn new(shared: &Arc<UnsafeCell<S>>,
                local: SocketAddr,
                remote: SocketAddr,
                token: Token,
