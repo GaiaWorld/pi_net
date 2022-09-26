@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 
 use env_logger;
 
-use pi_async::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue}};
+use pi_async::rt::{serial::{AsyncRuntimeBuilder, AsyncValue}};
 use pi_atom::Atom;
 use pi_gray::GrayVersion;
 use pi_handler::{Args, Handler};
@@ -142,10 +142,7 @@ fn test_mqtt_proxy_service() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
-                                                        None,
-                                                        None,
-                                                        None);
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
 
     let protocol_name = "mqttv3.1";
     let broker_name = "test_ws_mqtt";
@@ -194,10 +191,7 @@ fn test_tls_mqtt_proxy_service() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
-                                                        None,
-                                                        None,
-                                                        None);
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
 
     let protocol_name = "mqttv3.1";
     let broker_name = "test_wss_mqtt";

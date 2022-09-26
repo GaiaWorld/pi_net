@@ -13,8 +13,8 @@ use crossbeam_channel::{Sender, Receiver, unbounded};
 use log::{warn, error};
 
 use pi_async::{lock::spin_lock::SpinLock,
-               rt::{serial::{AsyncRuntime, AsyncValue},
-                    serial_worker_thread::WorkerRuntime}};
+               rt::{serial::AsyncValue,
+                    serial_local_thread::LocalTaskRuntime}};
 use pi_hash::XHashMap;
 use pi_local_timer::local_timer::LocalTimer;
 use pi_slotmap::{Key, DefaultKey, KeyData, SlotMap};
@@ -91,14 +91,14 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
 
     /// 运行Tcp连接池，并设置Socket驱动
     pub fn run(self,
-               rt: WorkerRuntime<()>,
+               rt: LocalTaskRuntime<()>,
                driver: SocketDriver<S, A>,
                event_size: usize,
                timeout: Option<usize>) -> Result<()> {
         let mut pool = self;
         pool.driver = Some(driver);
         let rt_copy = rt.clone();
-        rt.spawn(rt.alloc(), async move {
+        rt.spawn(async move {
             let poll_timeout = if let Some(t) = timeout {
                 Some(Duration::from_millis(t as u64))
             } else {
@@ -118,7 +118,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
 
 // Tcp连接事件循环，当连接同时关注可读和可写事件时，轮询将不会返回任何事件，轮询超时时长会影响到最快响应时间，最快响应时间是实际处理时间加上轮询超时时长
 #[inline]
-fn event_loop<S, A>(rt: WorkerRuntime<()>,
+fn event_loop<S, A>(rt: LocalTaskRuntime<()>,
                     mut pool: TcpSocketPool<S, A>,
                     event_size: usize,
                     poll_timeout: Option<Duration>) -> LocalBoxFuture<'static, ()>
@@ -151,13 +151,13 @@ fn event_loop<S, A>(rt: WorkerRuntime<()>,
                                     pool,
                                     event_size,
                                     poll_timeout);
-        rt.spawn(rt.alloc(), event_loop);
+        rt.spawn(event_loop);
     }.boxed_local()
 }
 
 // 处理已接受的Tcp连接
 #[inline]
-async fn handle_accepted<S, A>(rt: &WorkerRuntime<()>,
+async fn handle_accepted<S, A>(rt: &LocalTaskRuntime<()>,
                                pool: &mut TcpSocketPool<S, A>)
     where S: Socket + Stream,
           A: SocketAdapter<Connect = S> {
@@ -220,14 +220,14 @@ async fn handle_accepted<S, A>(rt: &WorkerRuntime<()>,
                 .unwrap()
                 .get_adapter()
                 .connected(Ok(handle));
-            rt.spawn(rt.alloc(), connected);
+            rt.spawn(connected);
         }
     }
 }
 
 // 处理Tcp连接的轮询事件
 #[inline]
-async fn handle_poll_events<S, A>(rt: &WorkerRuntime<()>,
+async fn handle_poll_events<S, A>(rt: &LocalTaskRuntime<()>,
                                   pool: &mut TcpSocketPool<S, A>,
                                   events: &Events)
     where S: Socket + Stream,
@@ -251,7 +251,7 @@ async fn handle_poll_events<S, A>(rt: &WorkerRuntime<()>,
 
             if event.is_readable() {
                 //可读事件，表示读就绪，则异步处理读事件
-                rt.spawn(rt.alloc(), async move {
+                rt.spawn(async move {
                     let mut close_reason = None;
                     {
                         let s = unsafe { (&mut *socket_copy.get()) };
@@ -315,7 +315,7 @@ async fn handle_poll_events<S, A>(rt: &WorkerRuntime<()>,
                 });
             } else if event.is_writable() {
                 //可写事件，表示写就绪，则异步处理写事件
-                rt.spawn(rt.alloc(), async move {
+                rt.spawn(async move {
                     let mut close_reason = None;
                     {
                         let s = unsafe { (&mut *socket_copy.get()) };
@@ -377,7 +377,7 @@ async fn handle_poll_events<S, A>(rt: &WorkerRuntime<()>,
 
 // 批量处理Tcp连接的关闭事件
 // 关闭指定的Tcp连接，并清理上下文
-async fn handle_close_event<S, A>(rt: &WorkerRuntime<()>,
+async fn handle_close_event<S, A>(rt: &LocalTaskRuntime<()>,
                                   pool: &mut TcpSocketPool<S, A>)
     where S: Socket + Stream,
           A: SocketAdapter<Connect = S> {
@@ -448,7 +448,7 @@ async fn handle_close_event<S, A>(rt: &WorkerRuntime<()>,
                     .closed(Ok(handle))
             }
         };
-        rt.spawn(rt.alloc(), closed);
+        rt.spawn(closed);
     }
 }
 

@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use futures::future::{FutureExt, LocalBoxFuture};
 use env_logger;
 
-use pi_async::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder}};
+use pi_async::rt::{serial::AsyncRuntimeBuilder};
 
 use new_tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus,
               connect::TcpSocket,
@@ -193,10 +193,7 @@ fn test_tcp_connect() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
-                                                        None,
-                                                        None,
-                                                        None);
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
 
     let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(38080, Box::new(TestService));
@@ -229,10 +226,7 @@ fn test_tls_connect() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
-                                                        None,
-                                                        None,
-                                                        None);
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
 
     let mut factory = PortsAdapterFactory::<TlsSocket>::new();
     factory.bind(38080, Box::new(TestService));

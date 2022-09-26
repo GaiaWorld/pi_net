@@ -223,11 +223,11 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 if let Err(e) = result {
                     if e.kind() != ErrorKind::UnexpectedEof {
                         //Http连接非正常关闭
-                        warn!("Http Connect Close by Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
-                            handle.get_token(),
-                            handle.get_remote(),
-                            handle.get_local(),
-                            e);
+                        // warn!("Http Connect Close by Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                        //     handle.get_token(),
+                        //     handle.get_remote(),
+                        //     handle.get_local(),
+                        //     e);
                     }
                 }
 

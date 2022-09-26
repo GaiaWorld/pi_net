@@ -24,7 +24,7 @@ use env_logger;
 
 use pi_async::rt::{AsyncRuntime, AsyncValue,
                    multi_thread::MultiTaskRuntimeBuilder,
-                   serial::{AsyncRuntime as SerialAsyncRuntime, AsyncRuntimeBuilder}};
+                   serial::AsyncRuntimeBuilder};
 use pi_hash::XHashMap;
 use pi_atom::Atom;
 use pi_gray::GrayVersion;
@@ -370,21 +370,21 @@ fn handle<R: AsyncRuntime>(rt: R,
     let resp_handler = Arc::new(handler);
 
     rt.spawn(rt.alloc(), async move {
-        println!("!!!!!!http gateway handle, topic: {:?}", topic);
-        println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
-        println!("!!!!!!http gateway handle, headers: {:?}", headers);
-        println!("!!!!!!http gateway handle, msg: {:?}", msg.0.borrow());
+        // println!("!!!!!!http gateway handle, topic: {:?}", topic);
+        // println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
+        // println!("!!!!!!http gateway handle, headers: {:?}", headers);
+        // println!("!!!!!!http gateway handle, msg: {:?}", msg.0.borrow());
 
         //处理Http响应
         resp_handler.status(200);
-        resp_handler.header("Port_Test", "true");
-        if let Err(e) = resp_handler.write(Vec::from("Hello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello HttpHello Http\n".as_bytes())).await {
+        // resp_handler.header("Port_Test", "true");
+        if let Err(e) = resp_handler.write(Vec::from("Hello Http".as_bytes())).await {
             println!("!!!!!!write body failed, reason: {:?}", e);
             return;
         }
 
         resp_handler.finish().await;
-        println!("!!!!!!http gateway handle ok");
+        // println!("!!!!!!http gateway handle ok");
     });
 }
 
@@ -398,10 +398,12 @@ fn test_http_hosts() {
     let file_rt = builder.build();
 
     //启动网络异步运行时
-    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
-                                                        None,
-                                                        None,
-                                                        None);
+    let rt0 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt1 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt2 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt3 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt4 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt5 = AsyncRuntimeBuilder::default_local_thread(None, None);
 
     //构建请求处理器
     let handler
@@ -510,7 +512,7 @@ fn test_http_hosts() {
     let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
 
-    match SocketListener::bind(vec![rt],
+    match SocketListener::bind(vec![rt0, rt1, rt2, rt3, rt4, rt5],
                                factory,
                                config,
                                1024,
@@ -541,10 +543,7 @@ fn test_https_hosts() {
     let file_rt = builder.build();
 
     //启动网络异步运行时
-    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
-                                                        None,
-                                                        None,
-                                                        None);
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
 
     //构建请求处理器
     let handler

@@ -20,8 +20,8 @@ use rustls::{ClientConnection, ServerConnection};
 use log::warn;
 
 use pi_async::{lock::spin_lock::SpinLock,
-               rt::{serial::{AsyncRuntime, AsyncValue},
-                    serial_worker_thread::WorkerRuntime,
+               rt::{serial::AsyncValue,
+                    serial_local_thread::LocalTaskRuntime,
                     async_pipeline::{AsyncReceiverExt, AsyncPipeLineExt, PipeSender, channel}}};
 use pi_async_buffer::ByteBuffer;
 
@@ -59,7 +59,7 @@ const DEFAULT_TLS_WRITE_BUF_SIZE_MULTIPLE: f64 = 2.0;
 /// Tls连接
 ///
 pub struct TlsSocket {
-    rt:                 Option<WorkerRuntime<()>>,                              //连接所在运行时
+    rt:                 Option<LocalTaskRuntime<()>>,                           //连接所在运行时
     uid:                Option<usize>,                                          //连接唯一id
     local:              SocketAddr,                                             //连接本地地址
     remote:             SocketAddr,                                             //连接远端地址
@@ -85,7 +85,7 @@ pub struct TlsSocket {
     poll:               Option<Arc<SpinLock<Poll>>>,                            //连接所在轮询器
     hibernate:          SpinLock<Option<Hibernate<Self>>>,                      //连接异步休眠对象
     hibernate_wakers:   SpinLock<VecDeque<Waker>>,                              //连接正在休眠时，其它休眠对象的唤醒器队列
-    hibernated_queue:   Arc<SpinLock<VecDeque<LocalBoxFuture<'static, ()>>>>,        //连接休眠时任务队列
+    hibernated_queue:   Arc<SpinLock<VecDeque<LocalBoxFuture<'static, ()>>>>,   //连接休眠时任务队列
     handle:             Option<SocketHandle<Self>>,                             //连接句柄
     context:            Rc<UnsafeCell<SocketContext>>,                          //连接上下文
     closed:             Arc<AtomicBool>,                                        //连接关闭状态
@@ -208,7 +208,7 @@ impl Stream for TlsSocket {
         result
     }
 
-    fn set_runtime(&mut self, rt: WorkerRuntime<()>) {
+    fn set_runtime(&mut self, rt: LocalTaskRuntime<()>) {
         self.rt = Some(rt);
     }
 
@@ -537,7 +537,7 @@ impl Socket for TlsSocket {
             let stream = self.stream.clone();
             let interest = self.interest.clone();
             let write_buf = self.write_buf.clone();
-            rt.spawn(rt.alloc(), async move {
+            rt.spawn(async move {
                 let bin = buf.as_ref();
                 if let Some(write_buf) = &mut *write_buf.lock() {
                     write_buf.put_slice(bin);
@@ -605,7 +605,7 @@ impl Socket for TlsSocket {
         if let Some(rt) = &self.rt {
             let hibernated_queue = self.hibernated_queue.clone();
 
-            rt.spawn(rt.alloc(), async move {
+            rt.spawn(async move {
                 loop {
                     let task = {
                         //立即释放锁，防止锁重入

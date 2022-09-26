@@ -16,3 +16,6 @@ members = [
   "async_httpc",
   "async_wsc",
 ]
+
+[patch.crates-io]
+pi_async = { path = "../crate master/pi_async" }

@@ -8,7 +8,7 @@ use httparse::{EMPTY_HEADER, Request};
 use bytes::{Buf, BufMut, BytesMut};
 use env_logger;
 
-use pi_async::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue}};
+use pi_async::rt::{serial::{AsyncRuntimeBuilder, AsyncValue}};
 
 use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
           connect::TcpSocket,
@@ -105,10 +105,7 @@ fn test_websocket_listener() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
-                                                        None,
-                                                        None,
-                                                        None);
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
 
     let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(38080,
@@ -142,10 +139,7 @@ fn test_tls_websocket_listener() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    let rt = AsyncRuntimeBuilder::default_worker_thread(None,
-                                                        None,
-                                                        None,
-                                                        None);
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
 
     let mut factory = PortsAdapterFactory::<TlsSocket>::new();
     factory.bind(38080,

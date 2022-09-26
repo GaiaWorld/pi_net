@@ -18,7 +18,7 @@ use futures::future::{FutureExt, LocalBoxFuture};
 use dashmap::DashMap;
 use num_cpus;
 
-use pi_async::rt::serial_worker_thread::WorkerRuntime;
+use pi_async::rt::serial_local_thread::LocalTaskRuntime;
 
 use crate::{Socket, Stream, SocketAdapter, SocketAdapterFactory, SocketConfig, SocketEvent, SocketDriver, SocketHandle, AsyncService, acceptor::Acceptor, connect_pool::TcpSocketPool, SocketStatus};
 
@@ -275,7 +275,7 @@ impl<S, F> SocketListener<S, F>
     where S: Socket + Stream,
           F: SocketAdapterFactory<Connect = S, Adapter = PortsAdapter<S>>, {
     /// 绑定指定配置的Tcp连接监听器
-    pub fn bind(mut runtimes: Vec<WorkerRuntime<()>>,
+    pub fn bind(mut runtimes: Vec<LocalTaskRuntime<()>>,
                 factory: F,                     //Tcp端口适配器工厂
                 config: SocketConfig,           //连接配置
                 init_cap: usize,                //连接池初始容量

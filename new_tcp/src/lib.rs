@@ -19,7 +19,7 @@ use mio::{Token, Interest, Poll,
           net::TcpStream};
 
 use pi_async::{lock::spin_lock::SpinLock,
-               rt::{serial::AsyncValue, serial_worker_thread::WorkerRuntime}};
+               rt::{serial::AsyncValue, serial_local_thread::LocalTaskRuntime}};
 use pi_async_buffer::ByteBuffer;
 use pi_hash::XHashMap;
 
@@ -427,7 +427,7 @@ pub trait Stream: Sized + 'static {
            tls_cfg: TlsConfig) -> Self;
 
     /// 设置连接所在运行时
-    fn set_runtime(&mut self, rt: WorkerRuntime<()>);
+    fn set_runtime(&mut self, rt: LocalTaskRuntime<()>);
 
     /// 设置Tcp流句柄
     fn set_handle(&mut self, shared: &Arc<UnsafeCell<Self>>);

@@ -18,8 +18,8 @@ use bytes::{Buf, BufMut, BytesMut};
 use log::warn;
 
 use pi_async::{lock::spin_lock::SpinLock,
-               rt::{serial::{AsyncRuntime, AsyncValue},
-                    serial_worker_thread::WorkerRuntime,
+               rt::{serial::AsyncValue,
+                    serial_local_thread::LocalTaskRuntime,
                     async_pipeline::{AsyncReceiverExt, AsyncPipeLineExt, PipeSender, channel}}};
 use pi_async_buffer::ByteBuffer;
 
@@ -54,7 +54,7 @@ const DEAFULT_READED_WRITE_BUF_SIZE_LIMIT: usize = 256 * 1024;
 /// Tcp连接
 ///
 pub struct TcpSocket {
-    rt:                 Option<WorkerRuntime<()>>,                              //连接所在运行时
+    rt:                 Option<LocalTaskRuntime<()>>,                           //连接所在运行时
     uid:                Option<usize>,                                          //连接唯一id
     local:              SocketAddr,                                             //连接本地地址
     remote:             SocketAddr,                                             //连接远端地址
@@ -175,7 +175,7 @@ impl Stream for TcpSocket {
         }
     }
 
-    fn set_runtime(&mut self, rt: WorkerRuntime<()>) {
+    fn set_runtime(&mut self, rt: LocalTaskRuntime<()>) {
         self.rt = Some(rt);
     }
 
@@ -665,7 +665,7 @@ impl Socket for TcpSocket {
             let stream = self.stream.clone();
             let interest = self.interest.clone();
             let write_buf = self.write_buf.clone();
-            rt.spawn(rt.alloc(), async move {
+            rt.spawn(async move {
                 let bin = buf.as_ref();
                 if let Some(write_buf) = &mut *write_buf.lock() {
                     write_buf.put_slice(bin);
@@ -733,7 +733,7 @@ impl Socket for TcpSocket {
         if let Some(rt) = &self.rt {
             let hibernated_queue = self.hibernated_queue.clone();
 
-            rt.spawn(rt.alloc(), async move {
+            rt.spawn(async move {
                 loop {
                     let task = {
                         //立即释放锁，防止锁重入
