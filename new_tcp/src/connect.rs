@@ -59,7 +59,7 @@ pub struct TcpSocket {
     local:              SocketAddr,                                             //连接本地地址
     remote:             SocketAddr,                                             //连接远端地址
     token:              Option<Token>,                                          //连接令牌
-    stream:             Arc<UnsafeCell<TcpStream>>,                             //连接流
+    stream:             TcpStream,                                              //连接流
     interest:           Arc<SpinLock<Interest>>,                                //连接当前感兴趣的事件类型
     wait_recv_len:      usize,                                                  //连接需要接收的字节数
     recv_len:           usize,                                                  //连接已接收的字节数
@@ -75,13 +75,14 @@ pub struct TcpSocket {
     write_len:          Arc<AtomicUsize>,                                       //连接写入块大小
     readed_write_limit: Arc<AtomicUsize>,                                       //已读写缓冲大小限制
     readed_write_len:   usize,                                                  //已读写缓冲大小
-    write_buf:          Arc<SpinLock<Option<BytesMut>>>,                        //连接写缓冲
-    poll:               Option<Arc<SpinLock<Poll>>>,                            //连接所在轮询器
+    write_buf:          Option<BytesMut>,                                       //连接写缓冲
+    poll:               Option<Rc<UnsafeCell<Poll>>>,                          //连接所在轮询器
     hibernate:          SpinLock<Option<Hibernate<Self>>>,                      //连接异步休眠对象
     hibernate_wakers:   SpinLock<VecDeque<Waker>>,                              //连接正在休眠时，其它休眠对象的唤醒器队列
     hibernated_queue:   Arc<SpinLock<VecDeque<LocalBoxFuture<'static, ()>>>>,   //连接休眠时任务队列
     handle:             Option<SocketHandle<Self>>,                             //连接句柄
     context:            Rc<UnsafeCell<SocketContext>>,                          //连接上下文
+    write_listener:     Option<Sender<(Token, Vec<u8>)>>,                       //连接写事件监听器
     closed:             Arc<AtomicBool>,                                        //连接关闭状态
     close_listener:     Option<Sender<(Token, Result<()>)>>,                    //连接关闭事件监听器
     timer_handle:       Option<usize>,                                          //定时器句柄
@@ -121,7 +122,6 @@ impl Stream for TcpSocket {
             readed_write_size_limit
         };
 
-        let stream = Arc::new(UnsafeCell::new(stream));
         let interest = Arc::new(SpinLock::new(Interest::READABLE));
         let read_len = Arc::new(AtomicUsize::new(DEFAULT_READ_BLOCK_LEN));
         let (sender, receiver) = channel(recv_frame_buf_size);
@@ -132,7 +132,7 @@ impl Stream for TcpSocket {
         let wait_sent_len = AtomicUsize::new(0);
         let write_len = Arc::new(AtomicUsize::new(DEFAULT_WRITE_BLOCK_LEN));
         let readed_write_limit = Arc::new(AtomicUsize::new(readed_write_size_limit));
-        let write_buf = Arc::new(SpinLock::new(Some(BytesMut::new())));
+        let write_buf = Some(BytesMut::new());
         let hibernate = SpinLock::new(None);
         let hibernate_wakers = SpinLock::new(VecDeque::new());
         let hibernated_queue = Arc::new(SpinLock::new(VecDeque::new()));
@@ -168,6 +168,7 @@ impl Stream for TcpSocket {
             hibernated_queue,
             handle: None,
             context,
+            write_listener: None,
             closed,
             close_listener: None,
             timer_handle: None,
@@ -200,12 +201,12 @@ impl Stream for TcpSocket {
 
     #[inline]
     fn get_stream_ref(&self) -> &TcpStream {
-        unsafe { &*self.stream.get() }
+        &self.stream
     }
 
     #[inline]
     fn get_stream_mut(&mut self) -> &mut TcpStream {
-        unsafe { &mut *self.stream.get() }
+        &mut self.stream
     }
 
     fn set_token(&mut self, token: Option<Token>) -> Option<Token> {
@@ -245,8 +246,13 @@ impl Stream for TcpSocket {
         self.write_len.store(len, Ordering::Release);
     }
 
-    fn set_poll(&mut self, poll: Arc<SpinLock<Poll>>) {
+    fn set_poll(&mut self, poll: Rc<UnsafeCell<Poll>>) {
         self.poll = Some(poll);
+    }
+
+    fn set_write_listener(&mut self,
+                          listener: Option<Sender<(Token, Vec<u8>)>>) {
+        self.write_listener = listener;
     }
 
     fn set_close_listener(&mut self,
@@ -406,7 +412,7 @@ impl Stream for TcpSocket {
         let mut block_pos = 0; //初始化发送块的已填充位置
         let mut block_len = self.get_write_block_len(); //本次发送的限制
 
-        if let Some(write_buf) = &mut *self.write_buf.lock() {
+        if let Some(write_buf) = self.get_write_buffer() {
             let remaining = write_buf.remaining(); //当前写缓冲区剩余未发送的数据大小
             block_len = if block_len > remaining {
                 //当前写缓冲区剩余未发送的数据小于本次发送限制，则以剩余未发送的数据大小作为本次发送的发送块大小
@@ -417,6 +423,7 @@ impl Stream for TcpSocket {
             };
             let mut bytes = write_buf.copy_to_bytes(block_len);
             let mut block = bytes.as_ref(); //初始化本次发送块
+            drop(write_buf);
 
             while !block.is_empty() {
                 //发送块中还有未发送的数据
@@ -448,7 +455,9 @@ impl Stream for TcpSocket {
                         if !block.is_empty() {
                             //当前发送块中还有未发送的数据，则重新写入写缓冲区
                             //注意这是因为每次发送都会消耗当前写缓冲区中的所有数据，所以可以将未发送完的数据重新写入写缓冲区
-                            write_buf.put_slice(&block[block_pos..]);
+                            if let Some(write_buf) = &mut self.write_buf {
+                                write_buf.put_slice(&block[block_pos..]);
+                            }
                         }
 
                         result = Ok(block_pos);
@@ -474,13 +483,12 @@ impl Stream for TcpSocket {
             //本次发送成功，已达已读写缓冲大小限制，则清理已发送的写缓冲区，并释放对应的内存
             let old_write_buf = self
                 .write_buf
-                .lock()
                 .take()
                 .unwrap();
             let mut new_write_buf = BytesMut::new();
             new_write_buf.put(old_write_buf);
             self.readed_write_len = 0; //重置已读写缓冲大小
-            *self.write_buf.lock() = Some(new_write_buf); //重置写缓冲区
+            self.write_buf = Some(new_write_buf); //重置写缓冲区
         }
 
         if block_pos < block_len {
@@ -489,7 +497,7 @@ impl Stream for TcpSocket {
             self.set_interest(interest.add(Interest::WRITABLE));
         } else {
             //本次发送全部成功或完全没有发送
-            if let Some(write_buf) = &*self.write_buf.lock() {
+            if let Some(write_buf) = &mut self.write_buf {
                 if write_buf.remaining() > 0
                     || self.wait_sent_len.load(Ordering::Relaxed) > self.sent_len {
                     //连接的当前写缓冲区中还有待发送的数据，或者还有未填充到写缓冲区的的待发送数据，则增加连接当前只对写事件感兴趣
@@ -643,6 +651,11 @@ impl Socket for TcpSocket {
         self.read_buf.clone()
     }
 
+    #[inline]
+    fn get_write_buffer(&mut self) -> Option<&mut BytesMut> {
+        self.write_buf.as_mut()
+    }
+
     fn write_ready<B>(&mut self, buf: B) -> Result<()>
         where B: AsRef<[u8]> + 'static {
         if self.is_closed() {
@@ -654,33 +667,13 @@ impl Socket for TcpSocket {
                                           self.get_local())));
         }
 
-        if let Some(rt) = &self.rt {
-            //异步发送数据
-            self.wait_sent_len
-                .fetch_add(buf.as_ref().len(), Ordering::Relaxed); //首先要同步增加需要发送的字节数
-
-            //再派发填充当前连接写缓冲区的异步任务
-            let token = self.get_token().unwrap().clone();
-            let poll = self.poll.clone();
-            let stream = self.stream.clone();
-            let interest = self.interest.clone();
-            let write_buf = self.write_buf.clone();
-            rt.spawn(async move {
-                let bin = buf.as_ref();
-                if let Some(write_buf) = &mut *write_buf.lock() {
-                    write_buf.put_slice(bin);
-                }
-
-                //强制重置连接当前感兴趣的事件
-                poll
-                    .as_ref()
-                    .unwrap()
-                    .lock()
-                    .registry()
-                    .reregister(unsafe { (&mut *stream.get()) },
-                                token,
-                                interest.lock().add(Interest::WRITABLE));
-            });
+        //发送指定数据
+        self.wait_sent_len
+            .fetch_add(buf.as_ref().len(), Ordering::Relaxed); //首先要同步增加需要发送的字节数
+        if let Some(listener) = &self.write_listener {
+            if let Some(token) = self.token.clone() {
+                listener.send((token, buf.as_ref().to_vec()));
+            }
         }
 
         Ok(())
@@ -700,15 +693,17 @@ impl Socket for TcpSocket {
         if let Some(interest) = self.get_interest() {
             //需要修改当前连接感兴趣的事件类型
             let token = self.get_token().unwrap().clone();
-            self
-                .poll
-                .as_ref()
-                .unwrap()
-                .lock()
-                .registry()
-                .reregister(self.get_stream_mut(),
-                            token,
-                            interest)
+            unsafe {
+                (&mut *self
+                    .poll
+                    .as_ref()
+                    .unwrap()
+                    .get())
+                    .registry()
+                    .reregister(self.get_stream_mut(),
+                                token,
+                                interest)
+            }
         } else {
             Ok(())
         }

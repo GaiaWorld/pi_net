@@ -12,6 +12,7 @@ use std::io::{Error, Result, ErrorKind};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::net::{SocketAddr, IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::AtomicUsize;
+use bytes::BytesMut;
 
 use futures::future::LocalBoxFuture;
 use crossbeam_channel::Sender;
@@ -463,7 +464,10 @@ pub trait Stream: Sized + 'static {
     fn set_write_block_len(&self, len: usize);
 
     /// 设置连接绑定的轮询器
-    fn set_poll(&mut self, poll: Arc<SpinLock<Poll>>);
+    fn set_poll(&mut self, poll: Rc<UnsafeCell<Poll>>);
+
+    /// 设置写事件监听器
+    fn set_write_listener(&mut self, listener: Option<Sender<(Token, Vec<u8>)>>);
 
     /// 设置关闭事件监听器
     fn set_close_listener(&mut self, listener: Option<Sender<(Token, Result<()>)>>);
@@ -549,6 +553,9 @@ pub trait Socket: Sized + 'static {
 
     /// 获取连接的输入缓冲区的只读引用
     fn get_read_buffer(&self) -> Rc<UnsafeCell<ByteBuffer>>;
+
+    /// 获取连接的输出缓冲区的可写引用
+    fn get_write_buffer(&mut self) -> Option<&mut BytesMut>;
 
     /// 通知连接写就绪，可以开始发送指定的数据
     fn write_ready<B>(&mut self, buf: B) -> Result<()>

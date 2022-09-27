@@ -1,4 +1,5 @@
 use std::thread;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::str::FromStr;
 use std::collections::HashMap;
@@ -10,6 +11,7 @@ use std::net::{Shutdown, SocketAddr, IpAddr, Ipv6Addr};
 use futures::future::{FutureExt, LocalBoxFuture};
 use mio::{Events, Poll, Token, Interest};
 use crossbeam_channel::{Sender, Receiver, unbounded};
+use bytes::BufMut;
 use log::{warn, error};
 
 use pi_async::{lock::spin_lock::SpinLock,
@@ -29,11 +31,13 @@ pub struct TcpSocketPool<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
     uid:            u8,                                                             //Tcp连接池唯一id
     name:           String,                                                         //Tcp连接池名称
     config:         SocketConfig,                                                   //Tcp连接配置
-    poll:           Arc<SpinLock<Poll>>,                                            //Socket事件轮询器
+    poll:           Rc<UnsafeCell<Poll>>,                                           //Socket事件轮询器
     sockets:        Arc<SpinLock<SlotMap<DefaultKey, Option<Arc<UnsafeCell<S>>>>>>, //Socket连接表
     map:            XHashMap<SocketAddr, Token>,                                    //Socket映射表
     driver:         Option<SocketDriver<S, A>>,                                     //Socket驱动
     socket_recv:    Receiver<S>,                                                    //Socket接收器
+    write_sent:     Sender<(Token, Vec<u8>)>,                                       //写事件的发送器
+    write_recv:     Receiver<(Token, Vec<u8>)>,                                     //写事件的接收器
     close_sent:     Sender<(Token, Result<()>)>,                                    //关闭事件的发送器
     close_recv:     Receiver<(Token, Result<()>)>,                                  //关闭事件的接收器
     duration:       Instant,                                                        //定时器持续时间
@@ -64,8 +68,9 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
         let contexts = Arc::new(SpinLock::new(SlotMap::with_capacity(size)));
         let map = XHashMap::default();
 
-        let poll = Arc::new(SpinLock::new(Poll::new()?));
+        let poll = Rc::new(UnsafeCell::new(Poll::new()?));
 
+        let (write_sent, write_recv) = unbounded();
         let (close_sent, close_recv) = unbounded();
         let (timer_sent, timer_recv) = unbounded();
         register_close_sender(uid, close_sent.clone()); //注册全局关闭事件发送器
@@ -80,6 +85,8 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
             map,
             driver: None,
             socket_recv: receiver,
+            write_sent,
+            write_recv,
             close_sent,
             close_recv,
             duration,
@@ -128,16 +135,20 @@ fn event_loop<S, A>(rt: LocalTaskRuntime<()>,
         let mut events = Events::with_capacity(event_size);
         handle_accepted(&rt, &mut pool).await;
 
-        if let Err(e) = pool
-            .poll
-            .lock()
-            .poll(&mut events, poll_timeout.clone()) {
-            //轮询连接事件错误，则立即退出Tcp连接事件循环
-            error!("Tcp socket pool poll failed, timeout: {:?}, ports: {:?}, reason: {:?}",
-                poll_timeout,
-                pool.name,
-                e);
-            return;
+        handle_write_event(&mut pool).await;
+
+        unsafe {
+            if let Err(e) = (&mut *pool
+                .poll
+                .get())
+                .poll(&mut events, poll_timeout.clone()) {
+                    //轮询连接事件错误，则立即退出Tcp连接事件循环
+                    error!("Tcp socket pool poll failed, timeout: {:?}, ports: {:?}, reason: {:?}",
+                        poll_timeout,
+                        pool.name,
+                        e);
+                    return;
+            }
         }
 
         handle_poll_events(&rt, &mut pool, &events).await;
@@ -176,51 +187,106 @@ async fn handle_accepted<S, A>(rt: &LocalTaskRuntime<()>,
             .expect(format!("Handle accepted falied, token: {:?}, reason: invalid inited interest",
                     token).as_str());
         pool.map.insert(socket.get_remote().clone(), token);
-        if let Err(e) = pool
-            .poll
-            .lock()
-            .registry()
-            .register(socket.get_stream_mut(), token, ready) {
-            //连接注册失败
-            warn!("Tcp socket poll register error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+        unsafe {
+            if let Err(e) = (&mut *pool
+                .poll
+                .get())
+                .registry()
+                .register(socket.get_stream_mut(), token, ready) {
+                //连接注册失败
+                warn!("Tcp socket poll register error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                 token,
                 socket.get_remote(),
                 socket.get_local(),
                 e);
 
-            //立即关闭未注册的连接
-            if let Err(e) = socket.close(Err(Error::new(ErrorKind::Other, "register socket failed"))) {
-                warn!("Tcp socket close error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                //立即关闭未注册的连接
+                if let Err(e) = socket.close(Err(Error::new(ErrorKind::Other, "register socket failed"))) {
+                    warn!("Tcp socket close error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                     token,
                     socket.get_remote(),
                     socket.get_local(),
                     e);
-            }
-        } else {
-            //连接注册成功
-            socket.set_close_listener(Some(pool.close_sent.clone())); //为注册成功的连接绑定关闭事件监听器
-            socket.set_timer_listener(Some(pool.timer_sent.clone())); //为注册成功的连接绑定定时事件监听器
-            socket.set_runtime(rt.clone()); //为注册成功的连接绑定运行时
-            socket.set_token(Some(token)); //为注册成功的连接绑定新的令牌
-            socket.set_uid(token.0); //为注册成功的连接设置唯一id
-            socket.set_poll(pool.poll.clone()); //为注册成功的连接设置轮询器
-            let socket_arc = Arc::new(UnsafeCell::new(socket));
-            let handle = {
-                unsafe {
-                    (&mut *socket_arc.get()).set_handle(&socket_arc); //设置连接句柄
-                    (&mut *socket_arc.get()).get_handle()
                 }
-            };
-            pool.sockets.lock()[id] = Some(socket_arc); //加入连接池上下文
+            } else {
+                //连接注册成功
+                socket.set_write_listener(Some(pool.write_sent.clone())); //为注册成功的连接绑定写事件监听器
+                socket.set_close_listener(Some(pool.close_sent.clone())); //为注册成功的连接绑定关闭事件监听器
+                socket.set_timer_listener(Some(pool.timer_sent.clone())); //为注册成功的连接绑定定时事件监听器
+                socket.set_runtime(rt.clone()); //为注册成功的连接绑定运行时
+                socket.set_token(Some(token)); //为注册成功的连接绑定新的令牌
+                socket.set_uid(token.0); //为注册成功的连接设置唯一id
+                socket.set_poll(pool.poll.clone()); //为注册成功的连接设置轮询器
+                let socket_arc = Arc::new(UnsafeCell::new(socket));
+                let handle = {
+                    unsafe {
+                        (&mut *socket_arc.get()).set_handle(&socket_arc); //设置连接句柄
+                        (&mut *socket_arc.get()).get_handle()
+                    }
+                };
+                pool.sockets.lock()[id] = Some(socket_arc); //加入连接池上下文
 
-            //异步调用连接回调任务
-            let connected = pool
-                .driver
-                .as_ref()
-                .unwrap()
-                .get_adapter()
-                .connected(Ok(handle));
-            rt.spawn(connected);
+                //异步调用连接回调任务
+                let connected = pool
+                    .driver
+                    .as_ref()
+                    .unwrap()
+                    .get_adapter()
+                    .connected(Ok(handle));
+                rt.spawn(connected);
+            }
+        }
+    }
+}
+
+//处理Tcp连接的写事件
+#[inline]
+async fn handle_write_event<S, A>(pool: &mut TcpSocketPool<S, A>)
+    where S: Socket + Stream,
+          A: SocketAdapter<Connect = S> {
+    for (token, buf) in pool
+        .write_recv
+        .try_iter()
+        .collect::<Vec<(Token, Vec<u8>)>>() {
+        //当前连接池有写事件
+        if let Some(Some(socket)) = pool
+            .sockets
+            .lock()
+            .get(DefaultKey::from(KeyData::from_ffi(token.0 as u64))) {
+            //写事件指定的连接存在
+            let interest = if let Some(interest) = unsafe { (&*socket.get()).get_interest() } {
+                //当前连接有感兴趣的事件
+                interest
+            } else {
+                //当前连接没有感兴趣的事件
+                Interest::READABLE
+            };
+
+            //强制重置连接当前感兴趣的事件
+            if let Err(e) = unsafe { (&mut *pool
+                .poll
+                .get())
+                .registry()
+                .reregister(unsafe { (&mut *socket.get()).get_stream_mut() }, token,
+                            interest.add(Interest::WRITABLE)) } {
+                //重新注册关注的事件失败，则关闭出错的Tcp连接
+                if let Err(e) = unsafe { (&mut *socket.get()).close(Err(e)) } {
+                    //关闭指定连接失败
+                    unsafe {
+                        warn!("Tcp socket close failed by handle write event, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                    (&*socket.get()).get_token(),
+                                    (&*socket.get()).get_remote(),
+                                    (&*socket.get()).get_local(),
+                                    e);
+                    }
+                }
+            }
+
+            unsafe {
+                if let Some(write_buf) = (&mut *socket.get()).get_write_buffer() {
+                    write_buf.put_slice(buf.as_ref());
+                }
+            }
         }
     }
 }
@@ -260,12 +326,12 @@ async fn handle_poll_events<S, A>(rt: &LocalTaskRuntime<()>,
                                 //按需接收完成，则重新注册当前Tcp连接关注的事件，并执行已读回调
                                 if let Some(interest) = s.get_interest() {
                                     //需要修改当前连接感兴趣的事件类型
-                                    if let Err(e) = poll
-                                        .lock()
+                                    if let Err(e) = unsafe { (&mut *poll
+                                        .get())
                                         .registry()
                                         .reregister(s.get_stream_mut(),
                                                     token,
-                                                    interest) {
+                                                    interest) } {
                                         //重新注册关注的事件失败
                                         close_reason = Some(Err(e));
                                     }
@@ -324,12 +390,14 @@ async fn handle_poll_events<S, A>(rt: &LocalTaskRuntime<()>,
                                 //发送完成，并执行已写回调
                                 if let Some(interest) = s.get_interest() {
                                     // 需要修改当前连接感兴趣的事件类型
-                                    if let Err(e) = poll
-                                        .lock()
-                                        .registry()
-                                        .reregister(s.get_stream_mut(), token, interest) {
-                                        //重新注册关注的事件失败
-                                        close_reason = Some(Err(e));
+                                    unsafe {
+                                        if let Err(e) = (&mut *poll
+                                            .get())
+                                            .registry()
+                                            .reregister(s.get_stream_mut(), token, interest) {
+                                            //重新注册关注的事件失败
+                                            close_reason = Some(Err(e));
+                                        }
                                     }
                                 }
 
@@ -404,11 +472,13 @@ async fn handle_close_event<S, A>(rt: &LocalTaskRuntime<()>,
         pool.map.remove(unsafe { (&*socket.get()).get_remote() });
 
         //从轮询器中注销Tcp连接
-        let r = pool
-            .poll
-            .lock()
-            .registry()
-            .deregister(unsafe { (&mut *socket.get()).get_stream_mut() });
+        let r = unsafe {
+            (&mut *pool
+                .poll
+                .get())
+                .registry()
+                .deregister(unsafe { (&mut *socket.get()).get_stream_mut() })
+        };
 
         //关闭流
         unsafe {
