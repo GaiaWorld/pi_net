@@ -5,6 +5,7 @@ use core::time;
 use std::thread;
 use time::Duration;
 use std::collections::VecDeque;
+use bytes::Buf;
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use env_logger;
@@ -56,39 +57,6 @@ impl<S: Socket> AsyncService<S> for TestService {
                 },
                 SocketStatus::Connected(Ok(_)) => {
                     println!("===> Connect Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.get_remote(), handle.get_local());
-
-                    //连接成功，开始读
-                    // if token.0 % 2 == 0 {
-                    //     //准备异步读
-                    //     if let Err(e) = handle.read_ready(0) {
-                    //         println!("!!!> Read Ready Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}", token, handle.get_remote(), handle.get_local(), e);
-                    //     }
-                    // } else {
-                        //直接异步读
-                        println!("!!!!!!connected, try_get 0");
-                        if let Some(buf) = unsafe { (&mut *handle.get_read_buffer().get()).try_get(0).await } {
-                            println!("!!!!!!try get ok");
-                            println!("===> Socket Connected Read Ok, token: {:?}, data: {:?}", token, String::from_utf8_lossy(buf.as_ref()));
-
-                            //读成功，开始写
-                            // let mut arr = b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n".into();
-                            // buf.get_iolist_mut().push_back(arr);
-                            //
-                            // if let Some(buf) = buf.finish() {
-                            //     match AsyncWriteTask::async_write(handle, waits, buf).await {
-                            //         Err(e) => {
-                            //             println!("!!!> Socket Write Error, token: {:?}, reason: {:?}", token, e);
-                            //         },
-                            //         Ok(_) => {
-                            //             println!("===> Socket Write Ok, token: {:?}", token);
-                            //         },
-                            //     }
-                            // }
-                        } else {
-                            return;
-                        }
-                        println!("!!!!!!handle_connected finish");
-                    // }
                 },
                 _ => unimplemented!(),
             }
@@ -109,8 +77,8 @@ impl<S: Socket> AsyncService<S> for TestService {
                     println!("===> Socket Receive Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.get_remote(), handle.get_local());
 
                     let mut ready_len = 0;
-                    if let Some(buf) = unsafe { (&mut *handle.get_read_buffer().get()).try_get(ready_len).await } {
-                        if buf.len() == 0 {
+                    if let Some(buf) = unsafe { (&mut *handle.get_read_buffer().get()) } {
+                        if buf.remaining() == 0 {
                             //当前读缓冲中没有数据，则异步准备读取数据
                             println!("!!!!!!readed, read ready start, len: 0");
                             ready_len = match handle.read_ready(0) {

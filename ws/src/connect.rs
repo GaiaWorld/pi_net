@@ -4,6 +4,7 @@ use std::net::{SocketAddr, Shutdown};
 use std::io::{ErrorKind, Result, Error};
 
 use mio::Token;
+use bytes::Buf;
 use log::warn;
 
 use tcp::{Socket, SocketHandle, SocketEvent,
@@ -190,7 +191,7 @@ impl<S: Socket> WsSocket<S> {
 
         //读数据，并填充帧数据
         let mut frames = Vec::new();
-        while unsafe { (&mut *handle.get_read_buffer().get()).try_fill().await } > 0 {
+        while unsafe { (&mut *handle.get_read_buffer().get()).as_ref().unwrap().remaining() } > 0 {
             let mut frame = WsFrame::<S>::default();
             WsFrame::read_head(handle, window_bits, &mut frame).await;
             frames.push(frame);
@@ -403,7 +404,7 @@ impl<S: Socket> WsSocket<S> {
         }
 
         //握手完成或连接正在关闭，准备异步接收客户端发送的Websocket数据帧，则预填充连接读缓冲区
-        unsafe { (&mut *handle.get_read_buffer().get()).try_fill().await; }
+        // unsafe { (&mut *handle.get_read_buffer().get()).try_fill().await; }
     }
 
     /// 异步处理Tcp已关闭事件

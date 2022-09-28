@@ -8,7 +8,7 @@ use std::io::{Error, Result, ErrorKind};
 use std::fmt::{Display, Formatter, Result as FmtResult, Debug};
 
 use bytes::{Buf, BufMut, BytesMut};
-use httparse::{EMPTY_HEADER, Request};
+use httparse::{EMPTY_HEADER, Status as HttpHeadrStatus, Request};
 use http::{Result as HttpResult,
            Response,
            Version,
@@ -226,22 +226,32 @@ impl<S: Socket> WsAcceptor<S> {
                                 support_protocol: Arc<dyn ChildProtocol<S>>) {
         let mut buf: &[u8] = &[]; //初始化本地缓冲区
         loop {
-            if unsafe { (&mut *handle.get_read_buffer().get()).try_fill().await } == 0 {
-                //当前缓冲区还没有握手请求的数据，则异步准备读取后，继续尝试接收握手数据
-                if let Ok(value) = handle.read_ready(0) {
-                    if value.await == 0 {
-                        //当前连接已关闭，则立即退出
-                        return;
+            if let Some(bin) = unsafe { (&mut *handle.get_read_buffer().get()) } {
+                if bin.remaining() == 0 {
+                    //当前缓冲区还没有握手请求的数据，则异步准备读取后，继续尝试接收握手数据
+                    if let Ok(value) = handle.read_ready(0) {
+                        if value.await == 0 {
+                            //当前连接已关闭，则立即退出
+                            return;
+                        }
                     }
-                }
 
-                continue;
+                    continue;
+                }
+            } else {
+                //Tcp读缓冲区不存在
+                handle.close(Err(Error::new(ErrorKind::Other,
+                                            format!("Websocket handshake by http parse failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid read buffer",
+                                                    handle.get_token(),
+                                                    handle.get_remote(),
+                                                    handle.get_local()))));
+                return;
             }
 
             let mut headers = [EMPTY_HEADER; MAX_HANDSHAKE_HTTP_HEADER_LIMIT];
             let mut req = Request::new(&mut headers);
 
-            buf = unsafe { (&*handle.get_read_buffer().get()).as_ref() }; //填充本地缓冲区
+            buf = unsafe { (&*handle.get_read_buffer().get()).as_ref().unwrap().as_ref() }; //填充本地缓冲区
             match req.parse(buf) {
                 Err(e) => {
                     //解析握手时的Http头错误
@@ -268,7 +278,7 @@ impl<S: Socket> WsAcceptor<S> {
                         },
                         _ => {
                             //握手数据不完整，则强制异步准备读取后，继续尝试接收握手数据
-                            if let Ok(value) = handle.read_all_ready() {
+                            if let Ok(value) = handle.read_ready(0) {
                                 if value.await == 0 {
                                     //当前连接已关闭，则立即退出
                                     return;
@@ -281,7 +291,14 @@ impl<S: Socket> WsAcceptor<S> {
                 },
                 Ok(status) => {
                     //全部握手数据已到达
-                    let _ = unsafe { (&mut *handle.get_read_buffer().get()).try_get(buf.len()).await }; //消耗握手的请求数据
+                    if let HttpHeadrStatus::Complete(len) = status {
+                        let _ = unsafe {
+                            (&mut *handle.get_read_buffer().get())
+                                .as_mut()
+                                .unwrap()
+                                .copy_to_bytes(len) //消耗握手的请求数据
+                        };
+                    }
                     unsafe { (&mut *handle.get_context().get()).set(WsSession::default()); } //握手前绑定Tcp连接上下文
                     match acceptor.handshake(handle.clone(), &support_protocol, req) {
                         (_, Err(e)) => {

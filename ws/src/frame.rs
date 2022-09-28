@@ -5,6 +5,8 @@ use std::marker::PhantomData;
 use std::result::Result as GenResult;
 use std::io::{ErrorKind, Result, Error, Write};
 
+use bytes::Buf;
+
 use tcp::{Socket, SocketHandle};
 
 use crate::utils::{ChildProtocol, WsFrameType};
@@ -739,8 +741,8 @@ impl<S: Socket> WsFrame<S> {
         let mut is_first = true; //是否首次接收
         let mut ready_len = WsHead::READ_HEAD_LEN; //初始化就绪字节数
         loop {
-            if let Some(buf) = unsafe { (&mut *handle.get_read_buffer().get()).try_get(ready_len).await } {
-                if buf.len() == 0 {
+            if let Some(buf) = unsafe { (&mut *handle.get_read_buffer().get()) } {
+                if buf.remaining() < ready_len {
                     //当前缓冲区没有帧头数据，则异步准备读取，并继续尝试读帧头数据
                     match handle.read_ready(ready_len) {
                         Err(len) => {
@@ -759,7 +761,7 @@ impl<S: Socket> WsFrame<S> {
                 }
 
                 if is_first {
-                    let head = WsHead::from(buf.as_ref());
+                    let head = WsHead::from(buf.copy_to_bytes(ready_len).as_ref());
                     match head.need_size() {
                         0 => {
                             //头已读完成
@@ -775,7 +777,7 @@ impl<S: Socket> WsFrame<S> {
                         }
                     }
                 } else {
-                    if let Err(e) = frame.get_head_mut().from_last(buf.as_ref()) {
+                    if let Err(e) = frame.get_head_mut().from_last(buf.copy_to_bytes(ready_len).as_ref()) {
                         handle.close(Err(Error::new(ErrorKind::Other,
                                                     format!("Websocket read frame head failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                                                             handle.get_token(),
@@ -818,8 +820,8 @@ impl<S: Socket> WsFrame<S> {
         if ready_len > 0 {
             //有负载，则继续异步读负载，并填充Websocket帧
             loop {
-                if let Some(buf) = unsafe { (&mut *handle.get_read_buffer().get()).try_get(ready_len).await } {
-                    if buf.len() == 0 {
+                if let Some(buf) = unsafe { (&mut *handle.get_read_buffer().get()) } {
+                    if buf.remaining() < ready_len {
                         //当前缓冲区没有负载数据，则异步准备读取，并继续尝试读负载数据
                         match handle.read_ready(ready_len) {
                             Err(len) => {
@@ -838,7 +840,7 @@ impl<S: Socket> WsFrame<S> {
                     }
 
                     //负载读完成
-                    frame.from_payload(buf.as_ref());
+                    frame.from_payload(buf.copy_to_bytes(ready_len).as_ref());
 
                     return;
                 } else {

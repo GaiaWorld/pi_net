@@ -93,8 +93,6 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
     pub async fn run_service(&mut self,
                              req: HttpRequest<S>) {
         self.update_timeout(); //在调用服务前，更新当前Http连接的超时时长
-
-        let content_len = req.content_len();
         match self.service.call(req).await {
             Err(e) => {
                 //服务调用异常
@@ -108,15 +106,6 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
                     //回应错误，则立即抛出回应异常
                     let resp = HttpResponse::empty();
                     self.throw(resp, StatusCode::INTERNAL_SERVER_ERROR, e);
-                } else {
-                    //回应成功
-                    if let Some(content_len) = content_len {
-                        //本次请求是指定长度的请求体，则清理本次请求体的数据
-                        let _ = unsafe { (&mut *self.handle.get_read_buffer().get()).try_get(content_len).await }; //消耗请求体的数据
-                    }
-
-                    //继续尝试填充当前Http连接的后续请求数据
-                    let _ = unsafe { (&mut *self.handle.get_read_buffer().get()).try_fill().await };
                 }
             },
         }

@@ -321,7 +321,7 @@ async fn handle_poll_events<S, A>(rt: &LocalTaskRuntime<()>,
                     let mut close_reason = None;
                     {
                         let s = unsafe { (&mut *socket_copy.get()) };
-                        match s.recv().await {
+                        match s.recv() {
                             Ok(len) => {
                                 //按需接收完成，则重新注册当前Tcp连接关注的事件，并执行已读回调
                                 if let Some(interest) = s.get_interest() {

@@ -77,7 +77,9 @@ impl UpStreamHeader {
             Ok(status) => {
                 //全部头数据已到达，则继续读取，并解析体数据
                 if let Status::Complete(len) = status {
-                    let _ = unsafe { (&mut *handle.get_read_buffer().get()).try_get(len).await }; //消耗请求头的数据
+                    if let Some(bin) = unsafe { (&mut *handle.get_read_buffer().get()) } {
+                        let _ = bin.copy_to_bytes(len); //消耗请求头的数据
+                    }
 
                     if let Err(e) = fill_headers(headers, req) {
                         handle.close(Err(e));

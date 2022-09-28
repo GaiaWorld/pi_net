@@ -44,9 +44,6 @@ impl<S: Socket> AsyncService<S> for WebsocketListener<S> {
                                                     e))));
                 return;
             }
-
-            //Tcp连接成功，则预填充连接读缓冲区
-            unsafe { (&mut *handle.get_read_buffer().get()).try_fill().await; }
         }.boxed_local()
     }
 

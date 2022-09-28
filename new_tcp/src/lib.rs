@@ -486,7 +486,7 @@ pub trait Stream: Sized + 'static {
     fn is_require_recv(&self) -> bool;
 
     /// 接收流中的数据，返回成功，则表示本次接收了需要的字节数，并返回本次接收的字节数，否则返回接收错误
-    fn recv(&mut self) -> LocalBoxFuture<'static, Result<usize>>;
+    fn recv(&mut self) -> Result<usize>;
 
     /// 发送数据到流，返回成功，则返回本次发送了多少字节数，否则返回发送错误原因
     fn send(&mut self) -> Result<usize>;
@@ -540,11 +540,6 @@ pub trait Socket: Sized + 'static {
     /// 注意调用此方法，在保持连接的前提下，必须保证后续一定还可以接收到数据，否则会导致无法唤醒当前异步准备读取器
     fn read_ready(&mut self, adjust: usize) -> GenResult<AsyncValue<usize>, usize>;
 
-    /// 强制通知连接读就绪，可以开始接收任意数量的字节，直到当前连接的流没有可接收的数据，如果当前需要等待接收则返回AsyncValue, 否则返回接收缓冲区中已有数据的字节数
-    /// 返回0长度，表示当前连接已关闭，继续操作将是未定义行为
-    /// 注意调用此方法，在保持连接的前提下，必须保证后续一定还可以接收到数据，否则会导致无法唤醒当前异步准备读取器
-    fn read_all_ready(&mut self) -> GenResult<AsyncValue<usize>, usize>;
-
     /// 判断当前连接是否有异步准备读取器
     fn is_wait_wakeup_read_ready(&self) -> bool;
 
@@ -552,7 +547,7 @@ pub trait Socket: Sized + 'static {
     fn wakeup_read_ready(&mut self);
 
     /// 获取连接的输入缓冲区的只读引用
-    fn get_read_buffer(&self) -> Rc<UnsafeCell<ByteBuffer>>;
+    fn get_read_buffer(&self) -> Rc<UnsafeCell<Option<BytesMut>>>;
 
     /// 获取连接的输出缓冲区的可写引用
     fn get_write_buffer(&mut self) -> Option<&mut BytesMut>;
@@ -786,15 +781,8 @@ impl<S: Socket> SocketHandle<S> {
         }
     }
 
-    /// 线程安全的强制准备读
-    pub fn read_all_ready(&self) -> GenResult<AsyncValue<usize>, usize> {
-        unsafe {
-            (&mut *self.0.inner.get()).read_all_ready()
-        }
-    }
-
     /// 线程安全的获取连接的接收缓冲区的引用
-    pub fn get_read_buffer(&self) -> Rc<UnsafeCell<ByteBuffer>> {
+    pub fn get_read_buffer(&self) -> Rc<UnsafeCell<Option<BytesMut>>> {
         unsafe {
             (&*self.0.inner.get()).get_read_buffer()
         }

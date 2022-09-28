@@ -64,23 +64,33 @@ impl<S: Socket> HttpAcceptor<S> {
         let mut http_request_result = None;
         let mut buf: &[u8] = &[]; //初始化本地缓冲区
         loop {
-            if unsafe { (&mut *handle.get_read_buffer().get()).try_fill().await } == 0 {
-                //当前缓冲区还没有请求的数据，则异步准备读取后，继续尝试接收请求数据
-                if let Ok(value) = handle.read_ready(0) {
-                    if value.await == 0 {
-                        //当前连接已关闭，则立即退出
-                        return;
+            if let Some(bin) = unsafe { (&mut *handle.get_read_buffer().get()) } {
+                if bin.remaining() == 0 {
+                    //当前缓冲区还没有请求的数据，则异步准备读取后，继续尝试接收请求数据
+                    if let Ok(value) = handle.read_ready(0) {
+                        if value.await == 0 {
+                            //当前连接已关闭，则立即退出
+                            return;
+                        }
                     }
-                }
 
-                continue;
+                    continue;
+                }
+            } else {
+                //Tcp读缓冲区不存在
+                handle.close(Err(Error::new(ErrorKind::Other,
+                                            format!("Http connect failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid read buffer",
+                                                    handle.get_token(),
+                                                    handle.get_remote(),
+                                                    handle.get_local()))));
+                return;
             }
 
             let mut headers = HeaderMap::new();
             let mut header = [EMPTY_HEADER; MAX_CONNECT_HTTP_HEADER_LIMIT];
             let mut req = Request::new(&mut header);
 
-            buf = unsafe { (&*handle.get_read_buffer().get()).as_ref() }; //填充本地缓冲区
+            buf = unsafe { (&*handle.get_read_buffer().get()).as_ref().unwrap().as_ref() }; //填充本地缓冲区
             if let Some(_body_offset) = UpStreamHeader::read_header(handle.clone(),
                                                                    buf,
                                                                    &mut req,

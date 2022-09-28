@@ -5,13 +5,12 @@ use std::io::{Error, Result, ErrorKind};
 
 use url::Url;
 use log::warn;
-use bytes::{Buf, BufMut};
+use bytes::{Buf, BufMut, Bytes};
+use crossbeam_channel::internal::SelectHandle;
 use https::{StatusCode,
             method::Method,
             version::Version,
             header::{CONTENT_LENGTH, HeaderMap}};
-
-use pi_async_buffer::PartBuffer;
 
 use tcp::{Socket, SocketHandle};
 
@@ -192,7 +191,12 @@ impl<S: Socket> HttpRequest<S> {
             Some(len) => {
                 //本次Http请求，有请求体，还有Http块数据需要读取，则异步读取
                 loop {
-                    let current_body_len = unsafe { (&mut *self.handle.get_read_buffer().get()).try_fill().await };
+                    let current_body_len = unsafe {
+                        (&mut *self.handle.get_read_buffer().get())
+                            .as_ref()
+                            .unwrap()
+                            .remaining()
+                    };
                     if current_body_len < len {
                         //当前缓冲区还没有接收到指定长度的请求体，则异步准备读取后，继续尝试接收剩余请求体
                         let require_len = len
@@ -213,11 +217,18 @@ impl<S: Socket> HttpRequest<S> {
                     }
 
                     //读请求体成功，则更新Http体的当前长度，并退出本次异步读取请求体
-                    self.body_len = unsafe { (&*self.handle.get_read_buffer().get()).as_ref().len() };
+                    self.body_len = unsafe {
+                        (&*self.handle.get_read_buffer().get())
+                            .as_ref()
+                            .unwrap()
+                            .remaining()
+                    };
                     break;
                 }
 
-                Some(unsafe { (&*self.handle.get_read_buffer().get()).as_ref() })
+                Some(unsafe {
+                    (&*self.handle.get_read_buffer().get()).as_ref().unwrap().as_ref()
+                })
             },
             _ => {
                 //本次Http请求，没有请求体或是请求体流
@@ -229,17 +240,9 @@ impl<S: Socket> HttpRequest<S> {
     /// 根据指定的块大小，获取Http请求体，
     /// 可以用于读取大的块数据或没有指定请求长度的流数据，这种读取不会缓存数据，只允许读取一次
     pub async fn next_body(&mut self,
-                           mut block_size: usize) -> Option<PartBuffer> {
-        if block_size == 0 {
-            //块大小等于0，则设置为默认块大小
-            block_size = DEFAULT_BLOCK_SIZE;
-        } else if block_size > MAX_BLOCK_LIMIT {
-            //块大小大于最大块大小限制，则设置为最大块大小
-            block_size = MAX_BLOCK_LIMIT;
-        }
-
+                           mut block_size: usize) -> Option<Bytes> {
         loop {
-            if unsafe { (&mut *self.handle.get_read_buffer().get()).try_fill().await } == 0 {
+            if unsafe { (&mut *self.handle.get_read_buffer().get()).as_ref().unwrap().remaining() } == 0 {
                 //当前缓冲区还没有请求的数据，则异步准备读取后，继续尝试接收请求数据
                 if let Ok(value) = self.handle.read_ready(0) {
                     if value.await == 0 {
@@ -251,11 +254,15 @@ impl<S: Socket> HttpRequest<S> {
                 continue;
             }
 
-            if let Some(part) = unsafe { (&mut *self.handle.get_read_buffer().get()).try_get(block_size).await } {
-                //当前连接读缓冲区中有请求体数据，则更新Http体的当前长度
-                self.body_len += part.remaining();
-                return Some(part);
+            let remaining = unsafe { (&mut *self.handle.get_read_buffer().get()).as_ref().unwrap().remaining() };
+            if remaining < block_size {
+                //连接当前读缓冲区剩余可读字节数小于指定的块大小，则读取所有读缓冲区的剩余可读字节
+                block_size = remaining;
             }
+
+            let bytes = unsafe { (&mut *self.handle.get_read_buffer().get()).as_mut().unwrap().copy_to_bytes(block_size) };
+            self.body_len += bytes.remaining(); //更新Http体的当前长度
+            return Some(bytes);
         }
     }
 }
