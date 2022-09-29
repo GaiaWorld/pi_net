@@ -82,6 +82,11 @@ impl<S: Socket> WsSocket<S> {
         self.socket.get_token()
     }
 
+    /// 线程安全的获取Tcp连接唯一id
+    pub fn get_uid(&self) -> usize {
+        self.socket.get_uid()
+    }
+
     /// 线程安全的获取Tcp连接的本地地址
     pub fn get_local(&self) -> &SocketAddr {
         self.socket.get_local()

@@ -736,6 +736,11 @@ impl<S: Socket> SocketHandle<S> {
         &self.0.token
     }
 
+    /// 线程安全的获取连接令牌
+    pub fn get_uid(&self) -> usize {
+        self.0.uid
+    }
+
     /// 线程安全的获取连接本地地址
     pub fn get_local(&self) -> &SocketAddr {
         &self.0.local
@@ -858,6 +863,7 @@ pub struct SocketImage<S: Socket> {
     local:          SocketAddr,                                     //TCP连接本地地址
     remote:         SocketAddr,                                     //TCP连接远端地址
     token:          Token,                                          //Tcp连接令牌
+    uid:            usize,                                          //Tcp连接唯一id
     security:       bool,                                           //Tcp连接是否安全
     closed:         Arc<AtomicBool>,                                //Tcp连接关闭状态
     close_listener: Sender<(Token, Result<()>)>,                    //关闭事件监听器
@@ -873,6 +879,7 @@ impl<S: Socket> SocketImage<S> {
                local: SocketAddr,
                remote: SocketAddr,
                token: Token,
+               uid: usize,
                security: bool,
                closed: Arc<AtomicBool>,
                close_listener: Sender<(Token, Result<()>)>,
@@ -883,6 +890,7 @@ impl<S: Socket> SocketImage<S> {
             local,
             remote,
             token,
+            uid,
             security,
             closed,
             close_listener,

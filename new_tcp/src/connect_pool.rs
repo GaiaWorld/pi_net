@@ -215,7 +215,7 @@ async fn handle_accepted<S, A>(rt: &LocalTaskRuntime<()>,
                 socket.set_timer_listener(Some(pool.timer_sent.clone())); //为注册成功的连接绑定定时事件监听器
                 socket.set_runtime(rt.clone()); //为注册成功的连接绑定运行时
                 socket.set_token(Some(token)); //为注册成功的连接绑定新的令牌
-                socket.set_uid(token.0); //为注册成功的连接设置唯一id
+                socket.set_uid(((pool.uid as usize) << 56) | token.0); //为注册成功的连接设置唯一id
                 socket.set_poll(pool.poll.clone()); //为注册成功的连接设置轮询器
                 let socket_arc = Arc::new(UnsafeCell::new(socket));
                 let handle = {

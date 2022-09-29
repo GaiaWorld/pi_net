@@ -64,7 +64,7 @@ impl<S: Socket> GrayVersion for MqttConnectHandle<S> {
 
     // 获取连接唯一id
     fn get_id(&self) -> usize {
-        if let Some(uid) = self.connect.get_token() {
+        if let Some(uid) = self.connect.get_uid() {
             return uid;
         }
 
@@ -76,6 +76,11 @@ impl<S: Socket> MqttConnectHandle<S> {
     /// 获取连接的连接令牌
     pub fn get_token(&self) -> Option<usize> {
         self.connect.get_token()
+    }
+
+    /// 获取连接的唯一id
+    pub fn get_uid(&self) -> Option<usize> {
+        self.connect.get_uid()
     }
 
     /// 获取连接的本地地址

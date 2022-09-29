@@ -186,6 +186,7 @@ impl Stream for TcpSocket {
                                                  self.local,
                                                  self.remote,
                                                  token,
+                                                 self.uid.unwrap(),
                                                  self.is_security(),
                                                  self.closed.clone(),
                                                  close_listener.clone(),

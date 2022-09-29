@@ -90,6 +90,9 @@ pub trait MqttConnect<S: Socket>: Debug + Send + Sync + 'static {
     /// 获取连接的令牌
     fn get_token(&self) -> Option<usize>;
 
+    /// 获取Tcp连接唯一id
+    fn get_uid(&self) -> Option<usize>;
+
     /// 获取本地地址
     fn get_local_addr(&self) -> Option<SocketAddr>;
 
@@ -162,7 +165,7 @@ impl<S: Socket> Ord for QosZeroSession<S> {
 impl<S: Socket> Hash for QosZeroSession<S> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         if let Some(ws) = &self.connect {
-            ws.get_token().hash(state);
+            ws.get_uid().hash(state);
         }
     }
 }
@@ -289,6 +292,14 @@ impl<S: Socket> MqttConnect<S> for QosZeroSession<S> {
     fn get_token(&self) -> Option<usize> {
         if let Some(connect) = &self.connect {
             return Some(connect.get_token().0);
+        }
+
+        None
+    }
+
+    fn get_uid(&self) -> Option<usize> {
+        if let Some(connect) = &self.connect {
+            return Some(connect.get_uid());
         }
 
         None
