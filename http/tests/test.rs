@@ -352,10 +352,13 @@ impl<R: AsyncRuntime> Handler for TestHttpGatewayHandler<R> {
     type HandleResult = ();
 
     //处理方法
-    fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> Self::HandleResult {
-        if let Args::FourArgs(addr, headers, msg, handler) = args {
-            handle(self.0.clone(), env, topic, addr, headers, msg, handler);
-        }
+    fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> LocalBoxFuture<'static, Self::HandleResult> {
+        let rt = self.0.clone();
+        async move {
+            if let Args::FourArgs(addr, headers, msg, handler) = args {
+                handle(rt, env, topic, addr, headers, msg, handler);
+            }
+        }.boxed_local()
     }
 }
 

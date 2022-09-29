@@ -51,7 +51,9 @@ impl<S: Socket> ChildProtocol<S> for TestChildProtocol {
         "echo"
     }
 
-    fn decode_protocol(&self, connect: WsSocket<S>, context: &mut WsSession) -> LocalBoxFuture<'static, Result<()>> {
+    fn decode_protocol(&self,
+                       connect: WsSocket<S>,
+                       context: &mut WsSession) -> LocalBoxFuture<'static, Result<()>> {
         let msg = context.pop_msg();
         let msg_type = context.get_type();
         println!("!!!!!!receive ok, msg: {:?}", String::from_utf8(msg.clone()));
@@ -85,18 +87,28 @@ impl<S: Socket> ChildProtocol<S> for TestChildProtocol {
         }.boxed_local()
     }
 
-    fn close_protocol(&self, connect: WsSocket<S>, context: WsSession, reason: Result<()>) {
-        if let Err(e) = reason {
-            return println!("websocket closed, reason: {:?}", e);
-        }
+    fn close_protocol(&self,
+                      connect: WsSocket<S>,
+                      context: WsSession,
+                      reason: Result<()>) -> LocalBoxFuture<'static, ()> {
+        async move {
+            if let Err(e) = reason {
+                return println!("websocket closed, reason: {:?}", e);
+            }
 
-        println!("websocket closed");
+            println!("websocket closed");
+        }.boxed_local()
     }
 
-    fn protocol_timeout(&self, connect: WsSocket<S>, context: &mut WsSession, event: SocketEvent) -> Result<()> {
-        println!("websocket timeout");
+    fn protocol_timeout(&self,
+                        connect: WsSocket<S>,
+                        context: &mut WsSession,
+                        event: SocketEvent) -> LocalBoxFuture<'static, Result<()>> {
+        async move {
+            println!("websocket timeout");
 
-        Ok(())
+            Ok(())
+        }.boxed_local()
     }
 }
 

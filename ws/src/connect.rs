@@ -427,7 +427,7 @@ impl<S: Socket> WsSocket<S> {
                     protocol
                         .close_protocol(Self::new(handle.clone(), window_bits),
                                         context,
-                                        result);
+                                        result).await;
                 }
             },
         }
@@ -443,7 +443,7 @@ impl<S: Socket> WsSocket<S> {
             if let Err(e) = protocol
                 .protocol_timeout(Self::new(handle.clone(), window_bits),
                                   context,
-                                  event) {
+                                  event).await {
                 //协议超时处理失败，则立即关闭当前Ws连接
                 close::<S>(&handle, Err(e));
             } else {

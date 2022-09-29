@@ -5,6 +5,7 @@ use std::io::{Error, ErrorKind, Result};
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use futures::future::{FutureExt, LocalBoxFuture};
+use futures::StreamExt;
 use log::warn;
 
 use pi_atom::Atom;
@@ -163,7 +164,7 @@ impl<S: Socket> MqttConnectHandle<S> {
     }
 
     /// 休眠当前连接，直到被唤醒，返回空表示连接已关闭
-    fn hibernate(&self, ready: Ready) -> Option<Hibernate<S>> {
+    pub fn hibernate(&self, ready: Ready) -> Option<Hibernate<S>> {
         self.connect.hibernate(ready)
     }
 
@@ -297,7 +298,7 @@ impl<S: Socket> MqttBrokerListener<S> for MqttProxyListener {
                                                        session.get_pwd().cloned());
                         handler.handle(Arc::new(connect_handle),
                                        Atom::from(""),
-                                       Args::OneArgs(event));
+                                       Args::OneArgs(event)).await;
 
                     }
                 }
@@ -317,7 +318,7 @@ impl<S: Socket> MqttBrokerListener<S> for MqttProxyListener {
               protocol: MqttBrokerProtocol,
               connect: Arc<dyn MqttConnect<S>>,
               mut context: BrokerSession,
-              reason: Result<()>) {
+              reason: Result<()>) -> LocalBoxFuture<'static, ()> {
         //Mqtt连接已关闭
         if let Err(e) = &reason {
             warn!("Mqtt proxy connect close by error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
@@ -341,10 +342,12 @@ impl<S: Socket> MqttBrokerListener<S> for MqttProxyListener {
                                               connect_handle.protocol.get_broker_name().to_string(),
                                               context.get_client_id().clone(),
                                               reason);
-            handler.handle(Arc::new(connect_handle),
-                           Atom::from(""),
-                           Args::OneArgs(event));
+            return handler.handle(Arc::new(connect_handle),
+                                  Atom::from(""),
+                                  Args::OneArgs(event));
         }
+
+        async move {}.boxed_local()
     }
 }
 
@@ -434,7 +437,7 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
                                                    topics);
                         handler.handle(Arc::new(connect_handle),
                                        Atom::from(""), Args::
-                                       OneArgs(event));
+                                       OneArgs(event)).await;
 
                     }
                 }
@@ -453,7 +456,7 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
     fn unsubscribe(&self,
                    protocol: MqttBrokerProtocol,
                    connect: Arc<dyn MqttConnect<S>>,
-                   topics: Vec<String>) -> Result<()> {
+                   topics: Vec<String>) -> LocalBoxFuture<'static, Result<()>> {
         if let Some(mut handle) = connect.get_session() {
             if let Some(session) = handle.as_mut() {
                 if let Some(handler) = &self.request_handler {
@@ -470,25 +473,31 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
                                                  connect_handle.protocol.get_broker_name().to_string(),
                                                  session.get_client_id().clone(),
                                                  topics);
-                    handler.handle(Arc::new(connect_handle),
-                                   Atom::from(""),
-                                   Args::OneArgs(event));
 
-                    return Ok(());
+                    let handler = handler.clone();
+                    return async move {
+                        handler.handle(Arc::new(connect_handle),
+                                       Atom::from(""),
+                                       Args::OneArgs(event)).await;
+
+                        Ok(())
+                    }.boxed_local();
                 }
             }
         }
 
-        Err(Error::new(ErrorKind::Other,
-                       format!("Mqtt proxy request failed, connect: {:?}, reason: handle unsubscribe error",
-                               connect)))
+        async move {
+            Err(Error::new(ErrorKind::Other,
+                           format!("Mqtt proxy request failed, connect: {:?}, reason: handle unsubscribe error",
+                                   connect)))
+        }.boxed_local()
     }
 
     fn publish(&self,
                protocol: MqttBrokerProtocol,
                connect: Arc<dyn MqttConnect<S>>,
                topic: String,
-               payload: Arc<Vec<u8>>) -> Result<()> {
+               payload: Arc<Vec<u8>>) -> LocalBoxFuture<'static, Result<()>> {
         if let Some(mut handle) = connect.get_session() {
             if let Some(session) = handle.as_mut() {
                 if let Some(handler) = &self.request_handler {
@@ -507,18 +516,23 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
                                                    connect_handle.get_remote_addr(),
                                                    topic,
                                                    payload);
-                    handler.handle(Arc::new(connect_handle),
-                                   Atom::from(""),
-                                   Args::OneArgs(event));
 
-                    return Ok(());
+                    let handler = handler.clone();
+                    return async move {
+                        handler.handle(Arc::new(connect_handle),
+                                       Atom::from(""),
+                                       Args::OneArgs(event)).await;
+                        Ok(())
+                    }.boxed_local();
                 }
             }
         }
 
-        Err(Error::new(ErrorKind::Other,
-                       format!("Mqtt proxy publish failed, connect: {:?}, reason: handle publish error",
-                               connect)))
+        async move {
+            Err(Error::new(ErrorKind::Other,
+                           format!("Mqtt proxy publish failed, connect: {:?}, reason: handle publish error",
+                                   connect)))
+        }.boxed_local()
     }
 }
 

@@ -6,7 +6,7 @@ use std::collections::{VecDeque, HashMap};
 use bytes::BufMut;
 use httparse::Request;
 use fnv::FnvBuildHasher;
-use futures::future::LocalBoxFuture;
+use futures::future::{FutureExt, LocalBoxFuture};
 
 use tcp::{Socket, SocketHandle, SocketEvent,
           utils::SocketContext};
@@ -22,24 +22,35 @@ pub trait ChildProtocol<S: Socket>: Send + Sync + 'static {
     fn protocol_name(&self) -> &str;
 
     /// 处理非标准握手请求子协议
-    fn non_standard_handshake_protocol(&self, request: &Request) -> Result<(String, Vec<u8>)> {
+    fn non_standard_handshake_protocol(&self,
+                                       request: &Request) -> Result<(String, Vec<u8>)> {
         Err(Error::new(ErrorKind::Other,
                        "Handle non-standard handshake protocol failed, reason: empty protocol"))
     }
 
     /// 处理握手子协议
-    fn handshake_protocol(&self, handle: SocketHandle<S>, request: &Request) -> Result<()> {
+    fn handshake_protocol(&self,
+                          handle: SocketHandle<S>,
+                          request: &Request) -> Result<()> {
         Ok(())
     }
 
     /// 解码子协议，返回错误将立即关闭当前连接
-    fn decode_protocol(&self, connect: WsSocket<S>, context: &mut WsSession) -> LocalBoxFuture<'static, Result<()>>;
+    fn decode_protocol(&self,
+                       connect: WsSocket<S>,
+                       context: &mut WsSession) -> LocalBoxFuture<'static, Result<()>>;
 
     /// 关闭子协议
-    fn close_protocol(&self, connect: WsSocket<S>, context: WsSession, reason: Result<()>);
+    fn close_protocol(&self,
+                      connect: WsSocket<S>,
+                      context: WsSession,
+                      reason: Result<()>) -> LocalBoxFuture<'static, ()>;
 
     /// 子协议超时，返回即关闭当前连接
-    fn protocol_timeout(&self, connect: WsSocket<S>, context: &mut WsSession, event: SocketEvent) -> Result<()>;
+    fn protocol_timeout(&self,
+                        connect: WsSocket<S>,
+                        context: &mut WsSession,
+                        event: SocketEvent) -> LocalBoxFuture<'static, Result<()>>;
 }
 
 ///

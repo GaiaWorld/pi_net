@@ -34,7 +34,7 @@ pub trait MqttBrokerListener<S: Socket>: Send + Sync + 'static {
               protocol: MqttBrokerProtocol,
               connect: Arc<dyn MqttConnect<S>>,
               context: BrokerSession,
-              reason: Result<()>);
+              reason: Result<()>) -> LocalBoxFuture<'static, ()>;
 }
 
 ///
@@ -51,14 +51,14 @@ pub trait MqttBrokerService<S: Socket>: Send + Sync + 'static {
     fn unsubscribe(&self,
                    protocol: MqttBrokerProtocol,
                    connect: Arc<dyn MqttConnect<S>>,
-                   topics: Vec<String>) -> Result<()>;
+                   topics: Vec<String>) -> LocalBoxFuture<'static, Result<()>>;
 
     /// 指定Mqtt客户端发布指定主题的服务
     fn publish(&self,
                protocol: MqttBrokerProtocol,
                connect: Arc<dyn MqttConnect<S>>,
                topic: String,
-               payload: Arc<Vec<u8>>) -> Result<()>;
+               payload: Arc<Vec<u8>>) -> LocalBoxFuture<'static, Result<()>>;
 }
 
 ///

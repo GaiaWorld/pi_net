@@ -116,7 +116,10 @@ impl<S: Socket> Middleware<S, GatewayContext> for HttpPort {
                     .handler
                     .handle(Arc::new(http_gray),
                             Atom::from(req.url().path()),
-                            Args::FourArgs(remote_addr, headers, args, resp_handler));
+                            Args::FourArgs(remote_addr,
+                                           headers,
+                                           args,
+                                           resp_handler)).await;
             }
 
             //完成请求处理

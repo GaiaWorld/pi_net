@@ -81,7 +81,7 @@ impl ChildProtocol<TcpSocket> for WsMqtt311 {
                             subscribe(ws_mqtt, connect, packet).await
                         },
                         Packet::Unsubscribe(packet) => {
-                            unsubscribe(ws_mqtt, connect, packet)
+                            unsubscribe(ws_mqtt, connect, packet).await
                         },
                         Packet::Pingreq => {
                             ping_req(connect)
@@ -102,7 +102,8 @@ impl ChildProtocol<TcpSocket> for WsMqtt311 {
 
     fn close_protocol(&self,
                       connect: WsSocket<TcpSocket>,
-                      mut context: WsSession, reason: Result<()>) {
+                      mut context: WsSession,
+                      reason: Result<()>) -> LocalBoxFuture<'static, ()> {
         //连接已关闭，则立即释放Ws会话的上下文
         match context.get_context_mut().remove::<BrokerSession>() {
             Err(e) => {
@@ -127,29 +128,39 @@ impl ChildProtocol<TcpSocket> for WsMqtt311 {
 
                         //处理Mqtt连接关闭
                         if let Some(listener) = self.broker.get_listener() {
-                            listener.0.closed(MqttBrokerProtocol::WsMqtt311(Arc::new(self.clone())), session, context, reason);
+                            return listener
+                                .0
+                                .closed(MqttBrokerProtocol::WsMqtt311(Arc::new(self.clone())),
+                                        session,
+                                        context,
+                                        reason);
                         }
                     }
                 }
             },
         }
+
+        async move {}.boxed_local()
     }
 
     fn protocol_timeout(&self,
                         connect: WsSocket<TcpSocket>,
-                        context: &mut WsSession, event: SocketEvent) -> Result<()> {
-        if let Err(e) = send_packet(&connect, &Packet::Disconnect) {
-            //发送关闭连接报文失败，则立即返回错误原因
-            return Err(Error::new(ErrorKind::BrokenPipe,
-                                  format!("Mqtt send failed by disconnect, reason: {:?}",
-                                          e)));
-        }
+                        context: &mut WsSession,
+                        event: SocketEvent) -> LocalBoxFuture<'static, Result<()>> {
+        async move {
+            if let Err(e) = send_packet(&connect, &Packet::Disconnect) {
+                //发送关闭连接报文失败，则立即返回错误原因
+                return Err(Error::new(ErrorKind::BrokenPipe,
+                                      format!("Mqtt send failed by disconnect, reason: {:?}",
+                                              e)));
+            }
 
-        warn!("Mqtt Session Timeout, token: {:?}, local: {:?}, remote: {:?}",
+            warn!("Mqtt Session Timeout, token: {:?}, local: {:?}, remote: {:?}",
             connect.get_token(),
             connect.get_local(),
             connect.get_remote());
-        Ok(())
+            Ok(())
+        }.boxed_local()
     }
 }
 
@@ -391,7 +402,7 @@ async fn publish(protocol: WsMqtt311,
                 .publish(MqttBrokerProtocol::WsMqtt311(Arc::new(protocol)),
                          session.clone(),
                          packet.topic_name.clone(),
-                         packet.payload);
+                         packet.payload).await;
             if is_passive_receive {
                 //需要被动接收，则立即挂起连接，并等待服务回应
                 if let Some(hibernate) = session.hibernate(Ready::Writable) {
@@ -526,7 +537,7 @@ async fn subscribe(protocol: WsMqtt311,
 }
 
 // 退订主题
-fn unsubscribe(protocol: WsMqtt311,
+async fn unsubscribe(protocol: WsMqtt311,
                connect: WsSocket<TcpSocket>,
                packet: Unsubscribe) -> Result<()> {
     let (client_id, keep_alive) = match get_client_context(&connect) {
@@ -544,7 +555,9 @@ fn unsubscribe(protocol: WsMqtt311,
     if let Some(service) = protocol.broker.get_service() {
         //如果有服务，则只执行服务
         if let Some(session) = protocol.broker.get_session(&client_id) {
-            if let Err(e) = service.0.unsubscribe(MqttBrokerProtocol::WsMqtt311(Arc::new(protocol)), session, topics.clone()) {
+            if let Err(e) = service.0.unsubscribe(MqttBrokerProtocol::WsMqtt311(Arc::new(protocol)),
+                                                  session,
+                                                  topics.clone()).await {
                 return Err(Error::new(ErrorKind::BrokenPipe,
                                       format!("Mqtt unsubscribe failed, reason: {:?}",
                                               e)));

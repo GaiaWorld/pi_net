@@ -2,10 +2,11 @@ use std::thread;
 use std::any::Any;
 use std::sync::Arc;
 use std::mem::transmute;
-use std::time::Duration;
 use std::net::SocketAddr;
 use std::marker::PhantomData;
+use std::time::{Duration, Instant};
 
+use futures::future::{FutureExt, LocalBoxFuture};
 use env_logger;
 
 use pi_async::rt::{serial::{AsyncRuntimeBuilder, AsyncValue}};
@@ -46,26 +47,38 @@ impl<S: Socket> Handler for TestMqttConnectHandler<S> {
 
     fn handle(&self,
               env: Arc<dyn GrayVersion>, _: Atom,
-              args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> Self::HandleResult {
-        let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const MqttConnectHandle<S>) };
-        match args {
-            Args::OneArgs(MqttEvent::Connect(socket_id, broker_name, client_id, keep_alive, is_clean_session, user, pwd)) => {
-                //处理Mqtt连接
-                println!("!!!!!!Connect, socket_id: {:?}, broker_name: {:?}, client_id: {:?}, keep_alive: {:?}, is_clean_session: {:?}, user: {:?}, pwd: {:?}", socket_id, broker_name, client_id, keep_alive, is_clean_session, user, pwd);
-                thread::spawn(move || {
-                    while !connect.wakeup(Ok(())) {
-                        thread::sleep(Duration::from_millis(1));
+              args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> LocalBoxFuture<'static, Self::HandleResult> {
+        async move {
+            let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const MqttConnectHandle<S>) };
+            match args {
+                Args::OneArgs(MqttEvent::Connect(socket_id, broker_name, client_id, keep_alive, is_clean_session, user, pwd)) => {
+                    //处理Mqtt连接
+                    if let Some(hibernate) = connect.hibernate(Ready::ReadWrite) {
+                        let connect_copy = connect.clone();
+                        thread::spawn(move || {
+                            thread::sleep(Duration::from_millis(1000));
+                            while !connect_copy.wakeup(Ok(())) {
+                                thread::sleep(Duration::from_millis(1));
+                            }
+                        });
+                        let start = Instant::now();
+                        if let Err(e) = hibernate.await {
+                            //唤醒后返回错误，则立即关闭当前连接
+                            connect.close(Err(e));
+                        }
+                        println!("!!!!!!wakeup hibernate ok, time: {:?}", start.elapsed());
                     }
-                });
+                    println!("!!!!!!Connect, socket_id: {:?}, broker_name: {:?}, client_id: {:?}, keep_alive: {:?}, is_clean_session: {:?}, user: {:?}, pwd: {:?}", socket_id, broker_name, client_id, keep_alive, is_clean_session, user, pwd);
+                }
+                Args::OneArgs(MqttEvent::Disconnect(socket_id, broker_name, client_id, reason)) => {
+                    //处理Mqtt连接关闭
+                    println!("!!!!!!Disconnect, socket_id: {:?}, broker_name: {:?}, client_id: {:?}, reason: {:?}", socket_id, broker_name, client_id, reason);
+                },
+                _ => {
+                    println!("!!!!!!Invalid mqtt event");
+                },
             }
-            Args::OneArgs(MqttEvent::Disconnect(socket_id, broker_name, client_id, reason)) => {
-                //处理Mqtt连接关闭
-                println!("!!!!!!Disconnect, socket_id: {:?}, broker_name: {:?}, client_id: {:?}, reason: {:?}", socket_id, broker_name, client_id, reason);
-            },
-            _ => {
-                println!("!!!!!!Invalid mqtt event");
-            },
-        }
+        }.boxed_local()
     }
 }
 
@@ -91,43 +104,53 @@ impl<S: Socket> Handler for TestMqttRequestHandler<S> {
     type H = ();
     type HandleResult = ();
 
-    fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> Self::HandleResult {
-        let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const MqttConnectHandle<S>) };
-        match args {
-            Args::OneArgs(MqttEvent::Sub(socket_id, broker_name, client_id, topics)) => {
-                //处理Mqtt订阅主题
-                println!("!!!!!!Sub, socket_id: {:?}, broker_name: {:?}, client_id: {:?}, topics: {:?}", socket_id, broker_name, client_id, topics);
-
-                for (topic, _) in topics {
-                    connect.sub(topic);
-                }
-
-                thread::spawn(move || {
-                    thread::sleep(Duration::from_millis(1000));
-                    while !connect.wakeup(Ok(())) {
-                        thread::sleep(Duration::from_millis(1));
+    fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> LocalBoxFuture<'static, Self::HandleResult> {
+        async move {
+            let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const MqttConnectHandle<S>) };
+            match args {
+                Args::OneArgs(MqttEvent::Sub(socket_id, broker_name, client_id, topics)) => {
+                    //处理Mqtt订阅主题
+                    for (topic, _) in topics.clone() {
+                        connect.sub(topic);
                     }
-                });
-            },
-            Args::OneArgs(MqttEvent::Unsub(socket_id, broker_name, client_id, topics)) => {
-                //处理Mqtt退订主题
-                println!("!!!!!!Unsub, socket_id: {:?}, broker_name: {:?}, client_id: {:?}, topics: {:?}", socket_id, broker_name, client_id, topics);
 
-                for topic in topics {
-                    connect.unsub(topic);
-                }
-            },
-            Args::OneArgs(MqttEvent::Publish(socket_id, broker_name, client_id, address, topic, payload)) => {
-                //处理Mqtt发布主题
-                connect.send(&"rpc/send".to_string(), address.unwrap().to_string().into_bytes());
-                if let Ok(bin) = Arc::try_unwrap(payload) {
-                    connect.reply(bin);
-                }
-            },
-            _ => {
-                println!("!!!!!!Invalid mqtt event");
-            },
-        }
+                    if let Some(hibernate) = connect.hibernate(Ready::ReadWrite) {
+                        let connect_copy = connect.clone();
+                        thread::spawn(move || {
+                            thread::sleep(Duration::from_millis(1000));
+                            while !connect_copy.wakeup(Ok(())) {
+                                thread::sleep(Duration::from_millis(1));
+                            }
+                        });
+                        let start = Instant::now();
+                        if let Err(e) = hibernate.await {
+                            //唤醒后返回错误，则立即关闭当前连接
+                            connect.close(Err(e));
+                        }
+                        println!("!!!!!!wakeup hibernate ok, time: {:?}", start.elapsed());
+                    }
+                    println!("!!!!!!Sub, socket_id: {:?}, broker_name: {:?}, client_id: {:?}, topics: {:?}", socket_id, broker_name, client_id, topics);
+                },
+                Args::OneArgs(MqttEvent::Unsub(socket_id, broker_name, client_id, topics)) => {
+                    //处理Mqtt退订主题
+                    println!("!!!!!!Unsub, socket_id: {:?}, broker_name: {:?}, client_id: {:?}, topics: {:?}", socket_id, broker_name, client_id, topics);
+
+                    for topic in topics {
+                        connect.unsub(topic);
+                    }
+                },
+                Args::OneArgs(MqttEvent::Publish(socket_id, broker_name, client_id, address, topic, payload)) => {
+                    //处理Mqtt发布主题
+                    connect.send(&"rpc/send".to_string(), address.unwrap().to_string().into_bytes());
+                    if let Ok(bin) = Arc::try_unwrap(payload) {
+                        connect.reply(bin);
+                    }
+                },
+                _ => {
+                    println!("!!!!!!Invalid mqtt event");
+                },
+            }
+        }.boxed_local()
     }
 }
 

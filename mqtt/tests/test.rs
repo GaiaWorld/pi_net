@@ -93,12 +93,14 @@ impl<S: Socket> MqttBrokerListener<S> for TestBrokerService {
               protocol: MqttBrokerProtocol,
               connect: Arc<dyn MqttConnect<S>>,
               context: BrokerSession,
-              reason: Result<()>) {
-        if let Err(e) = reason {
-            return println!("mqtt closed, connect: {:?}, reason: {:?}", connect, e);
-        }
+              reason: Result<()>) -> LocalBoxFuture<'static, ()> {
+        async move {
+            if let Err(e) = reason {
+                return println!("mqtt closed, connect: {:?}, reason: {:?}", connect, e);
+            }
 
-        println!("mqtt closed, connect: {:?}", connect);
+            println!("mqtt closed, connect: {:?}", connect);
+        }.boxed_local()
     }
 }
 
@@ -137,9 +139,11 @@ impl<S: Socket> MqttBrokerService<S> for TestBrokerService {
     fn unsubscribe(&self,
                    protocol: MqttBrokerProtocol,
                    connect: Arc<dyn MqttConnect<S>>,
-                   topics: Vec<String>) -> Result<()> {
-        println!("mqtt unsubscribe, connect: {:?}", connect);
-        Ok(())
+                   topics: Vec<String>) -> LocalBoxFuture<'static, Result<()>> {
+        async move {
+            println!("mqtt unsubscribe, connect: {:?}", connect);
+            Ok(())
+        }.boxed_local()
     }
 
     //指定Mqtt客户端发布指定主题的服务
@@ -147,8 +151,10 @@ impl<S: Socket> MqttBrokerService<S> for TestBrokerService {
                protocol: MqttBrokerProtocol,
                connect: Arc<dyn MqttConnect<S>>,
                topic: String,
-               payload: Arc<Vec<u8>>) -> Result<()> {
-        connect.send(&topic, payload)
+               payload: Arc<Vec<u8>>) -> LocalBoxFuture<'static, Result<()>> {
+        async move {
+            connect.send(&topic, payload)
+        }.boxed_local()
     }
 }
 
@@ -271,12 +277,14 @@ impl<S: Socket> MqttBrokerListener<S> for TestPassiveBrokerService {
               protocol: MqttBrokerProtocol,
               connect: Arc<dyn MqttConnect<S>>,
               context: BrokerSession,
-              reason: Result<()>) {
-        if let Err(e) = reason {
-            return println!("mqtt closed, connect: {:?}, reason: {:?}", connect, e);
-        }
+              reason: Result<()>) -> LocalBoxFuture<'static, ()> {
+        async move {
+            if let Err(e) = reason {
+                return println!("mqtt closed, connect: {:?}, reason: {:?}", connect, e);
+            }
 
-        println!("mqtt closed, connect: {:?}", connect);
+            println!("mqtt closed, connect: {:?}", connect);
+        }.boxed_local()
     }
 }
 
@@ -296,9 +304,11 @@ impl<S: Socket> MqttBrokerService<S> for TestPassiveBrokerService {
     fn unsubscribe(&self,
                    protocol: MqttBrokerProtocol,
                    connect: Arc<dyn MqttConnect<S>>,
-                   topics: Vec<String>) -> Result<()> {
-        println!("mqtt unsubscribe, connect: {:?}", connect);
-        Ok(())
+                   topics: Vec<String>) -> LocalBoxFuture<'static, Result<()>> {
+        async move {
+            println!("mqtt unsubscribe, connect: {:?}", connect);
+            Ok(())
+        }.boxed_local()
     }
 
     //指定Mqtt客户端发布指定主题的服务
@@ -306,17 +316,19 @@ impl<S: Socket> MqttBrokerService<S> for TestPassiveBrokerService {
                protocol: MqttBrokerProtocol,
                connect: Arc<dyn MqttConnect<S>>,
                topic: String,
-               payload: Arc<Vec<u8>>) -> Result<()> {
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(5000));
-            connect.send(&topic, payload);
-            while !connect.wakeup(Ok(())) {
-                //唤醒被阻塞，则休眠指定时间后继续尝试唤醒
-                thread::sleep(Duration::from_millis(15));
-            }
-        });
+               payload: Arc<Vec<u8>>) -> LocalBoxFuture<'static, Result<()>> {
+        async move {
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(5000));
+                connect.send(&topic, payload);
+                while !connect.wakeup(Ok(())) {
+                    //唤醒被阻塞，则休眠指定时间后继续尝试唤醒
+                    thread::sleep(Duration::from_millis(15));
+                }
+            });
 
-        Ok(())
+            Ok(())
+        }.boxed_local()
     }
 }
 
