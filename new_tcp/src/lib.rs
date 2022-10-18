@@ -508,6 +508,9 @@ pub trait Socket: Sized + 'static {
     /// 获取当前Tcp连接的句柄
     fn get_handle(&self) -> SocketHandle<Self>;
 
+    /// 移除当前Tcp连接的句柄
+    fn remove_handle(&mut self) -> Option<SocketHandle<Self>>;
+
     /// 获取连接本地地址
     fn get_local(&self) -> &SocketAddr;
 

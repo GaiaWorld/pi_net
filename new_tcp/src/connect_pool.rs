@@ -518,7 +518,15 @@ async fn handle_close_event<S, A>(rt: &LocalTaskRuntime<()>,
                     .closed(Ok(handle))
             }
         };
-        rt.spawn(closed);
+        rt.spawn(async move {
+            //执行关闭回调
+            closed.await;
+
+            //因为Tcp连接句柄握住了当前连接，所以需要移除当前连接绑定的Tcp连接句柄，以释放当前连接
+            unsafe {
+                (&mut *socket.get()).remove_handle();
+            }
+        });
     }
 }
 

@@ -9,7 +9,7 @@ use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use mio::{Token, Interest, Poll,
           net::UdpSocket};
-use futures::future::BoxFuture;
+use futures::future::LocalBoxFuture;
 use crossbeam_channel::Sender;
 use bytes::Buf;
 
@@ -17,7 +17,7 @@ use bytes::Buf;
 extern crate lazy_static;
 
 use pi_async::{lock::spin_lock::SpinLock,
-               rt::worker_thread::WorkerRuntime};
+               rt::serial_local_thread::LocalTaskRuntime};
 use pi_hash::XHashMap;
 
 pub mod utils;
@@ -43,7 +43,7 @@ pub trait Socket: Sized + Send + 'static {
     fn is_closed(&self) -> bool;
 
     /// 设置连接所在运行时
-    fn set_runtime(&mut self, rt: WorkerRuntime<()>);
+    fn set_runtime(&mut self, rt: LocalTaskRuntime<()>);
 
     /// 获取当前Udp连接的句柄
     fn get_handle(&self) -> SocketHandle<Self>;
@@ -149,19 +149,19 @@ pub trait SocketAdapter: Send + Sync + 'static {
 
     /// 已绑定本地端口的Udp连接
     fn binded(&self,
-              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()>;
+              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()>;
 
     /// 已读
     fn readed(&self,
-              result: GenResult<(SocketHandle<Self::Connect>, Vec<u8>, Option<SocketAddr>), (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()>;
+              result: GenResult<(SocketHandle<Self::Connect>, Vec<u8>, Option<SocketAddr>), (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()>;
 
     /// 已写
     fn writed(&self,
-              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()>;
+              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()>;
 
     /// 已关闭
     fn closed(&self,
-              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()>;
+              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()>;
 }
 
 ///
@@ -171,22 +171,22 @@ pub trait AsyncService<S: Socket>: Send + Sync + 'static {
     /// 异步处理已绑定本地端口的Udp连接
     fn handle_binded(&self,
                      handle: SocketHandle<S>,
-                     result: Result<()>) -> BoxFuture<'static, ()>;
+                     result: Result<()>) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已读
     fn handle_readed(&self,
                      handle: SocketHandle<S>,
-                     result: Result<(Vec<u8>, Option<SocketAddr>)>) -> BoxFuture<'static, ()>;
+                     result: Result<(Vec<u8>, Option<SocketAddr>)>) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已写
     fn handle_writed(&self,
                      handle: SocketHandle<S>,
-                     result: Result<()>) -> BoxFuture<'static, ()>;
+                     result: Result<()>) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已关闭
     fn handle_closed(&self,
                      handle: SocketHandle<S>,
-                     result: Result<()>) -> BoxFuture<'static, ()>;
+                     result: Result<()>) -> LocalBoxFuture<'static, ()>;
 }
 
 ///

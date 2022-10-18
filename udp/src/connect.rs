@@ -6,13 +6,13 @@ use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use mio::{Poll, Token, Interest,
           net::UdpSocket as InnerUdpSocket};
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use bytes::Buf;
 use dashmap::DashMap;
 
 use pi_async::{lock::spin_lock::SpinLock,
-               rt::worker_thread::WorkerRuntime};
+               rt::serial_local_thread::LocalTaskRuntime};
 
 use crate::{Socket, SocketHandle, SocketContext, SocketImage,
             utils::{UdpMultiInterface, UdpSocketStatus}};
@@ -34,7 +34,7 @@ const DEFAULT_WRITE_PACKET_BLOCK_LEN: usize = 0xffff;
 /// Udp连接
 ///
 pub struct UdpSocket {
-    rt:                 Option<WorkerRuntime<()>>,                  //连接所在运行时
+    rt:                 Option<LocalTaskRuntime<()>>,               //连接所在运行时
     local:              SocketAddr,                                 //连接本地地址
     remote:             Option<SocketAddr>,                         //连接远端地址
     token:              Option<Token>,                              //连接令牌
@@ -105,7 +105,7 @@ impl Socket for UdpSocket {
         self.closed.load(Ordering::Acquire)
     }
 
-    fn set_runtime(&mut self, rt: WorkerRuntime<()>) {
+    fn set_runtime(&mut self, rt: LocalTaskRuntime<()>) {
         self.rt = Some(rt);
     }
 

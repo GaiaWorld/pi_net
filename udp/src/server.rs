@@ -5,13 +5,13 @@ use std::result::Result as GenResult;
 use std::io::{Error, Result, ErrorKind};
 
 use mio::{Token, net::UdpSocket};
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use dashmap::DashMap;
 use crossbeam_channel::{Sender, unbounded};
 use fnv::FnvBuildHasher;
 use log::warn;
 
-use pi_async::rt::worker_thread::WorkerRuntime;
+use pi_async::rt::serial_local_thread::LocalTaskRuntime;
 
 use crate::{Socket, SocketAdapter, AsyncService, SocketAdapterFactory, SocketHandle, SocketDriver,
             connect_pool::UdpSocketPool};
@@ -34,7 +34,7 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
     type Connect = S;
 
     fn binded(&self,
-              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()> {
+              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()> {
         let adapter = self.clone();
         async move {
             let task = match result {
@@ -63,11 +63,11 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
             if let Some(task) = task {
                 task.await;
             }
-        }.boxed()
+        }.boxed_local()
     }
 
     fn readed(&self,
-              result: GenResult<(SocketHandle<Self::Connect>, Vec<u8>, Option<SocketAddr>), (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()> {
+              result: GenResult<(SocketHandle<Self::Connect>, Vec<u8>, Option<SocketAddr>), (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()> {
         let adapter = self.clone();
         async move {
             let task = match result {
@@ -96,11 +96,11 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
             if let Some(task) = task {
                 task.await;
             }
-        }.boxed()
+        }.boxed_local()
     }
 
     fn writed(&self,
-              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()> {
+              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()> {
         let adapter = self.clone();
         async move {
             let task = match result {
@@ -129,11 +129,11 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
             if let Some(task) = task {
                 task.await;
             }
-        }.boxed()
+        }.boxed_local()
     }
 
     fn closed(&self,
-              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> BoxFuture<'static, ()> {
+              result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()> {
         let adapter = self.clone();
         async move {
             let task = match result {
@@ -162,7 +162,7 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
             if let Some(task) = task {
                 task.await;
             }
-        }.boxed()
+        }.boxed_local()
     }
 }
 
@@ -249,7 +249,7 @@ impl<S, F> SocketListener<S, F>
     where S: Socket,
           F: SocketAdapterFactory<Connect = S, Adapter = PortsAdapter<S>>, {
     /// 绑定指定配置的Udp连接绑定器
-    pub fn bind(mut runtimes: Vec<WorkerRuntime<()>>,
+    pub fn bind(mut runtimes: Vec<LocalTaskRuntime<()>>,
                 factory: F,                 //Udp端口适配器工厂
                 addrs: Vec<SocketAddr>,     //待绑定的Udp地址列表
                 init_cap: usize,            //连接池初始容量

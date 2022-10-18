@@ -412,6 +412,10 @@ impl Socket for TlsSocket {
             .clone()
     }
 
+    fn remove_handle(&mut self) -> Option<SocketHandle<Self>> {
+        self.handle.take()
+    }
+
     fn get_local(&self) -> &SocketAddr {
         &self.local
     }
