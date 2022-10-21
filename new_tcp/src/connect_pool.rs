@@ -12,13 +12,14 @@ use futures::future::{FutureExt, LocalBoxFuture};
 use mio::{Events, Poll, Token, Interest};
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use bytes::BufMut;
+use slotmap::{Key as SlotMapKey, KeyData as SlotMapKeyData};
 use log::{warn, error};
 
 use pi_async::{lock::spin_lock::SpinLock,
                rt::{serial::AsyncValue,
                     serial_local_thread::LocalTaskRuntime}};
 use pi_hash::XHashMap;
-use pi_local_timer::local_timer::LocalTimer;
+use pi_cancel_timer::Timer;
 use pi_slotmap::{Key, DefaultKey, KeyData, SlotMap};
 
 use crate::{DEFAULT_TCP_IP_V6, Socket, Stream, SocketAdapter, SocketOption, SocketConfig, SocketEvent, SocketDriver,
@@ -41,7 +42,7 @@ pub struct TcpSocketPool<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
     close_sent:     Sender<(Token, Result<()>)>,                                    //关闭事件的发送器
     close_recv:     Receiver<(Token, Result<()>)>,                                  //关闭事件的接收器
     duration:       Instant,                                                        //定时器持续时间
-    timer:          LocalTimer<(Token, SocketEvent), 100, 60, 60, 24>,              //定时器
+    timer:          Timer<(Token, SocketEvent), 100, 60, 3>,                        //定时器
     timer_sent:     Sender<(Token, Option<(usize, SocketEvent)>)>,                  //定时器设置事件的发送器
     timer_recv:     Receiver<(Token, Option<(usize, SocketEvent)>)>,                //定时器设置事件的接收器
 }
@@ -90,7 +91,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
             close_sent,
             close_recv,
             duration,
-            timer: LocalTimer::<(Token, SocketEvent), 100, 60, 60, 24>::new(10, duration.elapsed().as_millis() as u64),
+            timer: Timer::<(Token, SocketEvent), 100, 60, 3>::default(),
             timer_sent,
             timer_recv,
         })
@@ -489,7 +490,7 @@ async fn handle_close_event<S, A>(rt: &LocalTaskRuntime<()>,
 
         //移除定时器
         if let Some(timer) = unsafe { (&mut *socket.get()).unset_timer_handle() } {
-            let _ = pool.timer.try_remove(timer);
+            let _ = pool.timer.cancel(SlotMapKeyData::from_ffi(timer as u64).into());
         }
 
         //异步执行已关闭回调
@@ -550,12 +551,12 @@ async fn handle_timer<S, A>(pool: &mut TcpSocketPool<S, A>)
 
                 if let Some(timer) = unsafe { (&mut *socket.get()).unset_timer_handle() } {
                     //连接已设置定时器，则先移除指定句柄的定时器
-                    let _ = pool.timer.try_remove(timer);
+                    let _ = pool.timer.cancel(SlotMapKeyData::from_ffi(timer as u64).into());
                 }
 
                 //设置指定事件的定时器，并在连接上设置定时器句柄
-                let timer = pool.timer.insert((token, event), timeout as u64);
-                unsafe { (&mut *socket.get()).set_timer_handle(timer); }
+                let timer = pool.timer.push(timeout, (token, event));
+                unsafe { (&mut *socket.get()).set_timer_handle(timer.data().as_ffi() as usize); }
             }
         } else {
             //为指定令牌的连接取消指定的定时器
@@ -570,18 +571,19 @@ async fn handle_timer<S, A>(pool: &mut TcpSocketPool<S, A>)
 
                 //移除连接上的定时器句柄，并移除指定句柄的定时器
                 if let Some(timer) = unsafe { (&mut *socket.get()).unset_timer_handle() } {
-                    let _ = pool.timer.try_remove(timer);
+                    let _ = pool.timer.cancel(SlotMapKeyData::from_ffi(timer as u64).into());
                 }
             }
         }
     }
 
     //轮询所有超时的定时器，执行已超时回调
-    while pool.timer.check_sleep(pool.duration.elapsed().as_millis() as u64) == 0 {
+    let current_time = pool.duration.elapsed().as_millis() as u64;
+    while pool.timer.is_ok(current_time) {
         //需要继续获取超时的回调
-        if let Some((item, _index)) = pool.timer.pop(pool.duration.elapsed().as_millis() as u64) {
+        while let Some((_key, item)) = pool.timer.pop_kv(current_time) {
             //存在超时的回调
-            let (token, event) = item.elem;
+            let (token, event) = item;
             if let Some(Some(socket)) = pool
                 .sockets
                 .lock()

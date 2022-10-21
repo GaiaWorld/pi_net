@@ -15,13 +15,14 @@ fnv = "1.0"
 num_cpus = "1.13"
 rustls = "0.20"
 rustls-pemfile = "1.0"
+slotmap = "1.0"
 
 log = "0.4"
 pi_async = "0.5"
 pi_async_buffer = "0.6"
 pi_hash = { version = "0.1", features = ["xxhash"] }
 pi_atom = "0.1"
-pi_local_timer = "0.1"
+pi_cancel_timer = "0.2"
 pi_slotmap = "0.1"
 
 [dev-dependencies]
