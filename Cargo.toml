@@ -13,6 +13,7 @@ members = [
   "mqtt_proxy",
   "rpc",
   "udp",
+  "quic",
   "async_httpc",
   "async_wsc",
 ]

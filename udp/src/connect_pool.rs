@@ -13,8 +13,7 @@ use pi_async::{lock::spin_lock::SpinLock,
                rt::{serial::AsyncRuntime,
                     serial_local_thread::LocalTaskRuntime}};
 
-use crate::{Socket, SocketAdapter, SocketDriver,
-            utils::{SharedSocket, register_close_sender}};
+use crate::{Socket, SocketAdapter, SocketDriver, SocketHandle, utils::{SharedSocket, register_close_sender}};
 
 ///
 /// Udp连接池
@@ -23,14 +22,14 @@ pub struct UdpSocketPool<
     S: Socket,
     A: SocketAdapter<Connect = S>,
 > {
-    uid:            u8,                                                             //Udp连接池唯一id
-    name:           String,                                                         //Udp连接池名称
-    poll:           Arc<SpinLock<Poll>>,                                            //Socket事件轮询器
-    sockets:        Arc<SpinLock<SlotMap<DefaultKey, Option<SharedSocket<S>>>>>,    //Socket连接表
-    driver:         Option<SocketDriver<S, A>>,                                     //Socket驱动
-    socket_recv:    Receiver<S>,                                                    //Socket接收器
-    close_sent:     Sender<(Token, Result<()>)>,                                    //关闭事件的发送器
-    close_recv:     Receiver<(Token, Result<()>)>,                                  //关闭事件的接收器
+    uid:                u8,                                                             //Udp连接池唯一id
+    name:               String,                                                         //Udp连接池名称
+    poll:               Arc<SpinLock<Poll>>,                                            //Socket事件轮询器
+    sockets:            Arc<SpinLock<SlotMap<DefaultKey, Option<SharedSocket<S>>>>>,    //Socket连接表
+    driver:             Option<SocketDriver<S, A>>,                                     //Socket驱动
+    socket_recv:        Receiver<S>,                                                    //Socket接收器
+    close_sent:         Sender<(Token, Result<()>)>,                                    //关闭事件的发送器
+    close_recv:         Receiver<(Token, Result<()>)>,                                  //关闭事件的接收器
 }
 
 unsafe impl<

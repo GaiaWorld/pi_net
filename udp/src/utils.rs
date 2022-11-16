@@ -5,14 +5,16 @@ use std::io::Result as IOResult;
 use std::ops::{Deref, DerefMut};
 use std::cell::{Ref, RefMut, RefCell};
 
+use futures::future::{FutureExt, LocalBoxFuture};
 use mio::Token;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use crossbeam_channel::Sender;
+use flume::Sender as AsyncSender;
 
 use pi_hash::XHashMap;
 
-use crate::Socket;
+use crate::{Socket, SocketHandle};
 
 ///
 /// Udp连接池发送器表
@@ -285,5 +287,103 @@ impl<'a, S: Socket> DerefMut for SharedRefMut<'a, S> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut *self.0
+    }
+}
+
+///
+/// Udp客户端事件通知器
+///
+pub trait NotifyUdpClientEvent<S: Socket> {
+    /// 通知建立Udp连接
+    fn notify_connect(&self,
+                      uid: usize,
+                      result: IOResult<SocketHandle<S>>);
+
+    /// 通知Udp连接接收到数据报文
+    fn notify_receive(&self,
+                      result: IOResult<Vec<u8>>) -> LocalBoxFuture<'static, ()>;
+
+    /// 通知关闭Udp连接
+    fn notify_close(&self,
+                    uid: usize,
+                    result: IOResult<()>);
+}
+
+///
+/// Udp连接异步服务上下文构建器
+///
+pub struct AsyncServiceContextBuilder<S: Socket> {
+    connect_notifier:   Option<Sender<(usize, IOResult<SocketHandle<S>>)>>, //Udp客户端连接事件通知器
+    receive_notifier:   Option<AsyncSender<IOResult<Vec<u8>>>>,             //Udp客户端连接接收事件通知器
+    close_notifier:     Option<Sender<(usize, IOResult<()>)>>,              //Udp客户端连接事件通知器
+}
+
+impl<S: Socket> AsyncServiceContextBuilder<S> {
+    /// 构建Udp连接异步服务上下文构建器
+    pub fn new() -> Self {
+        AsyncServiceContextBuilder {
+            connect_notifier: None,
+            receive_notifier: None,
+            close_notifier: None,
+        }
+    }
+
+    /// 设置Udp建立连接通知器
+    pub fn set_connect_notifier(mut self,
+                                connect_notifier: Sender<(usize, IOResult<SocketHandle<S>>)>) -> Self {
+        self.connect_notifier = Some(connect_notifier);
+        self
+    }
+
+    /// 设置Udp建立连接通知器
+    pub fn set_receive_notifier(mut self, receive_notifier: AsyncSender<IOResult<Vec<u8>>>) -> Self {
+        self.receive_notifier = Some(receive_notifier);
+        self
+    }
+
+    /// 设置Udp关闭连接通知器
+    pub fn set_close_notifier(mut self, close_notifier: Sender<(usize, IOResult<()>)>) -> Self {
+        self.close_notifier = Some(close_notifier);
+        self
+    }
+
+    /// 构建Udp连接异步服务上下文
+    pub fn build(self) -> AsyncServiceContext<S> {
+        AsyncServiceContext {
+            connect_notifier: self.connect_notifier.unwrap(),
+            receive_notifier: self.receive_notifier.unwrap(),
+            close_notifier: self.close_notifier.unwrap(),
+        }
+    }
+}
+
+///
+/// Udp连接异步服务上下文
+///
+pub struct AsyncServiceContext<S: Socket> {
+    connect_notifier:   Sender<(usize, IOResult<SocketHandle<S>>)>, //Udp客户端建立连接事件通知器
+    receive_notifier:   AsyncSender<IOResult<Vec<u8>>>,             //Udp客户端连接接收事件通知器
+    close_notifier:     Sender<(usize, IOResult<()>)>,              //Udp客户端关闭连接事件通知器
+}
+
+impl<S: Socket> NotifyUdpClientEvent<S> for AsyncServiceContext<S> {
+    fn notify_connect(&self,
+                      uid: usize,
+                      result: IOResult<SocketHandle<S>>) {
+        self.connect_notifier.send((uid, result));
+    }
+
+    fn notify_receive(&self,
+                      result: IOResult<Vec<u8>>) -> LocalBoxFuture<'static, ()> {
+        let notifier = self.receive_notifier.clone();
+        async move {
+            notifier.send_async(result).await;
+        }.boxed_local()
+    }
+
+    fn notify_close(&self,
+                    uid: usize,
+                    result: IOResult<()>) {
+        self.close_notifier.send((uid, result));
     }
 }

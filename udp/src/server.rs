@@ -33,6 +33,13 @@ impl<S: Socket> Clone for PortsAdapter<S> {
 impl<S: Socket> SocketAdapter for PortsAdapter<S> {
     type Connect = S;
 
+    fn bind_runtime(&mut self, rt: &LocalTaskRuntime<()>) {
+        let mut iter = self.0.iter_mut();
+        while let Some(mut service) = iter.next() {
+            service.bind_runtime(rt.clone());
+        }
+    }
+
     fn binded(&self,
               result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()> {
         let adapter = self.clone();
@@ -241,7 +248,10 @@ impl<S: Socket> PortsAdapterFactory<S> {
 ///
 /// Udp连接绑定器
 ///
-pub struct SocketListener<S: Socket, F: SocketAdapterFactory<Connect = S, Adapter = PortsAdapter<S>>> {
+pub struct SocketListener<
+    S: Socket,
+    F: SocketAdapterFactory<Connect = S, Adapter = PortsAdapter<S>>,
+> {
     marker: PhantomData<(S, F)>,
 }
 
@@ -256,7 +266,7 @@ impl<S, F> SocketListener<S, F>
                 event_size: usize,          //同时处理的事件数
                 read_packet_size: usize,    //读报文大小
                 write_packet_size: usize,   //写报文大小
-                timeout: Option<usize>      //事件轮询超时时长
+                timeout: Option<usize>,     //事件轮询超时时长
     ) -> Result<()> {
         if runtimes.is_empty() {
             //至少需要一个工作者
@@ -264,19 +274,20 @@ impl<S, F> SocketListener<S, F>
                                   format!("Bind listener failed, reason: require runtime")));
         }
 
-        let (sender, receiver) = unbounded();
-        let binds: Vec<(SocketAddr, Sender<S>)> = addrs
-            .iter()
-            .map(|addr| {
-                (addr.clone(), sender.clone())
-            }).collect();
-
         let rt_size = runtimes.len(); //获取工作者数量
+        let mut senders = Vec::with_capacity(rt_size);
+        let mut receivers = Vec::with_capacity(rt_size);
+        for _ in 0..rt_size {
+            let (sender, receiver) = unbounded();
+            senders.push(sender);
+            receivers.push(receiver);
+        }
         let mut pools = Vec::with_capacity(rt_size);
-        let mut driver = SocketDriver::new(&binds[..]);
+        let mut driver = SocketDriver::new(&addrs[..], senders);
 
         //创建工作者数量的连接池，共用一个写缓冲池
-        for index in 0..rt_size {
+        let mut index = 0;
+        for receiver in receivers {
             let name = addrs
                 .iter()
                 .map(|addr| {
@@ -287,22 +298,26 @@ impl<S, F> SocketListener<S, F>
 
             match UdpSocketPool::with_capacity(index as u8,
                                                name,
-                                               receiver.clone(),
+                                               receiver,
                                                init_cap) {
                 Err(e) => {
                     return Err(e);
                 },
                 Ok(pool) => {
                     pools.push(pool);
+                    index += 1;
                 },
             }
         }
 
         //为所有连接池，设置不同端口适配器的连接驱动，并启动所有连接池
         for pool in pools {
-            let mut driver_clone = driver.clone();
-            driver_clone.set_adapter(factory.get_instance()); //设置连接驱动的端口适配器
             if let Some(rt) = runtimes.pop() {
+                let mut driver_clone = driver.clone();
+                let mut instance = factory.get_instance();
+                instance.bind_runtime(&rt);
+                driver_clone.set_adapter(instance); //设置连接驱动的端口适配器
+
                 if let Err(e) = pool.run(rt,
                                          driver_clone,
                                          event_size,
@@ -325,12 +340,14 @@ impl<S, F> SocketListener<S, F>
                 },
                 Ok(mut socket) => {
                     //绑定指定地址成功，则路由到连接池
-                    driver.route(S::new(addr,
+                    driver.route(S::new(index,
+                                        addr,
                                         None,
                                         Some(Token(index)),
                                         socket,
                                         read_packet_size,
                                         write_packet_size));
+                    index += 1;
                 }
             }
         }

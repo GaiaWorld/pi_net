@@ -35,6 +35,7 @@ const DEFAULT_WRITE_PACKET_BLOCK_LEN: usize = 0xffff;
 ///
 pub struct UdpSocket {
     rt:                 Option<LocalTaskRuntime<()>>,               //连接所在运行时
+    uid:                usize,                                      //连接唯一id
     local:              SocketAddr,                                 //连接本地地址
     remote:             Option<SocketAddr>,                         //连接远端地址
     token:              Option<Token>,                              //连接令牌
@@ -56,7 +57,8 @@ unsafe impl Send for UdpSocket {}
 unsafe impl Sync for UdpSocket {}
 
 impl Socket for UdpSocket {
-    fn new(local: SocketAddr,
+    fn new(uid: usize,
+           local: SocketAddr,
            remote: Option<SocketAddr>,
            token: Option<Token>,
            socket: InnerUdpSocket,
@@ -83,6 +85,7 @@ impl Socket for UdpSocket {
 
         UdpSocket {
             rt: None,
+            uid,
             local,
             remote,
             token,
@@ -105,6 +108,10 @@ impl Socket for UdpSocket {
         self.closed.load(Ordering::Acquire)
     }
 
+    fn get_runtime(&self) -> Option<&LocalTaskRuntime<()>> {
+        self.rt.as_ref()
+    }
+
     fn set_runtime(&mut self, rt: LocalTaskRuntime<()>) {
         self.rt = Some(rt);
     }
@@ -121,6 +128,7 @@ impl Socket for UdpSocket {
         if let Some(token) = self.token {
             if let Some(close_listener) = &self.close_listener {
                 let image = SocketImage::new(shared,
+                                             self.uid,
                                              self.local,
                                              token,
                                              self.closed.clone(),
@@ -133,6 +141,10 @@ impl Socket for UdpSocket {
 
     fn get_socket(&self) -> &SpinLock<InnerUdpSocket> {
         &self.socket
+    }
+
+    fn get_uid(&self) -> usize {
+        self.uid
     }
 
     fn get_local(&self) -> &SocketAddr {
@@ -351,6 +363,9 @@ impl Socket for UdpSocket {
                 return Err(e);
             }
         }
+        if let Some(interest) = self.get_interest() {
+            self.set_interest(interest.add(Interest::WRITABLE));
+        }
 
         Ok(())
     }
@@ -382,6 +397,14 @@ impl Socket for UdpSocket {
 
     fn send(&mut self) -> Result<usize> {
         let mut packets: Vec<(Vec<u8>, Option<SocketAddr>)> = self.write_recv.try_iter().collect();
+        if packets.len() == 0 {
+            if let Some(mut interest) = self.get_interest() {
+                self
+                    .set_interest(interest
+                        .remove(Interest::WRITABLE)
+                        .unwrap_or(Interest::READABLE));
+            }
+        }
 
         let mut len = 0; //本次发送的字节数
         if self.remote.is_some() {

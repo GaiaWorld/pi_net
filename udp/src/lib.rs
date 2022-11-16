@@ -24,15 +24,17 @@ pub mod utils;
 pub mod connect;
 pub mod connect_pool;
 pub mod server;
+pub mod client;
 
-use utils::{UdpMultiInterface, UdpSocketStatus, SocketContext};
+use utils::{UdpMultiInterface, UdpSocketStatus, SocketContext, AsyncServiceContext};
 
 ///
 /// Udp连接
 ///
 pub trait Socket: Sized + Send + 'static {
     /// 构建一个Udp连接
-    fn new(local: SocketAddr,
+    fn new(uid: usize,
+           local: SocketAddr,
            remote: Option<SocketAddr>,
            token: Option<Token>,
            socket: UdpSocket,
@@ -41,6 +43,9 @@ pub trait Socket: Sized + Send + 'static {
 
     /// 线程安全的判断是否已关闭Udp连接
     fn is_closed(&self) -> bool;
+
+    /// 获取连接所在运行时
+    fn get_runtime(&self) -> Option<&LocalTaskRuntime<()>>;
 
     /// 设置连接所在运行时
     fn set_runtime(&mut self, rt: LocalTaskRuntime<()>);
@@ -53,6 +58,9 @@ pub trait Socket: Sized + Send + 'static {
 
     /// 获取内部连接的只读引用
     fn get_socket(&self) -> &SpinLock<UdpSocket>;
+
+    /// 获取连接唯一id
+    fn get_uid(&self) -> usize;
 
     /// 获取连接本地地址
     fn get_local(&self) -> &SocketAddr;
@@ -147,6 +155,9 @@ pub trait Socket: Sized + Send + 'static {
 pub trait SocketAdapter: Send + Sync + 'static {
     type Connect: Socket;
 
+    /// 绑定连接事件适配器所在运行时
+    fn bind_runtime(&mut self, rt: &LocalTaskRuntime<()>);
+
     /// 已绑定本地端口的Udp连接
     fn binded(&self,
               result: GenResult<SocketHandle<Self::Connect>, (SocketHandle<Self::Connect>, Error)>) -> LocalBoxFuture<'static, ()>;
@@ -168,6 +179,15 @@ pub trait SocketAdapter: Send + Sync + 'static {
 /// Udp连接异步服务
 ///
 pub trait AsyncService<S: Socket>: Send + Sync + 'static {
+    /// 绑定异步服务所在的运行时
+    fn bind_runtime(&mut self, rt: LocalTaskRuntime<()>);
+
+    /// 获取Udp连接异步服务上下文的只读引用
+    fn get_context(&self) -> Option<&AsyncServiceContext<S>>;
+
+    /// 设置Udp连接异步服务上下文件
+    fn set_context(&mut self, context: AsyncServiceContext<S>);
+
     /// 异步处理已绑定本地端口的Udp连接
     fn handle_binded(&self,
                      handle: SocketHandle<S>,
@@ -228,6 +248,11 @@ impl<S: Socket> SocketHandle<S> {
     /// 线程安全的获取连接令牌
     pub fn get_token(&self) -> &Token {
         &self.0.token
+    }
+
+    /// 线程安全的获取连接唯一id
+    pub fn get_uid(&self) -> usize {
+        self.0.uid
     }
 
     /// 线程安全的获取连接本地地址
@@ -340,6 +365,7 @@ impl<S: Socket> SocketHandle<S> {
 ///
 pub struct SocketImage<S: Socket> {
     inner:          *const S,                                       //Udp连接指针
+    uid:            usize,                                          //Udp连接唯一id
     local:          SocketAddr,                                     //Udp连接本地地址
     token:          Token,                                          //Udp连接令牌
     closed:         Rc<AtomicBool>,                                 //Udp连接关闭状态
@@ -352,12 +378,14 @@ unsafe impl<S: Socket> Sync for SocketImage<S> {}
 impl<S: Socket> SocketImage<S> {
     /// 构建Udp连接镜像
     pub fn new(shared: &Arc<RefCell<S>>,
+               uid: usize,
                local: SocketAddr,
                token: Token,
                closed: Rc<AtomicBool>,
                close_listener: Sender<(Token, Result<()>)>) -> Self {
         SocketImage {
             inner: shared.as_ptr() as *const S,
+            uid,
             local,
             token,
             closed,
@@ -390,21 +418,20 @@ impl<S: Socket, A: SocketAdapter<Connect = S>> Clone for SocketDriver<S, A> {
 
 impl<S: Socket, A: SocketAdapter<Connect = S>> SocketDriver<S, A> {
     /// 构建一个Udp连接驱动器
-    pub fn new(bind: &[(SocketAddr, Sender<S>)]) -> Self {
+    pub fn new(bind: &[SocketAddr],
+               router: Vec<Sender<S>>) -> Self {
         let size = bind.len();
         let mut map = XHashMap::default();
-        let mut vec = Vec::with_capacity(size);
 
         let mut index: usize = 0;
-        for (addr, sender) in bind {
+        for addr in bind {
             map.insert(addr.clone(), index);
-            vec.push(sender.clone());
             index += 1;
         }
 
         SocketDriver {
             addrs: Rc::new(map),
-            router: Rc::new(vec),
+            router: Rc::new(router),
             adapter: None,
         }
     }
