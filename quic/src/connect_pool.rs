@@ -552,27 +552,8 @@ fn handle_close<S>(rt: &LocalTaskRuntime<()>,
                     //如果指定令牌的Quic连接存在
                     let socket = item.value();
 
-                    //当前连接已完成所有发送，则继续关闭当前连接的流
                     unsafe {
-                        if let Err(e) = (&mut *socket.get()).shutdown(code) {
-                            error!("{:?}", e);
-                        } else {
-                            //关闭当前连接的流成功
-                            if code == 0 {
-                                //当前连接的对端已关闭，则继续关闭当前连接
-                                pool
-                                    .close_sent
-                                    .send(QuicCloseEvent::CloseConnect(connection_handle));
-                            }
-                        }
-                    }
-                }
-            },
-            QuicCloseEvent::CloseConnect(mut connection_handle) => {
-                //关闭指定连接
-                if let Some((_, socket)) = pool.sockets.remove(&connection_handle.0) {
-                    //指定关闭的连接存在
-                    unsafe {
+                        //强制关闭连接
                         let (code, reason) = if let Some((code, reason)) = (&mut *socket.get()).get_close_reason() {
                             //有连接关闭的原因
                             (*code,
@@ -585,6 +566,34 @@ fn handle_close<S>(rt: &LocalTaskRuntime<()>,
                         };
                         (&mut *socket.get()).force_close(code, reason);
 
+                        //关闭连接的流
+                        if (&mut *socket.get()).is_client() {
+                            //当前连接是客户端，则直接关闭连接
+                            pool
+                                .close_sent
+                                .send(QuicCloseEvent::CloseConnect(ConnectionHandle(connection_handle.0)));
+                        } else {
+                            //当前连接是服务端，且已完成所有发送，则继续关闭当前连接的流
+                            if let Err(e) = (&mut *socket.get()).shutdown(code) {
+                                error!("{:?}", e);
+                            } else {
+                                //关闭当前连接的流成功
+                                if code == 0 {
+                                    //当前连接的对端已关闭，则继续关闭当前连接
+                                    pool
+                                        .close_sent
+                                        .send(QuicCloseEvent::CloseConnect(connection_handle));
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            QuicCloseEvent::CloseConnect(mut connection_handle) => {
+                //关闭指定连接
+                if let Some((_, socket)) = pool.sockets.remove(&connection_handle.0) {
+                    //指定关闭的连接存在
+                    unsafe {
                         //取消连接的定时器
                         if let Some(timer_ref) = (&mut *socket.get()).unset_timer_ref() {
                             let _ = pool.timer.cancel(KeyData::from_ffi(timer_ref).into());
