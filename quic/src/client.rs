@@ -547,9 +547,10 @@ impl<S: Socket> QuicAsyncService<S> for QuicClientService<S> {
     fn handle_readed(&self,
                      handle: QuicSocketHandle<S>,
                      result: Result<usize>) -> LocalBoxFuture<'static, ()> {
+        let client = self.client.clone();
         async move {
             unsafe {
-                if let Some(client) = &*self.client.get() {
+                if let Some(client) = &*client.get() {
                     if let Some(receive_notifier) = client.0.receive_notifiers.get(&handle.get_connection_handle().0) {
                         receive_notifier.send(result);
                     }
