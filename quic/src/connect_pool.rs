@@ -470,6 +470,10 @@ fn handle_streams<S>(rt: &LocalTaskRuntime<()>,
                     let socket_mut = unsafe { (&mut *socket_copy.get()) };
 
                     match socket_mut.recv() {
+                        Ok(0) => {
+                            //本次接收已阻塞，则立即结束本次接收，当前流会等待下次接收
+                            return;
+                        },
                         Ok(len) => {
                             //按需接收完成，则执行已读回调
                             if socket_mut.is_wait_wakeup_read_ready() {

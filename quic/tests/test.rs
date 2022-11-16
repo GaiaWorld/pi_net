@@ -10,7 +10,7 @@ use std::io::{Error, Result, ErrorKind};
 use futures::{TryFutureExt,
               future::{FutureExt, BoxFuture, LocalBoxFuture},
               stream::StreamExt, AsyncWriteExt};
-use pi_async::rt::serial::{AsyncRuntime, AsyncRuntimeBuilder};
+use pi_async::rt::serial::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue};
 use quinn_proto::{EndpointConfig, StreamId, VarInt};
 use tokio::runtime::Builder;
 use rustls;
@@ -184,7 +184,10 @@ fn loop_client(conn: quinn::NewConnection,
         buf.resize(3600, 0);
         match recv_stream.read(buf.as_mut_slice()).await {
             Err(e) => println!("Client recv failed, reason: {:?}", e),
-            Ok(Some(len)) => println!("Client recv ok, len: {}", len),
+            Ok(Some(len)) => {
+                buf.truncate(len);
+                println!("Client recv ok, len: {}, buf: {:?}", len, String::from_utf8(buf))
+            },
             Ok(None) => (),
         }
 
@@ -280,14 +283,6 @@ impl<S: Socket> QuicAsyncService<S> for TestService {
                 return;
             }
             println!("===> Socket Write Ok, uid: {:?}", handle.get_uid());
-
-            // if let Err(e) = handle.close(1000, Ok(())) {
-            //     println!("===> Socket close failed, uid: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
-            //              handle.get_uid(),
-            //              handle.get_remote(),
-            //              handle.get_local(),
-            //              e);
-            // }
         }.boxed_local()
     }
 
@@ -436,7 +431,7 @@ fn test_client() {
         Ok(_) => {
             println!("===> Socket Listener Bind Ipv4 Address Ok");
 
-            let client = QuicClient::<UdpSocket>::new(udp_rt.clone(),
+            let client = QuicClient::<UdpSocket>::with_cert_file(udp_rt.clone(),
                                          vec![quic_rt],
                                          "./tests/DigiCert Global Root CA.der",
                                          EndpointConfig::default(),
@@ -453,17 +448,17 @@ fn test_client() {
                                      "test.17youx.cn",
                                      None).await {
                     Err(e) => {
-                        println!("!!!!!!Quic connect failed, reason: {:?}", e);
+                        println!("!!!!!!Quic client connect failed, reason: {:?}", e);
                     },
                     Ok(connection) => {
-                        println!("!!!!!!Quic connect ok, uid: {:?}, remote: {:?}, local: {:?}",
+                        println!("!!!!!!Quic client connect ok, uid: {:?}, remote: {:?}, local: {:?}",
                                  connection.get_uid(),
                                  connection.get_remote(),
                                  connection.get_local());
 
                         for index in 0..10 {
                             if let Err(e) = connection.write([b"Hello World ", index.to_string().as_bytes()].concat()) {
-                                println!("Quic send failed, uid: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                println!("Quic client send failed, uid: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                                          connection.get_uid(),
                                          connection.get_remote(),
                                          connection.get_local(),
@@ -472,7 +467,7 @@ fn test_client() {
                             }
 
                             if let Some(resp) = connection.read().await {
-                                println!("Quic receive ok, uid: {:?}, remote: {:?}, local: {:?}, bin: {:?}",
+                                println!("Quic client receive ok, uid: {:?}, remote: {:?}, local: {:?}, bin: {:?}",
                                          connection.get_uid(),
                                          connection.get_remote(),
                                          connection.get_local(),
@@ -486,7 +481,7 @@ fn test_client() {
                         let result = connection
                             .close(10000,
                                    Err(Error::new(ErrorKind::Other, "Normal"))).await;
-                        println!("Quic close, uid: {:?}, remote: {:?}, local: {:?}, result: {:?}",
+                        println!("Quic client close, uid: {:?}, remote: {:?}, local: {:?}, result: {:?}",
                                  uid,
                                  remote,
                                  local,

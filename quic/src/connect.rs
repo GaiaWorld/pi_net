@@ -363,7 +363,6 @@ impl<S: Socket> QuicSocket<S> {
 
     /// 发送指定的Quic数据报文
     pub fn send_transmit(&self, data: Transmit) -> Result<()> {
-        println!("######send transmit, to: {:?}, len: {:?}", data.destination, data.contents.len());
         if let Some(size) = data.segment_size {
             //多帧Quic数据报文
             let mut offset = 0; //数据报文的帧偏移
@@ -667,7 +666,6 @@ impl<S: Socket> QuicSocket<S> {
                         break;
                     },
                     Ok(len) => {
-                        println!("######send part, to: {:?}, len: {:?}", self.get_remote(), len);
                         //部分发送成功，则继续发送，直到发送完发送块中的所有数据
                         self.sent_len += len; //增加连接已发送的字节数
                         self.readed_write_len += len; //增加已读写缓冲大小的字节数
