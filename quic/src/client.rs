@@ -340,6 +340,7 @@ impl<S: Socket> QuicClient<S> {
         let wait_udp_connects = DashMap::new();
         let connections = DashMap::new();
         let connect_events = DashMap::new();
+        let receive_notifiers = DashMap::new();
         let close_events = DashMap::new();
 
         let inner = InnerQuicClient {
@@ -358,6 +359,7 @@ impl<S: Socket> QuicClient<S> {
             router,
             wait_udp_connects,
             connect_events,
+            receive_notifiers,
             close_events,
         };
         let client = QuicClient(Arc::new(inner));
@@ -405,9 +407,19 @@ impl<S: Socket> QuicClient<S> {
             },
             Ok(socket_handle) => {
                 //建立Udp连接成功，并返回Quic客户端连接
+                let (receive_event_sent, receive_event_recv) = bounded(8);
+
+                //注册当前连接的接收事件通知器
+                self
+                    .0
+                    .receive_notifiers
+                    .insert(socket_handle.get_connection_handle().0,
+                            receive_event_sent);
+
                 let inner = InnerQuicClientConnection {
                     client: self.clone(),
                     handle: socket_handle,
+                    receive_event_recv,
                 };
 
                 let connection = QuicClientConnection(Arc::new(inner));
@@ -476,6 +488,7 @@ struct InnerQuicClient<S: Socket> {
     router:                     Vec<Sender<QuicSocket<S>>>,                                                                             //Quic连接路由器
     wait_udp_connects:          DashMap<usize, (SocketAddr, String, Option<ClientConfig>, AsyncValue<Result<QuicSocketHandle<S>>>)>,    //等待Udp连接表
     connect_events:             DashMap<usize, AsyncValue<Result<QuicSocketHandle<S>>>>,                                                //Quic连接事件表
+    receive_notifiers:          DashMap<usize, AsyncSender<Result<usize>>>,                                                             //Quic连接接收事件通知器表
     close_events:               DashMap<usize, AsyncValue<Result<()>>>,                                                                 //Quic关闭事件表
 }
 
@@ -533,9 +546,15 @@ impl<S: Socket> QuicAsyncService<S> for QuicClientService<S> {
     /// 异步处理已读
     fn handle_readed(&self,
                      handle: QuicSocketHandle<S>,
-                     result: Result<()>) -> LocalBoxFuture<'static, ()> {
+                     result: Result<usize>) -> LocalBoxFuture<'static, ()> {
         async move {
-
+            unsafe {
+                if let Some(client) = &*self.client.get() {
+                    if let Some(receive_notifier) = client.0.receive_notifiers.get(&handle.get_connection_handle().0) {
+                        receive_notifier.send(result);
+                    }
+                }
+            }
         }.boxed_local()
     }
 
@@ -657,12 +676,15 @@ impl<S: Socket> QuicClientConnection<S> {
                 return None;
             }
 
-            if len == 0 {
-                //用户需要读取任意长度的数据
+            if (len == 0) && (remaining > 0) {
+                //用户需要读取任意长度的数据，且当前读缓冲区有足够的数据
                 Some(buf.copy_to_bytes(remaining))
-            } else {
-                //用户需要读取指定长度的数据
+            } else if (len > 0) && (remaining >= len) {
+                //用户需要读取指定长度的数据，且当前读缓冲区有足够的数据
                 Some(buf.copy_to_bytes(len))
+            } else {
+                //用户需要读取任意长度的数据，且当前缓冲区没有足够的数据
+                None
             }
         } else {
             //当前连接没有读缓冲
@@ -693,37 +715,51 @@ impl<S: Socket> QuicClientConnection<S> {
     /// 线程安全的异步读取指定长度的数据，如果len为0，则表示读取任意长度的数据，如果确实读取到数据，则保证读取到的数据长度>0
     /// 如果len>0，则表示最多只读取指定数量的数据，如果确实读取到数据，则保证读取到的数据长度==len
     pub async fn read_with_len(&self, mut len: usize) -> Option<Bytes> {
-        if let Some(buf) = unsafe { (&mut *self.0.handle.get_read_buffer().get()) } {
-            //当前连接有读缓冲
-            let mut readed_len = 0;
-            if buf.remaining() == 0 {
-                //当前连接的读缓冲中没有数据，则异步准备读取数据
-                readed_len = match self.0.handle.read_ready(len) {
-                    Err(r) => r,
-                    Ok(value) => {
-                        println!("@@@@@@read wait, local: {:?}", self.get_local());
-                        let r = value.await;
-                        println!("@@@@@@read wait ok, local: {:?}, r: {:?}", self.get_local(), r);
-                        r
-                    },
-                };
+        match self.0.receive_event_recv.recv_async().await {
+            Err(e) => {
+                //当前连接的接收事件监听器错误，则立即返回空
+                None
+            },
+            Ok(Err(e)) => {
+                //当前连接接收数据失败，则立即返回空
+                None
+            },
+            Ok(Ok(size)) => {
+                println!("!!!!!!read_with_len: {:?}", size);
+                //已接收到数据
+                if let Some(buf) = unsafe { (&mut *self.0.handle.get_read_buffer().get()) } {
+                    //当前连接有读缓冲
+                    let mut readed_len = 0;
+                    if buf.remaining() == 0 {
+                        //当前连接的读缓冲中没有数据，则异步准备读取数据
+                        readed_len = match self.0.handle.read_ready(len) {
+                            Err(r) => r,
+                            Ok(value) => {
+                                println!("@@@@@@read wait, local: {:?}", self.get_local());
+                                let r = value.await;
+                                println!("@@@@@@read wait ok, local: {:?}, r: {:?}", self.get_local(), r);
+                                r
+                            },
+                        };
 
-                if readed_len == 0 {
-                    //当前连接已关闭，则立即退出
-                    return None;
+                        if readed_len == 0 {
+                            //当前连接已关闭，则立即退出
+                            return None;
+                        }
+                    }
+
+                    if len == 0 {
+                        //用户需要读取任意长度的数据
+                        Some(buf.copy_to_bytes(readed_len))
+                    } else {
+                        //用户需要读取指定长度的数据
+                        Some(buf.copy_to_bytes(len))
+                    }
+                } else {
+                    //当前连接没有读缓冲
+                    None
                 }
             }
-
-            if len == 0 {
-                //用户需要读取任意长度的数据
-                Some(buf.copy_to_bytes(readed_len))
-            } else {
-                //用户需要读取指定长度的数据
-                Some(buf.copy_to_bytes(len))
-            }
-        } else {
-            //当前连接没有读缓冲
-            None
         }
     }
 
@@ -744,6 +780,7 @@ impl<S: Socket> QuicClientConnection<S> {
 struct InnerQuicClientConnection<S: Socket> {
     client:             QuicClient<S>,             //客户端
     handle:             QuicSocketHandle<S>,       //连接句柄
+    receive_event_recv: AsyncReceiver<Result<usize>>, //接收事件接收器
 }
 
 

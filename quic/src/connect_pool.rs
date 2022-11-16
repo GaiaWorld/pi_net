@@ -395,11 +395,12 @@ fn handle_connection_readed<S>(rt: &LocalTaskRuntime<()>,
                                                                               id))));
                         }
 
-                        debug!("Quic stream closed, uid: {:?}, remtoe: {:?}, local: {:?}, stream_id: {:?}",
+                        debug!("Quic stream closed, uid: {:?}, remtoe: {:?}, local: {:?}, stream_id: {:?}, code: {:?}",
                             (&*socket.get()).get_uid(),
                             (&*socket.get()).get_remote(),
                             (&*socket.get()).get_local(),
-                            id);
+                            id,
+                            error_code);
                     }
                 }
             }
@@ -469,7 +470,7 @@ fn handle_streams<S>(rt: &LocalTaskRuntime<()>,
                     let socket_mut = unsafe { (&mut *socket_copy.get()) };
 
                     match socket_mut.recv() {
-                        Ok(_len) => {
+                        Ok(len) => {
                             //按需接收完成，则执行已读回调
                             if socket_mut.is_wait_wakeup_read_ready() {
                                 //当前连接有需要唤醒的异步准备读取器，则唤醒当前的异步准备读取器
@@ -478,12 +479,12 @@ fn handle_streams<S>(rt: &LocalTaskRuntime<()>,
                                 if socket_mut.is_hibernated() {
                                     //当前连接已休眠，则将本次读任务加入当前连接的休眠任务队列，等待连接被唤醒后再继续处理
                                     let socket_handle = socket_mut.get_socket_handle();
-                                    socket_mut.push_hibernated_task(service.handle_readed(socket_handle, Ok(())));
+                                    socket_mut.push_hibernated_task(service.handle_readed(socket_handle, Ok(len)));
                                 } else {
                                     //当前连接没有需要唤醒的异步准备读取器，则调用接收回调
                                     let socket_handle = socket_mut.get_socket_handle();
                                     drop(socket_mut); //在继续调用前释放连接引用
-                                    service.handle_readed(socket_handle, Ok(())).await;
+                                    service.handle_readed(socket_handle, Ok(len)).await;
                                 }
                             }
                         },

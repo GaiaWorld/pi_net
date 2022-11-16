@@ -220,7 +220,7 @@ impl<S: Socket> QuicAsyncService<S> for TestService {
 
     fn handle_readed(&self,
                      handle: SocketHandle<S>,
-                     result: Result<()>) -> LocalBoxFuture<'static, ()> {
+                     result: Result<usize>) -> LocalBoxFuture<'static, ()> {
         async move {
             if let Err(e) = result {
                 println!("===> Socket read failed, uid: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
@@ -450,7 +450,7 @@ fn test_client() {
             udp_rt.spawn(async move {
                 match client.connect("127.0.0.1:5000".parse().unwrap(),
                                      "127.0.0.1:38080".parse().unwrap(),
-                                     "test.17youx.cn:38080",
+                                     "test.17youx.cn",
                                      None).await {
                     Err(e) => {
                         println!("!!!!!!Quic connect failed, reason: {:?}", e);

@@ -40,7 +40,7 @@ pub trait AsyncService<S: Socket = UdpSocket>: Send + Sync + 'static {
     /// 异步处理已读
     fn handle_readed(&self,
                      handle: SocketHandle<S>,
-                     result: Result<()>) -> LocalBoxFuture<'static, ()>;
+                     result: Result<usize>) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已写
     fn handle_writed(&self,
