@@ -118,6 +118,7 @@ impl<S: Socket> AsyncService<S> for QuicListener<S> {
 
 impl<S: Socket> QuicListener<S> {
     /// 构建一个Quic连接监听器
+    /// timeout可以在运行时与udp不是同一个运行时设置，避免连接池事件循环空载
     pub fn new<P: AsRef<Path>>(runtimes: Vec<LocalTaskRuntime<()>>,
                                server_certs_path: P,
                                server_key_path: P,

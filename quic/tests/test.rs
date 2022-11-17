@@ -418,7 +418,7 @@ fn test_client() {
                                      65535,
                                      65535,
                                      Arc::new(TestService),
-                                     Some(10))
+                                     Some(1))
         .expect("Create quic listener failed");
     factory.bind(38080, Box::new(listener));
     let addrs = vec![SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), 38080)];
@@ -447,7 +447,7 @@ fn test_client() {
                                                                  65535,
                                                                  65535,
                                                                  Some(10),
-                                                                 Some(10))
+                                                                 None)
                 .unwrap();
 
             udp_rt.spawn(async move {

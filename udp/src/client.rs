@@ -390,7 +390,7 @@ impl<S: Socket> UdpClient<S> {
 
         //连接远端地址成功，则路由到连接池
         if let Err(e) = self.0.driver.route(S::new(uid,
-                                                     local,
+                                                   socket.local_addr().unwrap(),
                                                      Some(remote),
                                                      Some(Token(uid)),
                                                      socket,
@@ -486,7 +486,7 @@ impl<S: Socket> UdpClient<S> {
 
             //连接远端地址成功，则路由到连接池
             if let Err(e) = client.0.driver.route(S::new(uid,
-                                                         local,
+                                                         socket.local_addr().unwrap(),
                                                          Some(remote),
                                                          Some(Token(uid)),
                                                          socket,
