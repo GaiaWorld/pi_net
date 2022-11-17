@@ -616,6 +616,9 @@ impl<S: Socket> QuicAsyncService<S> for QuicClientService<S> {
 ///
 pub struct QuicClientConnection<S: Socket = UdpSocket>(Arc<InnerQuicClientConnection<S>>);
 
+unsafe impl<S: Socket> Send for QuicClientConnection<S> {}
+unsafe impl<S: Socket> Sync for QuicClientConnection<S> {}
+
 impl<S: Socket> Clone for QuicClientConnection<S> {
     fn clone(&self) -> Self {
         QuicClientConnection(self.0.clone())

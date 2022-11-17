@@ -583,6 +583,9 @@ struct InnerUdpClient<S: Socket> {
 ///
 pub struct UdpClientConnection<S: Socket>(Arc<InnerUdpClientConnection<S>>);
 
+unsafe impl<S: Socket> Send for UdpClientConnection<S> {}
+unsafe impl<S: Socket> Sync for UdpClientConnection<S> {}
+
 impl<S: Socket> Clone for UdpClientConnection<S> {
     fn clone(&self) -> Self {
         UdpClientConnection(self.0.clone())
