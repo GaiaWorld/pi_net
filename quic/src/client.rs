@@ -17,7 +17,7 @@ use rustls;
 use log::error;
 
 use pi_hash::XHashMap;
-use pi_async::rt::{serial::AsyncValue,
+use pi_async::rt::{AsyncValue,
                    serial_local_thread::LocalTaskRuntime};
 use udp::{Socket, AsyncService, SocketHandle,
           connect::UdpSocket,

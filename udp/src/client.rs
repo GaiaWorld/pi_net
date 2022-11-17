@@ -15,7 +15,8 @@ use fnv::FnvBuildHasher;
 use bytes::Buf;
 use log::warn;
 
-use pi_async::rt::{serial::{AsyncRuntime, AsyncValue},
+use pi_async::rt::{AsyncValue,
+                   serial::AsyncRuntime,
                    serial_local_thread::LocalTaskRuntime};
 
 use crate::{Socket, SocketAdapterFactory, AsyncService, SocketAdapter, SocketHandle,
