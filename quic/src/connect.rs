@@ -62,7 +62,7 @@ pub struct QuicSocket<S: Socket> {
     read_len:           Arc<AtomicUsize>,                                                   //连接读取块大小
     readed_read_limit:  Arc<AtomicUsize>,                                                   //已读读缓冲大小限制
     readed:             usize,                                                              //已读读缓冲当前大小
-    read_buf:           Rc<UnsafeCell<Option<BytesMut>>>,                                   //连接流读缓冲
+    read_buf:           Arc<SpinLock<Option<BytesMut>>>,                                    //连接流读缓冲
     wait_ready_len:     usize,                                                              //连接异步准备读取的字节数
     ready_len:          usize,                                                              //连接异步准备读取已就绪的字节数
     ready_reader:       SpinLock<Option<AsyncValue<usize>>>,                                //异步准备读取器
@@ -106,7 +106,7 @@ impl<S: Socket> QuicSocket<S> {
         let status = Arc::new(AtomicU8::new(QuicSocketStatus::UdpAccepted.into()));
         let read_len = Arc::new(AtomicUsize::new(DEFAULT_READ_BLOCK_LEN));
         let readed_read_limit = Arc::new(AtomicUsize::new(readed_read_size_limit));
-        let read_buf = Rc::new(UnsafeCell::new(Some(BytesMut::new())));
+        let read_buf = Arc::new(SpinLock::new(Some(BytesMut::new())));
         let ready_reader = SpinLock::new(None);
         let wait_sent_len = AtomicUsize::new(0);
         let write_len = Arc::new(AtomicUsize::new(DEFAULT_WRITE_BLOCK_LEN));
@@ -501,7 +501,7 @@ impl<S: Socket> QuicSocket<S> {
                             blocks.sort_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap()); //重新排序接收到的所有数据块
                             let (_, bytes_vec): (Vec<u64>, Vec<Bytes>) = blocks.into_iter().unzip();
                             for bytes in bytes_vec {
-                                if let Some(buf) = unsafe { &mut *self.read_buf.get() } {
+                                if let Some(buf) = self.read_buf.lock().as_mut() {
                                     //填充到连接的读缓冲区
                                     buf.put_slice(bytes.as_ref());
                                 }
@@ -538,10 +538,10 @@ impl<S: Socket> QuicSocket<S> {
             if self.readed > self.readed_read_limit.load(Ordering::Relaxed) {
                 //本次接收成功，且已达已读读缓冲大小限制，则清理已读取的读缓冲区，并释放对应的内存
                 unsafe {
-                    let old_buf = (&mut *self.read_buf.get()).take().unwrap();
+                    let old_buf = self.read_buf.lock().take().unwrap();
                     let mut new_buf = BytesMut::with_capacity(old_buf.remaining());
                     new_buf.put(old_buf);
-                    *self.read_buf.get() = Some(new_buf);
+                    *self.read_buf.lock() = Some(new_buf);
                     self.readed = 0;
                 }
             }
@@ -567,7 +567,7 @@ impl<S: Socket> QuicSocket<S> {
         self.set_ready(QuicSocketReady::Readable); //设置连接当前对读事件感兴趣
 
         let remaining = unsafe {
-            (&*self.read_buf.get())
+            self.read_buf.lock()
                 .as_ref()
                 .unwrap()
                 .remaining()
@@ -604,8 +604,17 @@ impl<S: Socket> QuicSocket<S> {
         }
     }
 
+    /// 获取连接的输入缓冲区的剩余未读字节数
+    pub fn read_buffer_remaining(&self) -> Option<usize> {
+        if let Some(buf) = self.read_buf.lock().as_ref() {
+            Some(buf.remaining())
+        } else {
+            None
+        }
+    }
+
     /// 获取连接的输入缓冲区的只读引用
-    pub fn get_read_buffer(&self) -> Rc<UnsafeCell<Option<BytesMut>>> {
+    pub fn get_read_buffer(&self) -> Arc<SpinLock<Option<BytesMut>>> {
         self.read_buf.clone()
     }
 

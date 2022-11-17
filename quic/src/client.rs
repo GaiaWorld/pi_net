@@ -17,7 +17,7 @@ use rustls;
 use log::error;
 
 use pi_hash::XHashMap;
-use pi_async::rt::{AsyncValue,
+use pi_async::rt::{AsyncRuntime, serial::AsyncValue,
                    serial_local_thread::LocalTaskRuntime};
 use udp::{Socket, AsyncService, SocketHandle,
           connect::UdpSocket,
@@ -447,7 +447,7 @@ impl<S: Socket> QuicClient<S> {
         }
     }
 
-    /// 异步关闭指定内部连接句柄的Quic连接
+    /// 用本地异步运行时，异步关闭指定内部连接句柄的Quic连接
     pub async fn close_connection(&self,
                                   connection_handle: ConnectionHandle,
                                   code: u32,
@@ -460,6 +460,42 @@ impl<S: Socket> QuicClient<S> {
             let value_copy = value.clone();
             let client = self.clone();
             rt.spawn(async move {
+                //注册指定连接的关闭事件监听器
+                let close_reason = AsyncValue::new();
+                client.0.close_events.insert(uid, close_reason.clone());
+
+                if let Err(e) = connection.0.handle.close(code, reason) {
+                    //关闭连接失败，则立即返回错误原因
+                    client.0.close_events.remove(&uid); //注销指定连接的关闭事件监听器
+                    value_copy.set(Err(e));
+                    return;
+                }
+
+                //返回关闭结果
+                let _ = close_reason.await;
+                value_copy.set(Ok(()));
+            });
+
+            value.await
+        } else {
+            //指定唯一id的Udp连接不存在，则忽略
+            Ok(())
+        }
+    }
+
+    /// 用指定异步运行时，异步关闭指定内部连接句柄的Quic连接
+    pub async fn close_connection_with_runtime<R: AsyncRuntime<()>>(&self,
+                                                                    rt: R,
+                                                                    connection_handle: ConnectionHandle,
+                                                                    code: u32,
+                                                                    reason: Result<()>) -> Result<()> {
+        let uid = connection_handle.0;
+        if let Some((_uid, connection)) = self.0.connections.remove(&uid) {
+            //指定唯一id的Udp连接存在，则开始关闭
+            let value = AsyncValue::new();
+            let value_copy = value.clone();
+            let client = self.clone();
+            rt.spawn(rt.alloc(), async move {
                 //注册指定连接的关闭事件监听器
                 let close_reason = AsyncValue::new();
                 client.0.close_events.insert(uid, close_reason.clone());
@@ -680,7 +716,7 @@ impl<S: Socket> QuicClientConnection<S> {
     /// 尝试同步非阻塞得读取指定长度的数据，如果len为0，则表示读取任意长度的数据，如果确实读取到数据，则保证读取到的数据长度>0
     /// 如果len>0，则表示最多只读取指定数量的数据，如果确实读取到数据，则保证读取到的数据长度==len
     pub fn try_read_with_len(&self, len: usize) -> Option<Bytes> {
-        if let Some(buf) = unsafe { (&mut *self.0.handle.get_read_buffer().get()) } {
+        if let Some(buf) = self.0.handle.get_read_buffer().lock().as_mut() {
             //当前连接有读缓冲
             let remaining = buf.remaining();
             if (len > 0) && (remaining < len) {
@@ -727,24 +763,32 @@ impl<S: Socket> QuicClientConnection<S> {
     /// 线程安全的异步读取指定长度的数据，如果len为0，则表示读取任意长度的数据，如果确实读取到数据，则保证读取到的数据长度>0
     /// 如果len>0，则表示最多只读取指定数量的数据，如果确实读取到数据，则保证读取到的数据长度==len
     pub async fn read_with_len(&self, mut len: usize) -> Option<Bytes> {
-        if let Some(buf) = unsafe { (&mut *self.0.handle.get_read_buffer().get()) } {
+        let remaining = if let Some(len) = self.0.handle.read_buffer_remaining() {
             //当前连接有读缓冲
-            let mut readed_len = 0;
-            if buf.remaining() == 0 {
-                //当前连接的读缓冲中没有数据，则异步准备读取数据
-                readed_len = match self.0.handle.read_ready(len) {
-                    Err(r) => r,
-                    Ok(value) => {
-                        value.await
-                    },
-                };
+            len
+        } else {
+            //当前连接没有读缓冲
+            return None;
+        };
 
-                if readed_len == 0 {
-                    //当前连接已关闭，则立即退出
-                    return None;
-                }
+        let mut readed_len = 0;
+        if remaining == 0 {
+            //当前连接的读缓冲中没有数据，则异步准备读取数据
+            readed_len = match self.0.handle.read_ready(len) {
+                Err(r) => r,
+                Ok(value) => {
+                    value.await
+                },
+            };
+
+            if readed_len == 0 {
+                //当前连接已关闭，则立即退出
+                return None;
             }
+        }
 
+        if let Some(buf) = self.0.handle.get_read_buffer().lock().as_mut() {
+            //当前连接有读缓冲
             if len == 0 {
                 //用户需要读取任意长度的数据
                 Some(buf.copy_to_bytes(readed_len))
@@ -758,7 +802,7 @@ impl<S: Socket> QuicClientConnection<S> {
         }
     }
 
-    /// 线程安全的异步关闭连接
+    /// 用本地异步运行时，线程安全的异步关闭连接
     pub async fn close(self,
                        code: u32,
                        reason: Result<()>) -> Result<()> {
@@ -768,6 +812,20 @@ impl<S: Socket> QuicClientConnection<S> {
             .close_connection(self.get_connection_handle().clone(),
                               code,
                               reason).await
+    }
+
+    /// 用户指定异步运行时，线程安全的异步关闭连接
+    pub async fn close_with_runtime<R: AsyncRuntime<()>>(self,
+                                                         rt: R,
+                                                         code: u32,
+                                                         reason: Result<()>) -> Result<()> {
+        self
+            .0
+            .client
+            .close_connection_with_runtime(rt,
+                                           self.get_connection_handle().clone(),
+                                           code,
+                                           reason).await
     }
 }
 

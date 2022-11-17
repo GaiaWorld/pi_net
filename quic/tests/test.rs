@@ -10,7 +10,7 @@ use std::io::{Error, Result, ErrorKind};
 use futures::{TryFutureExt,
               future::{FutureExt, BoxFuture, LocalBoxFuture},
               stream::StreamExt, AsyncWriteExt};
-use pi_async::rt::serial::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue};
+use pi_async::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue}};
 use quinn_proto::{EndpointConfig, StreamId, VarInt};
 use tokio::runtime::Builder;
 use rustls;
@@ -235,25 +235,32 @@ impl<S: Socket> QuicAsyncService<S> for TestService {
             }
 
             let mut ready_len = 0;
-            if let Some(buf) = unsafe { (&mut *handle.get_read_buffer().get()) } {
-                if buf.remaining() == 0 {
-                    //当前读缓冲中没有数据，则异步准备读取数据
-                    println!("!!!!!!readed, read ready start, len: 0");
-                    ready_len = match handle.read_ready(0) {
-                        Err(len) => len,
-                        Ok(value) => {
-                            println!("!!!!!!wait read_ready");
-                            let r = value.await;
-                            println!("!!!!!!wakeup read_ready, len: {}", r);
-                            r
-                        },
-                    };
+            let remaining = if let Some(len) = handle.read_buffer_remaining() {
+                len
+            } else {
+                return;
+            };
 
-                    if ready_len == 0 {
-                        //当前连接已关闭，则立即退出
-                        return;
-                    }
+            if remaining == 0 {
+                //当前读缓冲中没有数据，则异步准备读取数据
+                println!("!!!!!!readed, read ready start, len: 0");
+                ready_len = match handle.read_ready(0) {
+                    Err(len) => len,
+                    Ok(value) => {
+                        println!("!!!!!!wait read_ready");
+                        let r = value.await;
+                        println!("!!!!!!wakeup read_ready, len: {}", r);
+                        r
+                    },
+                };
+
+                if ready_len == 0 {
+                    //当前连接已关闭，则立即退出
+                    return;
                 }
+            }
+
+            if let Some(buf) = handle.get_read_buffer().lock().as_mut() {
                 println!("===> Socket read ok after connect, uid: {:?}, remote: {:?}, local: {:?}, is_0rtt: {:?}, main_stream_id: {:?}, data: {:?}",
                          handle.get_uid(),
                          handle.get_remote(),
@@ -264,8 +271,6 @@ impl<S: Socket> QuicAsyncService<S> for TestService {
 
                 let bin = b"Hello World!";
                 let _ = handle.write_ready(bin);
-            } else {
-                return;
             }
         }.boxed_local()
     }

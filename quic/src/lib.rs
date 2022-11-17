@@ -13,7 +13,8 @@ use bytes::BytesMut;
 use futures::future::LocalBoxFuture;
 use quinn_proto::{ConnectionHandle, StreamId};
 use crossbeam_channel::Sender;
-use pi_async::prelude::serial::AsyncValue;
+use pi_async::prelude::SpinLock;
+use pi_async::rt::serial::AsyncValue;
 
 use udp::{Socket,
           connect::UdpSocket};
@@ -176,8 +177,15 @@ impl<S: Socket> SocketHandle<S> {
         }
     }
 
+    /// 获取连接的输入缓冲区的剩余未读字节数
+    pub fn read_buffer_remaining(&self) -> Option<usize> {
+        unsafe {
+            (&*self.0.inner.get()).read_buffer_remaining()
+        }
+    }
+
     /// 获取连接的输入缓冲区的只读引用
-    pub fn get_read_buffer(&self) -> Rc<UnsafeCell<Option<BytesMut>>> {
+    pub fn get_read_buffer(&self) -> Arc<SpinLock<Option<BytesMut>>> {
         unsafe {
             (&*self.0.inner.get()).get_read_buffer()
         }
