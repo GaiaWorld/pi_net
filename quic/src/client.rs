@@ -257,7 +257,8 @@ impl<S: Socket> QuicClient<S> {
                readed_write_size_limit: usize,
                udp_read_packet_size: usize,
                udp_write_packet_size: usize,
-               udp_timeout: Option<usize>) -> Result<Self> {
+               udp_timeout: Option<usize>,
+               quic_timeout: Option<usize>) -> Result<Self> {
         if runtimes.is_empty() {
             //连接运行时为空，则立即返回错误原因
             return Err(Error::new(ErrorKind::Other,
@@ -328,7 +329,8 @@ impl<S: Socket> QuicClient<S> {
                                                    write_sent,
                                                    write_recv,
                                                    service.clone(),
-                                                   clock);
+                                                   clock,
+                                                   quic_timeout);
             connect_pool.run(rt);
             pool_id += 1; //更新连接池唯一id
         }
@@ -375,7 +377,8 @@ impl<S: Socket> QuicClient<S> {
                                           readed_write_size_limit: usize,
                                           udp_read_packet_size: usize,
                                           udp_write_packet_size: usize,
-                                          udp_timeout: Option<usize>) -> Result<Self> {
+                                          udp_timeout: Option<usize>,
+                                          quic_timeout: Option<usize>) -> Result<Self> {
         let root_cert = fs::read(root_cert_path)?;
         Self::new(udp_client_runtime,
                   runtimes,
@@ -385,7 +388,8 @@ impl<S: Socket> QuicClient<S> {
                   readed_write_size_limit,
                   udp_read_packet_size,
                   udp_write_packet_size,
-                  udp_timeout)
+                  udp_timeout,
+                  quic_timeout)
     }
 
     /// 判断指定令牌的连接是否已关闭

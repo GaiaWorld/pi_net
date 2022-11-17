@@ -332,7 +332,8 @@ fn test_server() {
                                      Default::default(),
                                      65535,
                                      65535,
-                                     Arc::new(TestService))
+                                     Arc::new(TestService),
+                                     Some(10))
         .expect("Create quic listener failed");
     factory.bind(38080, Box::new(listener));
     let addrs = vec![SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), 38080)];
@@ -416,7 +417,8 @@ fn test_client() {
                                      Default::default(),
                                      65535,
                                      65535,
-                                     Arc::new(TestService))
+                                     Arc::new(TestService),
+                                     Some(10))
         .expect("Create quic listener failed");
     factory.bind(38080, Box::new(listener));
     let addrs = vec![SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), 38080)];
@@ -437,14 +439,15 @@ fn test_client() {
             println!("===> Socket Listener Bind Ipv4 Address Ok");
 
             let client = QuicClient::<UdpSocket>::with_cert_file(udp_rt.clone(),
-                                         vec![quic_rt],
-                                         "./tests/DigiCert Global Root CA.der",
-                                         EndpointConfig::default(),
-                                         65535,
-                                         65535,
-                                         65535,
-                                         65535,
-                                         Some(10))
+                                                                 vec![quic_rt],
+                                                                 "./tests/DigiCert Global Root CA.der",
+                                                                 EndpointConfig::default(),
+                                                                 65535,
+                                                                 65535,
+                                                                 65535,
+                                                                 65535,
+                                                                 Some(10),
+                                                                 Some(10))
                 .unwrap();
 
             udp_rt.spawn(async move {

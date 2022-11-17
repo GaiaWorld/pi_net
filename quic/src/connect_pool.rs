@@ -4,6 +4,7 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::time::{Instant, Duration};
 use std::io::{Error, Result, ErrorKind};
+use std::thread;
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use crossbeam_channel::{Sender, Receiver, unbounded};
@@ -48,6 +49,7 @@ pub struct QuicSocketPool<S: Socket = UdpSocket> {
     expired:                HashMap<usize, u64>,                                        //已到期连接唯一id缓冲
     close_sent:             Sender<QuicCloseEvent>,                                     //关闭事件的发送器
     close_recv:             Receiver<QuicCloseEvent>,                                   //关闭事件的接收器
+    timeout:                Option<usize>,                                              //事件循环间隔时长
 }
 
 impl<S: Socket> QuicSocketPool<S> {
@@ -59,7 +61,8 @@ impl<S: Socket> QuicSocketPool<S> {
                write_sent: Sender<(ConnectionHandle, Transmit)>,
                write_recv: Receiver<(ConnectionHandle, Transmit)>,
                service: Arc<dyn AsyncService<S>>,
-               clock: Instant) -> Self {
+               clock: Instant,
+               timeout: Option<usize>) -> Self {
         let sockets = DashMap::default();
         let (ready_sent, ready_recv) = unbounded();
         let (sender_sent, sender_recv) = unbounded();
@@ -88,6 +91,7 @@ impl<S: Socket> QuicSocketPool<S> {
             expired,
             close_sent,
             close_recv,
+            timeout,
         }
     }
 
@@ -106,6 +110,8 @@ fn event_loop<S>(rt: LocalTaskRuntime<()>,
                  mut pool: QuicSocketPool<S>) -> LocalBoxFuture<'static, ()>
     where S: Socket {
     async move {
+        let now = Instant::now();
+
         handle_udp_accepted(&rt, &mut pool);
 
         poll_timer(&mut pool);
@@ -119,6 +125,14 @@ fn event_loop<S>(rt: LocalTaskRuntime<()>,
         handle_streams(&rt, &mut pool);
 
         handle_close(&rt, &mut pool);
+
+        if let Some(timeout) = pool.timeout {
+            //如果事件循环执行过快，则强制休眠指定时长
+            let sleep_timeout = timeout
+                .checked_sub(now.elapsed().as_millis() as usize)
+                .unwrap_or(0);
+            thread::sleep(Duration::from_millis(sleep_timeout as u64));
+        }
 
         rt.spawn(event_loop(rt.clone(), pool));
     }.boxed_local()

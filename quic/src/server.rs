@@ -124,7 +124,8 @@ impl<S: Socket> QuicListener<S> {
                                config: EndpointConfig,
                                readed_read_size_limit: usize,
                                readed_write_size_limit: usize,
-                               service: Arc<dyn QuicAsyncService<S>>) -> Result<Self> {
+                               service: Arc<dyn QuicAsyncService<S>>,
+                               timeout: Option<usize>) -> Result<Self> {
         match load_certs(server_certs_path) {
             Err(e) => {
                 //加载指定的证书失败，则立即返回错误原因
@@ -170,7 +171,8 @@ impl<S: Socket> QuicListener<S> {
                                                                            write_sent,
                                                                            write_recv,
                                                                            service.clone(),
-                                                                           clock);
+                                                                           clock,
+                                                                           timeout);
                                     connect_pool.run(rt);
                                     pool_id += 1; //更新连接池唯一id
                                 }
