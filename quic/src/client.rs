@@ -504,6 +504,9 @@ struct InnerQuicClient<S: Socket> {
     close_events:               DashMap<usize, AsyncValue<Result<()>>>,                                                                 //Quic关闭事件表
 }
 
+unsafe impl<S: Socket> Send for InnerQuicClient<S> {}
+unsafe impl<S: Socket> Sync for InnerQuicClient<S> {}
+
 // Quic客户端服务
 #[derive(Clone)]
 struct QuicClientService<S: Socket = UdpSocket> {
