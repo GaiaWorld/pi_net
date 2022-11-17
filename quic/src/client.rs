@@ -455,63 +455,16 @@ impl<S: Socket> QuicClient<S> {
         let uid = connection_handle.0;
         if let Some((_uid, connection)) = self.0.connections.remove(&uid) {
             //指定唯一id的Udp连接存在，则开始关闭
-            let rt = &self.0.runtimes[uid % self.0.runtimes.len()];
             let value = AsyncValue::new();
-            let value_copy = value.clone();
-            let client = self.clone();
-            rt.spawn(async move {
-                //注册指定连接的关闭事件监听器
-                let close_reason = AsyncValue::new();
-                client.0.close_events.insert(uid, close_reason.clone());
+            self.0.close_events.insert(uid, value.clone()); //注册指定连接的关闭事件监听器
 
-                if let Err(e) = connection.0.handle.close(code, reason) {
-                    //关闭连接失败，则立即返回错误原因
-                    client.0.close_events.remove(&uid); //注销指定连接的关闭事件监听器
-                    value_copy.set(Err(e));
-                    return;
-                }
+            if let Err(e) = connection.0.handle.close(code, reason) {
+                //关闭连接失败，则立即返回错误原因
+                self.0.close_events.remove(&uid); //注销指定连接的关闭事件监听器
+                return Err(e);
+            }
 
-                //返回关闭结果
-                let _ = close_reason.await;
-                value_copy.set(Ok(()));
-            });
-
-            value.await
-        } else {
-            //指定唯一id的Udp连接不存在，则忽略
-            Ok(())
-        }
-    }
-
-    /// 用指定异步运行时，异步关闭指定内部连接句柄的Quic连接
-    pub async fn close_connection_with_runtime<R: AsyncRuntime<()>>(&self,
-                                                                    rt: R,
-                                                                    connection_handle: ConnectionHandle,
-                                                                    code: u32,
-                                                                    reason: Result<()>) -> Result<()> {
-        let uid = connection_handle.0;
-        if let Some((_uid, connection)) = self.0.connections.remove(&uid) {
-            //指定唯一id的Udp连接存在，则开始关闭
-            let value = AsyncValue::new();
-            let value_copy = value.clone();
-            let client = self.clone();
-            rt.spawn(rt.alloc(), async move {
-                //注册指定连接的关闭事件监听器
-                let close_reason = AsyncValue::new();
-                client.0.close_events.insert(uid, close_reason.clone());
-
-                if let Err(e) = connection.0.handle.close(code, reason) {
-                    //关闭连接失败，则立即返回错误原因
-                    client.0.close_events.remove(&uid); //注销指定连接的关闭事件监听器
-                    value_copy.set(Err(e));
-                    return;
-                }
-
-                //返回关闭结果
-                let _ = close_reason.await;
-                value_copy.set(Ok(()));
-            });
-
+            //返回关闭结果
             value.await
         } else {
             //指定唯一id的Udp连接不存在，则忽略
@@ -812,20 +765,6 @@ impl<S: Socket> QuicClientConnection<S> {
             .close_connection(self.get_connection_handle().clone(),
                               code,
                               reason).await
-    }
-
-    /// 用户指定异步运行时，线程安全的异步关闭连接
-    pub async fn close_with_runtime<R: AsyncRuntime<()>>(self,
-                                                         rt: R,
-                                                         code: u32,
-                                                         reason: Result<()>) -> Result<()> {
-        self
-            .0
-            .client
-            .close_connection_with_runtime(rt,
-                                           self.get_connection_handle().clone(),
-                                           code,
-                                           reason).await
     }
 }
 
