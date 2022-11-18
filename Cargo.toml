@@ -13,4 +13,5 @@ members = [
   "rpc",
   "async_httpc",
   "async_wsc",
+  "quic",
 ]
