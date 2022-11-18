@@ -322,3 +322,12 @@ struct InnerHibernate<S: Socket> {
     waker_status:   AtomicU8,                   //唤醒状态
     result:         AsyncWaitResult<()>,        //结果值
 }
+
+///
+/// Quic客户端定时器事件
+///
+#[derive(Debug)]
+pub enum QuicClientTimerEvent {
+    UdpConnect(usize),  //建立Udp连接
+    QuicConnect(usize), //建立Quic连接
+}

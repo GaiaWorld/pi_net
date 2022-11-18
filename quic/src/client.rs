@@ -15,8 +15,10 @@ use dashmap::DashMap;
 use bytes::{Buf, Bytes, BytesMut};
 use rustls;
 use log::error;
+use pi_async::prelude::SpinLock;
 
 use pi_hash::XHashMap;
+use pi_cancel_timer::Timer;
 use pi_async::rt::{AsyncRuntime, serial::AsyncValue,
                    serial_local_thread::LocalTaskRuntime};
 use udp::{Socket, AsyncService, SocketHandle,
@@ -27,7 +29,7 @@ use udp::{Socket, AsyncService, SocketHandle,
 use crate::{AsyncService as QuicAsyncService, SocketHandle as QuicSocketHandle, SocketEvent,
             connect::QuicSocket,
             connect_pool::QuicSocketPool,
-            utils::QuicSocketReady};
+            utils::{QuicSocketReady, QuicClientTimerEvent}};
 
 
 /// 默认的读取块大小，单位字节
@@ -83,7 +85,7 @@ impl<S: Socket> AsyncService<S> for QuicClient<S> {
                      result: Result<()>) -> LocalBoxFuture<'static, ()> {
         if let Ok(_) = result {
             //建立Udp连接成功
-            if let Some((_udp_connect_uid, (remote, hostname, client_config, value))) = self.0.wait_udp_connects.remove(&udp_handle.get_uid()) {
+            if let Some((udp_connect_uid, (remote, hostname, client_config, timeout, now, value))) = self.0.wait_udp_connects.remove(&udp_handle.get_uid()) {
                 //有Quic连接正在等待Udp连接建立
                 let config = if let Some(cfg) = client_config {
                     cfg
@@ -104,24 +106,42 @@ impl<S: Socket> AsyncService<S> for QuicClient<S> {
                                                                 udp_handle.get_local(),
                                                                 e))));
 
-                        error!("Create quic connection failed, hostname: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
-                            hostname,
-                            udp_handle.get_remote(),
-                            udp_handle.get_local(),
-                            e);
+                        //立即返回连接错误原因
+                        value.set(Err(Error::new(ErrorKind::Other,
+                                                 format!("Create quic connection failed, hostname: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                                         hostname,
+                                                         udp_handle.get_remote(),
+                                                         udp_handle.get_local(),
+                                                         e))));
                     },
                     Ok((connection_handle, connection)) => {
                         //建立Quic连接成功
-                        self.0.connect_events.insert(connection_handle.0, value); //注册Quic连接事件表
+                        let quic_connect_timeout = timeout.checked_sub(now.elapsed().as_millis() as usize).unwrap_or(0);
+                        if quic_connect_timeout == 0 {
+                            //没有剩余连接时长，则立即关闭当前Udp连接，并立即返回连接错误原因
+                            udp_handle.close(Err(Error::new(ErrorKind::Other,
+                                                            format!("Create quic connection failed, hostname: {:?}, remote: {:?}, local: {:?}, reason: Connect quic timeout",
+                                                                    hostname,
+                                                                    udp_handle.get_remote(),
+                                                                    udp_handle.get_local()))));
 
-                        //将Quic Socket路由到连接池
-                        let sender = &self.0.router[connection_handle.0 % self.0.router.len()];
-                        sender.send(QuicSocket::new(udp_handle,
-                                                    connection_handle,
-                                                    connection,
-                                                    self.0.readed_read_size_limit,
-                                                    self.0.readed_write_size_limit,
-                                                    self.0.clock));
+                            value.set(Err(Error::new(ErrorKind::TimedOut, "Connect quic timeout")));
+                        } else {
+                            //还有剩余连接时长，则设置Quic连接的超时时长
+                            self.0.timer.lock().push(quic_connect_timeout, QuicClientTimerEvent::QuicConnect(connection_handle.0));
+
+                            //注册Quic连接事件表
+                            self.0.connect_events.insert(connection_handle.0, (udp_connect_uid, value));
+
+                            //将Quic Socket路由到连接池
+                            let sender = &self.0.router[connection_handle.0 % self.0.router.len()];
+                            sender.send(QuicSocket::new(udp_handle,
+                                                        connection_handle,
+                                                        connection,
+                                                        self.0.readed_read_size_limit,
+                                                        self.0.readed_write_size_limit,
+                                                        self.0.clock));
+                        }
                     },
                 }
             }
@@ -257,6 +277,7 @@ impl<S: Socket> QuicClient<S> {
                readed_write_size_limit: usize,
                udp_read_packet_size: usize,
                udp_write_packet_size: usize,
+               connect_timeout: usize,
                udp_timeout: Option<usize>,
                quic_timeout: Option<usize>) -> Result<Self> {
         if runtimes.is_empty() {
@@ -280,7 +301,7 @@ impl<S: Socket> QuicClient<S> {
         };
 
         //启动Udp客户端，有且只允许有一个运行时
-        let udp_client = UdpClient::new(vec![udp_client_runtime],
+        let udp_client = UdpClient::new(vec![udp_client_runtime.clone()],
                                         1024,
                                         1024,
                                         udp_read_packet_size,
@@ -341,8 +362,10 @@ impl<S: Socket> QuicClient<S> {
         let connections = DashMap::new();
         let connect_events = DashMap::new();
         let close_events = DashMap::new();
+        let timer = SpinLock::new(Timer::<QuicClientTimerEvent, 100, 60, 3>::default());
 
         let inner = InnerQuicClient {
+            udp_client_runtime: udp_client_runtime.clone(),
             udp_client,
             runtimes,
             endpoint_event_recv,
@@ -359,11 +382,17 @@ impl<S: Socket> QuicClient<S> {
             wait_udp_connects,
             connect_events,
             close_events,
+            timer,
+            connect_timeout,
         };
         let client = QuicClient(Arc::new(inner));
         unsafe {
             *client.0.service.client.get() = Some(client.clone());
         }
+
+        //启动客户端定时器
+        let client_copy = client.clone();
+        udp_client_runtime.spawn(poll_timer(client_copy));
 
         Ok(client)
     }
@@ -377,6 +406,7 @@ impl<S: Socket> QuicClient<S> {
                                           readed_write_size_limit: usize,
                                           udp_read_packet_size: usize,
                                           udp_write_packet_size: usize,
+                                          connect_timeout: usize,
                                           udp_timeout: Option<usize>,
                                           quic_timeout: Option<usize>) -> Result<Self> {
         let root_cert = fs::read(root_cert_path)?;
@@ -388,6 +418,7 @@ impl<S: Socket> QuicClient<S> {
                   readed_write_size_limit,
                   udp_read_packet_size,
                   udp_write_packet_size,
+                  connect_timeout,
                   udp_timeout,
                   quic_timeout)
     }
@@ -407,14 +438,35 @@ impl<S: Socket> QuicClient<S> {
                          local: SocketAddr,
                          remote: SocketAddr,
                          hostname: &str,
-                         config: Option<ClientConfig>) -> Result<QuicClientConnection<S>> {
+                         config: Option<ClientConfig>,
+                         timeout: Option<usize>) -> Result<QuicClientConnection<S>> {
         let udp_connect_uid = self.0.udp_client.alloc_connection_uid();
         let connect_value = AsyncValue::new();
         let connect_value_copy = connect_value.clone();
+
+        let connect_timeout = if let Some(connect_timeout) = timeout {
+            //设置指定的连接超时时长
+            if connect_timeout == 0 {
+                //指定的连接超时时长过短，则使用默认的连接超时时长
+                self.0.timer.lock().push(self.0.connect_timeout, QuicClientTimerEvent::UdpConnect(udp_connect_uid));
+                self.0.connect_timeout
+            } else {
+                self.0.timer.lock().push(connect_timeout, QuicClientTimerEvent::UdpConnect(udp_connect_uid));
+                connect_timeout
+            }
+        } else {
+            //没有指定的连接超时时长，则使用默认的连接超时时长
+            self.0.timer.lock().push(self.0.connect_timeout, QuicClientTimerEvent::UdpConnect(udp_connect_uid));
+            self.0.connect_timeout
+        };
+
+        //注册等待Udp连接的Quic连接
         self
             .0
             .wait_udp_connects
-            .insert(udp_connect_uid, (remote, hostname.to_string(), config, connect_value_copy)); //注册等待Udp连接的Quic连接
+            .insert(udp_connect_uid,
+                    (remote, hostname.to_string(), config, connect_timeout, Instant::now(), connect_value_copy));
+
         let quic_client = self.clone();
         if let Err(e) = self.0.udp_client.connect_with_uid(udp_connect_uid,
                                                            local,
@@ -477,24 +529,67 @@ impl<S: Socket> QuicClient<S> {
     }
 }
 
+// 在客户端所在的Udp客户端运行时中，异步推动定时器
+fn poll_timer<S: Socket>(client: QuicClient<S>) -> LocalBoxFuture<'static, ()> {
+    async move {
+        let current_time = client.0.clock.elapsed().as_millis() as u64;
+        if client.0.timer.lock().is_ok(current_time) {
+            //需要继续获取超时的Udp连接唯一id
+            loop {
+                let event = if let Some((_key, event)) = client.0.timer.lock().pop_kv(current_time) {
+                    event
+                } else {
+                    break;
+                };
+
+                match event {
+                    QuicClientTimerEvent::UdpConnect(udp_connect_uid) => {
+                        //Udp连接超时事件
+                        if let Some((_, (_, _, _, _, _, connect_value))) = client.0.wait_udp_connects.remove(&udp_connect_uid) {
+                            //指定的Udp连接超时，则立即返回错误原因
+                            connect_value.set(Err(Error::new(ErrorKind::TimedOut, "Connect udp timeout")));
+                        }
+                    },
+                    QuicClientTimerEvent::QuicConnect(quic_connect_uid) => {
+                        //Quic连接超时事件
+                        if let Some((_, (udp_connect_uid, connect_value))) = client.0.connect_events.remove(&quic_connect_uid) {
+                            //指定的Udp连接超时，则立即关闭对应的Udp连接，并立即返回错误原因
+                            client.0.udp_client.close_connection(udp_connect_uid, Err(Error::new(ErrorKind::TimedOut,
+                                                                                                 "Connect quic timeout")));
+
+                            connect_value.set(Err(Error::new(ErrorKind::TimedOut, "Connect quic timeout")));
+                        }
+                    },
+                }
+            }
+
+        }
+
+        client.0.udp_client_runtime.spawn(poll_timer(client.clone()));
+    }.boxed_local()
+}
+
 //内部Quic客户端
 struct InnerQuicClient<S: Socket> {
-    udp_client:                 UdpClient<S>,                                                                                           //Udp客户端
-    runtimes:                   Vec<LocalTaskRuntime<()>>,                                                                              //连接运行时
-    endpoint_event_recv:        Receiver<(ConnectionHandle, EndpointEvent)>,                                                            //Quic客户端端点事件接收器
-    event_sents:                XHashMap<usize, Sender<(ConnectionHandle, ConnectionEvent)>>,                                           //Socket事件发送器表
-    write_sents:                XHashMap<usize, Sender<(ConnectionHandle, Transmit)>>,                                                  //Socket发送事件发送器表
-    readed_read_size_limit:     usize,                                                                                                  //连接已读读缓冲大小限制
-    readed_write_size_limit:    usize,                                                                                                  //连接已读写缓冲大小限制
-    end_point:                  Rc<UnsafeCell<Endpoint>>,                                                                               //Quic端点
-    default_config:             ClientConfig,                                                                                           //默认的客户端配置
-    clock:                      Instant,                                                                                                //内部时钟
-    connections:                DashMap<usize, QuicClientConnection<S>>,                                                                //Quic连接表
-    service:                    Arc<QuicClientService<S>>,                                                                              //Quic客户端服务
-    router:                     Vec<Sender<QuicSocket<S>>>,                                                                             //Quic连接路由器
-    wait_udp_connects:          DashMap<usize, (SocketAddr, String, Option<ClientConfig>, AsyncValue<Result<QuicSocketHandle<S>>>)>,    //等待Udp连接表
-    connect_events:             DashMap<usize, AsyncValue<Result<QuicSocketHandle<S>>>>,                                                //Quic连接事件表
-    close_events:               DashMap<usize, AsyncValue<Result<()>>>,                                                                 //Quic关闭事件表
+    udp_client_runtime:         LocalTaskRuntime<()>,                                                                                               //Udp客户端运行时
+    udp_client:                 UdpClient<S>,                                                                                                       //Udp客户端
+    runtimes:                   Vec<LocalTaskRuntime<()>>,                                                                                          //连接运行时
+    endpoint_event_recv:        Receiver<(ConnectionHandle, EndpointEvent)>,                                                                        //Quic客户端端点事件接收器
+    event_sents:                XHashMap<usize, Sender<(ConnectionHandle, ConnectionEvent)>>,                                                   //Socket事件发送器表
+    write_sents:                XHashMap<usize, Sender<(ConnectionHandle, Transmit)>>,                                                          //Socket发送事件发送器表
+    readed_read_size_limit:     usize,                                                                                                              //连接已读读缓冲大小限制
+    readed_write_size_limit:    usize,                                                                                                              //连接已读写缓冲大小限制
+    end_point:                  Rc<UnsafeCell<Endpoint>>,                                                                                           //Quic端点
+    default_config:             ClientConfig,                                                                                                       //默认的客户端配置
+    clock:                      Instant,                                                                                                            //内部时钟
+    connections:                DashMap<usize, QuicClientConnection<S>>,                                                                            //Quic连接表
+    service:                    Arc<QuicClientService<S>>,                                                                                          //Quic客户端服务
+    router:                     Vec<Sender<QuicSocket<S>>>,                                                                                         //Quic连接路由器
+    wait_udp_connects:          DashMap<usize, (SocketAddr, String, Option<ClientConfig>, usize, Instant, AsyncValue<Result<QuicSocketHandle<S>>>)>,   //等待Udp连接表
+    connect_events:             DashMap<usize, (usize, AsyncValue<Result<QuicSocketHandle<S>>>)>,                                                            //Quic连接事件表
+    close_events:               DashMap<usize, AsyncValue<Result<()>>>,                                                                             //Quic关闭事件表
+    timer:                      SpinLock<Timer<QuicClientTimerEvent, 100, 60, 3>>,                                                                  //定时器
+    connect_timeout:            usize,                                                                                                              //默认的连接超时时长
 }
 
 unsafe impl<S: Socket> Send for InnerQuicClient<S> {}
@@ -516,7 +611,7 @@ impl<S: Socket> QuicAsyncService<S> for QuicClientService<S> {
                         result: Result<()>) -> LocalBoxFuture<'static, ()> {
         unsafe {
             if let Some(client) = &*self.client.get() {
-                if let Some((_uid, value)) = client.0.connect_events.remove(&handle.get_connection_handle().0) {
+                if let Some((_quic_connect_uid, (_udp_connect_uid, value))) = client.0.connect_events.remove(&handle.get_connection_handle().0) {
                     //正在等待Quic连接的结果
                     if let Err(e) = result {
                         //Quic连接失败，则关闭Udp连接，并立即返回错误原因

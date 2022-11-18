@@ -446,6 +446,7 @@ fn test_client() {
                                                                  65535,
                                                                  65535,
                                                                  65535,
+                                                                 5000,
                                                                  Some(10),
                                                                  None)
                 .unwrap();
@@ -454,6 +455,7 @@ fn test_client() {
                 match client.connect("127.0.0.1:5000".parse().unwrap(),
                                      "127.0.0.1:38080".parse().unwrap(),
                                      "test.17youx.cn",
+                                     None,
                                      None).await {
                     Err(e) => {
                         println!("!!!!!!Quic client connect failed, reason: {:?}", e);
