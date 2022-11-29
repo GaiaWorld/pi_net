@@ -511,7 +511,7 @@ fn test_http_hosts() {
 
     let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(80,
-                 HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 10000000).new_service());
+                 HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 10000).new_service());
     let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
 
@@ -522,8 +522,8 @@ fn test_http_hosts() {
                                1024 * 1024,
                                1024,
                                16,
-                               16384,
-                               16384,
+                               65535,
+                               65535,
                                Some(10)) {
         Err(e) => {
             println!("!!!> Http Listener Bind Error, reason: {:?}", e);
@@ -662,7 +662,7 @@ fn test_https_hosts() {
                                            512,
                                            false,
                                            "").unwrap();
-    let mut config = SocketConfig::with_tls("0.0.0.0", &[(38080, tls_config)]);
+    let mut config = SocketConfig::with_tls("0.0.0.0", &[(443, tls_config)]);
 
     match SocketListener::bind(vec![rt],
                                factory,
