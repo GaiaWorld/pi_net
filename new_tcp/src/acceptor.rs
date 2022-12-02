@@ -59,11 +59,10 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
         for (addr, tls_cfg) in addrs {
             match TcpListener::bind(addr.clone()) {
                 Err(e) => {
-                    //绑定指定地址失败，则继续绑定其它地址
-                    warn!("Tcp acceptor bind address failed, addr: {:?}, reason: {:?}",
-                        addr,
-                        e);
-                    len -= 1;
+                    //绑定指定地址失败，则立即抛出异常
+                    panic!("Tcp acceptor bind address failed, addr: {:?}, reason: {:?}",
+                           addr,
+                           e);
                 },
                 Ok(mut listener) => {
                     //绑定指定地址成功，则为地址绑定连接上下文
