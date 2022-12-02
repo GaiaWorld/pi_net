@@ -761,7 +761,7 @@ impl<S: Socket> WsFrame<S> {
                 }
 
                 if is_first {
-                    let head = WsHead::from(buf.copy_to_bytes(ready_len).as_ref());
+                    let head = WsHead::from(buf.copy_to_bytes(WsHead::READ_HEAD_LEN).as_ref());
                     match head.need_size() {
                         0 => {
                             //头已读完成
@@ -840,7 +840,7 @@ impl<S: Socket> WsFrame<S> {
                     }
 
                     //负载读完成
-                    frame.from_payload(buf.copy_to_bytes(ready_len).as_ref());
+                    frame.from_payload(buf.copy_to_bytes(frame.get_head().len() as usize).as_ref());
 
                     return;
                 } else {
