@@ -139,16 +139,31 @@ fn event_loop<S, A>(rt: LocalTaskRuntime<()>,
         handle_write_event(&mut pool).await;
 
         unsafe {
+            let mut is_interrupted = false;
             if let Err(e) = (&mut *pool
                 .poll
                 .get())
                 .poll(&mut events, poll_timeout.clone()) {
+                if e.kind() != ErrorKind::Interrupted {
                     //轮询连接事件错误，则立即退出Tcp连接事件循环
                     error!("Tcp socket pool poll failed, timeout: {:?}, ports: {:?}, reason: {:?}",
                         poll_timeout,
                         pool.name,
                         e);
                     return;
+                }
+
+                is_interrupted = true;
+            }
+
+            if is_interrupted {
+                //轮询连接事件被中断，则继续异步调用Tcp连接事件循环
+                let event_loop = event_loop(rt.clone(),
+                                            pool,
+                                            event_size,
+                                            poll_timeout);
+                rt.spawn(event_loop);
+                return;
             }
         }
 

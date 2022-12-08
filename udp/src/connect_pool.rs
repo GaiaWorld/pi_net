@@ -115,15 +115,30 @@ fn event_loop<S, A>(rt: LocalTaskRuntime<()>,
         let mut events = Events::with_capacity(event_size);
         handle_binded(&rt, &mut pool);
 
+        let mut is_interrupted = false;
         if let Err(e) = pool
             .poll
             .lock()
             .poll(&mut events, poll_timeout.clone()) {
-            //轮询连接事件错误，则立即退出Udp连接事件循环
-            error!("Udp socket pool poll failed, timeout: {:?}, ports: {:?}, reason: {:?}",
-                poll_timeout,
-                pool.name,
-                e);
+            if e.kind() != ErrorKind::Interrupted {
+                //轮询连接事件错误，则立即退出Udp连接事件循环
+                error!("Udp socket pool poll failed, timeout: {:?}, ports: {:?}, reason: {:?}",
+                    poll_timeout,
+                    pool.name,
+                    e);
+                return;
+            }
+
+            is_interrupted = true;
+        }
+
+        if is_interrupted {
+            //轮询连接事件被中断，继续异步调用Udp连接事件循环
+            let event_loop = event_loop(rt.clone(),
+                                        pool,
+                                        event_size,
+                                        poll_timeout);
+            rt.spawn(event_loop);
             return;
         }
 
