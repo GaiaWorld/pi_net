@@ -154,6 +154,8 @@ fn event_loop<S, A>(rt: LocalTaskRuntime<()>,
                 }
 
                 is_interrupted = true;
+            } else {
+                is_interrupted = false;
             }
 
             if is_interrupted {

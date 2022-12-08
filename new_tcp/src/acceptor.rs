@@ -186,6 +186,8 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
             }
 
             is_interrupted = true;
+        } else {
+            is_interrupted = false;
         }
 
         if is_interrupted {
