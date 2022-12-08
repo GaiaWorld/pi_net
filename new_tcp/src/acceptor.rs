@@ -172,15 +172,24 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
 
     let receiver = acceptor.receiver.clone();
 
+    let mut is_interrupted = false;
     let acceptor_name = acceptor.name.clone();
     let mut events = Events::with_capacity(event_size);
     loop {
         if let Err(e) = acceptor.poll.poll(&mut events, poll_timeout) {
-            warn!("Tcp acceptor poll failed, timeout: {:?}, ports: {:?}, reason: {:?}",
-                poll_timeout,
-                &acceptor_name,
-                e);
-            break;
+            if e.kind() != ErrorKind::Interrupted {
+                warn!("Tcp acceptor poll failed, timeout: {:?}, ports: {:?}, reason: {:?}",
+                    poll_timeout,
+                    &acceptor_name,
+                    e);
+                break;
+            }
+
+            is_interrupted = true;
+        }
+
+        if is_interrupted {
+            continue;
         }
 
         match receiver.try_recv() {
