@@ -159,6 +159,9 @@ impl<S: Socket> HttpAcceptor<S> {
                                                         handle.get_local()))));
                     return;
                 }
+            } else {
+                //解析连接请求的头失败，则立即退出本次连接接受
+                return;
             }
         }
 
