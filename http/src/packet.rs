@@ -41,7 +41,7 @@ impl UpStreamHeader {
     pub async fn read_header<'h, 'b, S>(handle: SocketHandle<S>,
                                         buf: &'b [u8],
                                         req: &mut Request<'h, 'b>,
-                                        headers: &mut HeaderMap) -> Option<usize>
+                                        headers: &mut HeaderMap) -> Result<Option<usize>>
         where 'b: 'h,
               S: Socket {
         match req.parse(buf) {
@@ -54,7 +54,14 @@ impl UpStreamHeader {
                                                     handle.get_local(),
                                                     buf.len(),
                                                     buf))));
-                return None;
+
+                return Err(Error::new(ErrorKind::Other,
+                                      format!("Http server parse header failed, token: {:?}, remote: {:?}, local: {:?}, reason: parse request header error, buf_len: {:?}, buf: {:?}",
+                                              handle.get_token(),
+                                              handle.get_remote(),
+                                              handle.get_local(),
+                                              buf.len(),
+                                              buf)));
             },
             Ok(ref status) if status.is_partial() => {
                 //部分头数据已到达
@@ -62,16 +69,22 @@ impl UpStreamHeader {
                     Some(ver) if ver != DEFAULT_SUPPORT_HTTP_VERSION => {
                         //不合法的Http版本号
                         handle.close(Err(Error::new(ErrorKind::Other,
-                                                    format!("http server parse header failed, token: {:?}, remote: {:?}, local: {:?}, version: {}, reason: not support http version",
+                                                    format!("Http server parse header failed, token: {:?}, remote: {:?}, local: {:?}, version: {}, reason: not support http version",
                                                             handle.get_token(),
                                                             handle.get_remote(),
                                                             handle.get_local(),
                                                             ver))));
-                        return None;
+
+                        return Err(Error::new(ErrorKind::Other,
+                                              format!("Http server parse header failed, token: {:?}, remote: {:?}, local: {:?}, version: {}, reason: not support http version",
+                                                      handle.get_token(),
+                                                      handle.get_remote(),
+                                                      handle.get_local(),
+                                                      ver)));
                     },
                     _ => {
                         //头数据不完整，则继续读
-                        return None;
+                        return Ok(None);
                     }
                 }
             },
@@ -84,13 +97,22 @@ impl UpStreamHeader {
 
                     if let Err(e) = fill_headers(headers, req) {
                         handle.close(Err(e));
-                        return None;
+
+                        return Err(Error::new(ErrorKind::Other,
+                                              format!("Http server fill header failed, token: {:?}, remote: {:?}, local: {:?}, reason: fill headers error",
+                                                      handle.get_token(),
+                                                      handle.get_remote(),
+                                                      handle.get_local())));
                     }
 
-                    return Some(len);
+                    return Ok(Some(len));
                 }
 
-                return None;
+                Err(Error::new(ErrorKind::Other,
+                               format!("Http server parse header failed, token: {:?}, remote: {:?}, local: {:?}, reason: unknown error",
+                                       handle.get_token(),
+                                       handle.get_remote(),
+                                       handle.get_local())))
             },
         }
     }

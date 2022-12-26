@@ -129,7 +129,8 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
     }
 
     fn response<'a>(&'a self,
-                    context: &'a mut GatewayContext, req: HttpRequest<S>,
+                    context: &'a mut GatewayContext,
+                    req: HttpRequest<S>,
                     resp: HttpResponse)
                     -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let mut response = resp;

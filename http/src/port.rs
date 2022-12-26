@@ -136,37 +136,43 @@ impl<S: Socket> Middleware<S, GatewayContext> for HttpPort {
         let mut body_bufs: Vec<Vec<u8>> = Vec::new();
         let mut response = resp;
         let future = async move {
-            if let Some(body) = response.as_mut_body() {
-                //当前响应有响应体，则持续获取响应体的内容
-                loop {
-                    match body.body().await {
-                        HttpRecvResult::Err(e) => {
-                            //获取Http响应体错误
-                            return MiddlewareResult::Throw(e);
-                        },
-                        HttpRecvResult::Ok(bodys) => {
-                            //获取到的是Http响应体块的后继
-                            for (_index, bin) in bodys {
-                                body_bufs.push(bin);
-                            }
-                        },
-                        HttpRecvResult::Fin(bodys) => {
-                            //获取到的是Http响应体块的尾部，处理后退出循环
-                            body.init(); //未初始化，则初始化响应体
-                            for buf in body_bufs {
-                                body.push(buf.as_slice());
-                            }
-                            for (_index, bin) in bodys {
-                                body.push(bin.as_slice());
-                            }
-                            break;
-                        },
+            if response.is_stream() {
+                //使用流响应，立即完成请求处理，并立即返回当前请求的流响应
+                MiddlewareResult::Break(response)
+            } else {
+                //使用块响应
+                if let Some(body) = response.as_mut_body() {
+                    //当前响应有响应体，则持续获取响应体的内容
+                    loop {
+                        match body.body().await {
+                            HttpRecvResult::Err(e) => {
+                                //获取Http响应体错误
+                                return MiddlewareResult::Throw(e);
+                            },
+                            HttpRecvResult::Ok(bodys) => {
+                                //获取到的是Http响应体块的后继
+                                for (_index, bin) in bodys {
+                                    body_bufs.push(bin);
+                                }
+                            },
+                            HttpRecvResult::Fin(bodys) => {
+                                //获取到的是Http响应体块的尾部，处理后退出循环
+                                body.init(); //未初始化，则初始化响应体
+                                for buf in body_bufs {
+                                    body.push(buf.as_slice());
+                                }
+                                for (_index, bin) in bodys {
+                                    body.push(bin.as_slice());
+                                }
+                                break;
+                            },
+                        }
                     }
                 }
-            }
 
-            //继续响应处理
-            MiddlewareResult::ContinueResponse((req, response))
+                //继续响应处理
+                MiddlewareResult::ContinueResponse((req, response))
+            }
         };
         future.boxed_local()
     }

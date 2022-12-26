@@ -7,6 +7,8 @@ edition = "2018"
 [dependencies]
 futures = "0.3"
 tcp = { package = "new_tcp", path = "../new_tcp" }
+udp = { path = "../udp" }
+quic = { path = "../quic" }
 mqtt = { path = "../mqtt" }
 pi_async = "0.5"
 pi_handler = "0.1"

@@ -8,6 +8,7 @@ use pi_atom::Atom;
 use pi_hash::XHashMap;
 
 use tcp::utils::SocketContext;
+use udp::utils::SocketContext as UdpSocketContext;
 
 ///
 /// 值指针相等
@@ -331,6 +332,73 @@ impl BrokerSession {
 
     /// 获取Mqtt代理会话上下文的可写引用
     pub fn get_context_mut(&mut self) -> &mut SocketContext {
+        &mut self.context
+    }
+}
+
+///
+/// 基于Quic的Mqtt代理会话
+///
+pub struct QuicBrokerSession {
+    client_id:  String,             //客户端id
+    keep_alive: u16,                //连接保持间隔时长，单位秒，服务器端在1.5倍间隔时长内没有收到任何控制报文，则主动关闭连接
+    is_clean:   bool,               //是否清理会话
+    user:       Option<String>,     //用户名
+    pwd:        Option<String>,     //用户密码
+    context:    UdpSocketContext,   //会话上下文
+}
+
+unsafe impl Send for QuicBrokerSession {}
+
+impl QuicBrokerSession {
+    /// 构建Mqtt代理会话
+    pub fn new(client_id: String,
+               keep_alive: u16,
+               is_clean: bool,
+               user: Option<String>,
+               pwd: Option<String>) -> Self {
+        QuicBrokerSession {
+            client_id,
+            keep_alive,
+            is_clean,
+            user,
+            pwd,
+            context: UdpSocketContext::empty(),
+        }
+    }
+
+    /// 获取客户端id
+    pub fn get_client_id(&self) -> &String {
+        &self.client_id
+    }
+
+    /// 获取连接保持间隔时长
+    pub fn get_keep_alive(&self) -> u16 {
+        self.keep_alive
+    }
+
+    /// 是否清理会话
+    pub fn is_clean_session(&self) -> bool {
+        self.is_clean
+    }
+
+    /// 获取用户名
+    pub fn get_user(&self) -> Option<&String> {
+        self.user.as_ref()
+    }
+
+    /// 获取用户密码
+    pub fn get_pwd(&self) -> Option<&String> {
+        self.pwd.as_ref()
+    }
+
+    /// 获取Mqtt代理会话上下文的只读引用
+    pub fn get_context(&self) -> &UdpSocketContext {
+        &self.context
+    }
+
+    /// 获取Mqtt代理会话上下文的可写引用
+    pub fn get_context_mut(&mut self) -> &mut UdpSocketContext {
         &mut self.context
     }
 }

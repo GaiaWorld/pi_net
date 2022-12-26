@@ -1,3 +1,5 @@
+extern crate core;
+
 use std::thread;
 use std::any::Any;
 use std::sync::Arc;
@@ -23,10 +25,10 @@ use udp::{Socket, AsyncService,
           server::{PortsAdapterFactory, SocketListener}};
 
 use quic::{AsyncService as QuicAsyncService, SocketHandle, SocketEvent,
+           connect::QuicSocket,
            server::QuicListener,
            client::QuicClient,
            utils::{QuicSocketReady, load_certs, load_private_key}};
-use quic::connect::QuicSocket;
 
 #[test]
 fn test_quinn() {

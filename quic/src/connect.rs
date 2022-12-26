@@ -20,7 +20,8 @@ use pi_async::{lock::spin_lock::SpinLock,
 
 use udp::{Socket, SocketHandle};
 
-use crate::{SocketHandle as QuicSocketHandle, SocketEvent, utils::{QuicSocketStatus, QuicSocketReady, QuicCloseEvent, Hibernate}};
+use crate::{SocketHandle as QuicSocketHandle, SocketEvent,
+            utils::{QuicSocketStatus, QuicSocketReady, QuicCloseEvent, Hibernate, SocketContext}};
 
 /// 默认的读取块大小，单位字节
 const DEFAULT_READ_BLOCK_LEN: usize = 4096;
@@ -55,8 +56,9 @@ pub struct QuicSocket<S: Socket> {
     ready_sent:         Option<Sender<(ConnectionHandle, QuicSocketReady)>>,                //连接流就绪请求发送器
     clock:              Instant,                                                            //内部时钟
     expired:            Option<Instant>,                                                    //下次到期时间
-    timer_ref:          Option<u64>,                                                        //当前定时器
-    timer_listener:     Option<Sender<(ConnectionHandle, Option<(u64, SocketEvent)>)>>,     //定时事件监听器
+    timer_ref:          Option<u64>,                                                        //内部定时器
+    timer_handle:       Option<u64>,                                                        //外部定时器
+    timer_listener:     Option<Sender<(ConnectionHandle, Option<(usize, SocketEvent)>)>>,   //定时事件监听器
     wait_recv_len:      usize,                                                              //连接需要接收的字节数
     recv_len:           usize,                                                              //连接已接收的字节数
     read_len:           Arc<AtomicUsize>,                                                   //连接读取块大小
@@ -77,6 +79,7 @@ pub struct QuicSocket<S: Socket> {
     hibernate_wakers:   SpinLock<VecDeque<Waker>>,                                          //连接正在休眠时，其它休眠对象的唤醒器队列
     hibernated_queue:   Arc<SpinLock<VecDeque<LocalBoxFuture<'static, ()>>>>,               //连接休眠时任务队列
     socket_handle:      Option<QuicSocketHandle<S>>,                                        //Quic连接句柄
+    context:            Rc<UnsafeCell<SocketContext>>,                                      //Quic连接上下文
     close_reason:       Option<(u32, Result<()>)>,                                          //连接关闭的原因
     close_listener:     Option<Sender<QuicCloseEvent>>,                                     //连接关闭事件监听器
 }
@@ -115,6 +118,7 @@ impl<S: Socket> QuicSocket<S> {
         let hibernate = SpinLock::new(None);
         let hibernate_wakers = SpinLock::new(VecDeque::new());
         let hibernated_queue = Arc::new(SpinLock::new(VecDeque::new()));
+        let context = Rc::new(UnsafeCell::new(SocketContext::empty()));
 
         QuicSocket {
             rt: None,
@@ -129,6 +133,7 @@ impl<S: Socket> QuicSocket<S> {
             clock,
             expired: None,
             timer_ref: None,
+            timer_handle: None,
             timer_listener: None,
             wait_recv_len: 0,
             recv_len: 0,
@@ -150,6 +155,7 @@ impl<S: Socket> QuicSocket<S> {
             hibernate_wakers,
             hibernated_queue,
             socket_handle: None,
+            context,
             close_reason: None,
             close_listener: None,
         }
@@ -303,6 +309,11 @@ impl<S: Socket> QuicSocket<S> {
         &mut self.connect
     }
 
+    /// 获取Quic连接上下文只读引用
+    pub fn get_context(&self) -> Rc<UnsafeCell<SocketContext>> {
+        self.context.clone()
+    }
+
     /// 获取内部时钟
     pub fn get_clock(&self) -> &Instant {
         &self.clock
@@ -318,25 +329,51 @@ impl<S: Socket> QuicSocket<S> {
         self.expired = expired;
     }
 
-    /// 获取当前定时器
+    /// 获取内部定时器
     pub fn get_timer_ref(&self) -> Option<u64> {
         self.timer_ref
     }
 
-    /// 设置定时器
+    /// 设置内部定时器
     pub fn set_timer_ref(&mut self, timer_ref: Option<u64>) {
         self.timer_ref = timer_ref;
     }
 
-    /// 移除定时器
+    /// 移除内部定时器
     pub fn unset_timer_ref(&mut self) -> Option<u64> {
         self.timer_ref.take()
     }
 
+    /// 设置连接的超时定时器，同时只允许设置一个定时器，新的定时器会覆盖未超时的旧定时器
+    pub fn set_timeout(&self, timeout: usize, event: SocketEvent) {
+        if let Some(listener) = &self.timer_listener {
+            listener.send((self.handle, Some((timeout, event))));
+        }
+    }
+
+    /// 取消连接的未超时超时定时器
+    pub fn unset_timeout(&self) {
+        if let Some(listener) = &self.timer_listener {
+            listener.send((self.handle, None));
+        }
+    }
+
     /// 设置定时器监听器
     pub fn set_timer_listener(&mut self,
-                              listener: Option<Sender<(ConnectionHandle, Option<(u64, SocketEvent)>)>>) {
+                              listener: Option<Sender<(ConnectionHandle, Option<(usize, SocketEvent)>)>>) {
         self.timer_listener = listener;
+    }
+
+    /// 设置外部定时器句柄，返回上个定时器句柄
+    pub fn set_timer_handle(&mut self, timer_handle: u64) -> Option<u64> {
+        let last_timer_handle = self.unset_timer_handle();
+        self.timer_handle = Some(timer_handle);
+        last_timer_handle
+    }
+
+    /// 取消外部定时器句柄，返回定时器句柄
+    pub fn unset_timer_handle(&mut self) -> Option<u64> {
+        self.timer_handle.take()
     }
 
     /// 设置关闭事件监听器

@@ -1,6 +1,8 @@
 use std::thread;
 use std::sync::Arc;
+use std::str::FromStr;
 use std::time::{Duration, Instant};
+use std::net::{IpAddr, SocketAddr};
 use std::io::{ErrorKind, Result, Error};
 
 use futures::future::{FutureExt, LocalBoxFuture};
@@ -18,12 +20,20 @@ use ws::{server::WebsocketListener,
          connect::WsSocket,
          frame::WsHead,
          utils::{ChildProtocol, WsSession}};
+use udp::{Socket as SocketTrait,
+          connect::UdpSocket,
+          server::{PortsAdapterFactory as UdpPortsAdapterFactory, SocketListener as UdpSocketListener}};
+use quic::{server::QuicListener,
+           utils::QuicSocketReady};
 use mqtt::{server::{register_mqtt_listener, register_mqtt_service,
                     register_mqtts_listener, register_mqtts_service,
-                    MqttBrokerProtocol, WsMqttBrokerFactory, WssMqttBrokerFactory},
+                    register_quic_mqtt_listener, register_quic_mqtt_service,
+                    MqttBrokerProtocol, WsMqttBrokerFactory, WssMqttBrokerFactory, QuicMqttBrokerFactory},
            broker::{MqttBrokerListener, MqttBrokerService},
+           quic_broker::{MqttBrokerListener as QuicMqttBrokerListener, MqttBrokerService as QuicMqttBrokerService},
            session::MqttConnect,
-           utils::{PathTree, BrokerSession}};
+           quic_session::MqttConnect as QuicMqttConnect,
+           utils::{PathTree, BrokerSession, QuicBrokerSession}};
 
 #[test]
 fn test_topic_tree() {
@@ -252,6 +262,157 @@ fn test_tls_mqtt_311() {
         },
         Ok(driver) => {
             println!("===> Mqtt Listener Bind Ok");
+        }
+    }
+
+    thread::sleep(Duration::from_millis(10000000));
+}
+
+struct TestQuicBrokerService;
+
+impl<S: SocketTrait> QuicMqttBrokerListener<S> for TestQuicBrokerService {
+    fn connected(&self,
+                 protocol: MqttBrokerProtocol,
+                 connect: Arc<dyn QuicMqttConnect<S>>) -> LocalBoxFuture<'static, Result<()>> {
+        async move{
+            println!("mqtt connected, connect: {:?}", connect);
+
+            if let Some(hibernate) = connect.hibernate(QuicSocketReady::ReadWrite) {
+                let connect_copy = connect.clone();
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(1000));
+                    while !connect_copy.wakeup(Ok(())) {
+                        //唤醒被阻塞，则休眠指定时间后继续尝试唤醒
+                        thread::sleep(Duration::from_millis(15));
+                    }
+                });
+                let start = Instant::now();
+                if let Err(e) = hibernate.await {
+                    //唤醒后返回错误，则立即返回错误原因
+                    return Err(e);
+                }
+                println!("!!!!!!wakeup hibernate ok, time: {:?}", start.elapsed());
+            }
+
+            println!("mqtt connected finish, connect: {:?}", connect);
+            Ok(())
+        }.boxed_local()
+    }
+
+    fn closed(&self,
+              protocol: MqttBrokerProtocol,
+              connect: Arc<dyn QuicMqttConnect<S>>,
+              context: QuicBrokerSession,
+              reason: Result<()>) -> LocalBoxFuture<'static, ()> {
+        async move {
+            if let Err(e) = reason {
+                return println!("mqtt closed, connect: {:?}, reason: {:?}", connect, e);
+            }
+
+            println!("mqtt closed, connect: {:?}", connect);
+        }.boxed_local()
+    }
+}
+
+impl<S: SocketTrait> QuicMqttBrokerService<S> for TestQuicBrokerService {
+    //指定Mqtt客户端订阅指定主题的服务
+    fn subscribe(&self,
+                 protocol: MqttBrokerProtocol,
+                 connect: Arc<dyn QuicMqttConnect<S>>,
+                 topics: Vec<(String, u8)>) -> LocalBoxFuture<'static, Result<()>> {
+        async move {
+            println!("mqtt subscribe, connect: {:?}", connect);
+
+            if let Some(hibernate) = connect.hibernate(QuicSocketReady::ReadWrite) {
+                let connect_copy = connect.clone();
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(1000));
+                    while !connect_copy.wakeup(Ok(())) {
+                        //唤醒被阻塞，则休眠指定时间后继续尝试唤醒
+                        thread::sleep(Duration::from_millis(15));
+                    }
+                });
+                let start = Instant::now();
+                if let Err(e) = hibernate.await {
+                    //唤醒后返回错误，则立即返回错误原因
+                    return Err(e);
+                }
+                println!("!!!!!!wakeup hibernate ok, time: {:?}", start.elapsed());
+            }
+
+            println!("mqtt subscribe finish, connect: {:?}", connect);
+            Ok(())
+        }.boxed_local()
+    }
+
+    //指定Mqtt客户端取消订阅指定主题的服务
+    fn unsubscribe(&self,
+                   protocol: MqttBrokerProtocol,
+                   connect: Arc<dyn QuicMqttConnect<S>>,
+                   topics: Vec<String>) -> LocalBoxFuture<'static, Result<()>> {
+        async move {
+            println!("mqtt unsubscribe, connect: {:?}", connect);
+            Ok(())
+        }.boxed_local()
+    }
+
+    //指定Mqtt客户端发布指定主题的服务
+    fn publish(&self,
+               protocol: MqttBrokerProtocol,
+               connect: Arc<dyn QuicMqttConnect<S>>,
+               topic: String,
+               payload: Arc<Vec<u8>>) -> LocalBoxFuture<'static, Result<()>> {
+        async move {
+            connect.send(&topic, payload)
+        }.boxed_local()
+    }
+}
+
+#[test]
+fn test_quic_mqtt_311() {
+    //启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
+
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+
+    let broker_name = "test_quic_mqtt";
+    let port = 38080;
+
+    //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
+    let broker_factory = Arc::new(QuicMqttBrokerFactory::new(broker_name,
+                                                             port));
+    let service = Arc::new(TestQuicBrokerService);
+    register_quic_mqtt_listener(broker_name, service.clone());
+    register_quic_mqtt_service(broker_name, service);
+
+    let listener = QuicListener::new(vec![rt.clone()],
+                                     "./tests/7285407__17youx.cn.pem",
+                                     "./tests/7285407__17youx.cn.key",
+                                     Default::default(),
+                                     65535,
+                                     65535,
+                                     broker_factory.new_quic_service(),
+                                     Some(10))
+        .expect("Create quic mqtt listener failed");
+
+    let mut factory = UdpPortsAdapterFactory::<UdpSocket>::new();
+    factory.bind(port, Box::new(listener));
+    let addrs = vec![SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), port)];
+
+    //用于Quic的udp连接监听器，有且只允许有一个运行时
+    match UdpSocketListener::bind(vec![rt],
+                                  factory,
+                                  addrs,
+                                  1024,
+                                  1024,
+                                  0xffff,
+                                  0xffff,
+                                  Some(10)) {
+        Err(e) => {
+            println!("!!!> Quic mqtt Listener Bind Error, reason: {:?}", e);
+        },
+        Ok(driver) => {
+            println!("===> Quic mqtt Listener Bind Ok");
         }
     }
 

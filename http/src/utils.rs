@@ -39,6 +39,11 @@ pub const DEFAULT_HTTP_PORT: u16 = 80;
 pub const DEFAULT_HTTPS_PORT: u16 = 443;
 
 ///
+/// 默认块大小，单位字节
+///
+pub const DEAFULT_CHUNK_SIZE: u64 = 512 * 1024;
+
+///
 /// Http连接异步发送器
 ///
 pub struct HttpSender<T: Send + Sync + 'static> {
@@ -114,6 +119,36 @@ impl<T: Send + Sync + 'static> HttpReceiver<T> {
             }
         }
     }
+
+    /// 异步接收下个消息
+    pub async fn next(&self) -> HttpRecvResult<Option<T>> {
+        match self.receiver.recv_async().await {
+            Err(e) => {
+                HttpRecvResult::Err(Error::new(ErrorKind::BrokenPipe,
+                                               format!("Async recv http response failed, reason: {:?}",
+                                                       e)))
+            },
+            Ok(None) => {
+                //消息为空，则立即关闭当前通道，并返回消息缓冲
+                HttpRecvResult::Fin(None)
+            },
+            Ok(item) => {
+                //消息不为空，则加入消息缓冲
+                HttpRecvResult::Ok(item)
+            },
+        }
+    }
+}
+
+///
+/// 内容编码
+///
+#[derive(Debug, Clone)]
+pub enum ContentEncode {
+    Emtpy,          //无编码
+    Deflate(u32),   //Deflate编码
+    Gzip(u32),      //Gzip编码
+    Br(u32),        //Br编码
 }
 
 ///

@@ -11,11 +11,16 @@ use tcp::{Socket,
           tls_connect::TlsSocket};
 use ws::{connect::WsSocket,
          utils::ChildProtocol};
+use udp::connect::UdpSocket;
+use quic::{SocketHandle, AsyncService};
 
 use crate::{v311::{self, WsMqtt311},
             tls_v311::{self, WssMqtt311},
             broker::{MqttBrokerListener, MqttBrokerService},
-            session::{MqttSession, QosZeroSession}};
+            session::{MqttSession, QosZeroSession},
+            quic_v311::{self, QuicMqtt311},
+            quic_broker::{MqttBrokerListener as QuicMqttBrokerListener, MqttBrokerService as QuicMqttBrokerService},
+            quic_session::MqttSession as QuicMqttSession};
 
 ///
 /// Mqtt代理表和代理映射表
@@ -77,6 +82,28 @@ pub fn register_mqtts_listener(name: &str,
 }
 
 ///
+/// 注册指定Quic Mqtt代理的网络监听器
+///
+pub fn register_quic_mqtt_listener(name: &str,
+                                   listener: Arc<dyn QuicMqttBrokerListener<UdpSocket>>) -> bool {
+    if let Some(broker) = MQTT_BROKERS.read().get(&name.to_string()) {
+        match broker {
+            MqttBrokerProtocol::QuicMqtt311(broker) => {
+                broker
+                    .get_broker()
+                    .register_listener(listener);
+                return true;
+            },
+            _ => {
+                unimplemented!();
+            },
+        }
+    }
+
+    false
+}
+
+///
 /// 注册指定Mqtt代理的网络服务
 ///
 pub fn register_mqtt_service(name: &str,
@@ -121,12 +148,35 @@ pub fn register_mqtts_service(name: &str,
 }
 
 ///
+/// 注册指定Quic Mqtt代理的网络服务
+///
+pub fn register_quic_mqtt_service(name: &str,
+                                  service: Arc<dyn QuicMqttBrokerService<UdpSocket>>) -> bool {
+    if let Some(broker) = MQTT_BROKERS.read().get(&name.to_string()) {
+        match broker {
+            MqttBrokerProtocol::QuicMqtt311(broker) => {
+                broker
+                    .get_broker()
+                    .register_service(service);
+                return true;
+            },
+            _ => {
+                unimplemented!();
+            },
+        }
+    }
+
+    false
+}
+
+///
 /// Mqtt代理
 ///
 #[derive(Clone)]
 pub enum MqttBrokerProtocol {
     WsMqtt311(Arc<WsMqtt311>),      //基于Websocket的Mqtt3.1.1版本的代理
     WssMqtt311(Arc<WssMqtt311>),    //基于Tls Websocket的Mqtt3.1.1版本的代理
+    QuicMqtt311(Arc<QuicMqtt311>),  //基于Quic的Mqtt3.1.1版本的代理
 }
 
 impl MqttBrokerProtocol {
@@ -135,6 +185,7 @@ impl MqttBrokerProtocol {
         match self {
             MqttBrokerProtocol::WsMqtt311(broker) => broker.get_broker_name(),
             MqttBrokerProtocol::WssMqtt311(broker) => broker.get_broker_name(),
+            MqttBrokerProtocol::QuicMqtt311(borker) => borker.get_broker_name(),
         }
     }
 }
@@ -263,6 +314,67 @@ impl WssMqttBrokerFactory {
     }
 }
 
+///
+/// 基于Quic的Mqtt代理工厂
+///
+pub struct QuicMqttBrokerFactory {
+    broker_name:    String, //代理名
+    broker_port:    u16,    //代理端口
+}
+
+impl QuicMqttBrokerFactory {
+    /// 构建指定的基于Websocket的Mqtt代理工厂
+    pub fn new(broker_name: &str,
+               broker_port: u16) -> Self {
+        let broker = Arc::new(QuicMqtt311::with_name(broker_name,
+                                                     QuicMqtt311::MAX_QOS));
+
+        //注册代理
+        MQTT_BROKERS
+            .write()
+            .insert(broker_name.to_string(),
+                    MqttBrokerProtocol::QuicMqtt311(broker));
+        MQTT_BROKERS_MAP
+            .write()
+            .insert(broker_port,
+                    broker_name.to_string());
+
+        QuicMqttBrokerFactory {
+            broker_name: broker_name.to_string(),
+            broker_port,
+        }
+    }
+
+    /// 构建一个Quic服务
+    pub fn new_quic_service(&self) -> Arc<dyn AsyncService<UdpSocket>> {
+        if let Some(broker) = MQTT_BROKERS.read().get(&self.broker_name) {
+            if let MqttBrokerProtocol::QuicMqtt311(broker) = broker {
+                //已存在指定名称的代理，则返回
+                return broker.clone();
+            }
+        }
+
+        //不存在指定名称的代理，则创建代理
+        let broker = Arc::new(
+            QuicMqtt311::with_name(&self.broker_name,
+                                   QuicMqtt311::MAX_QOS)
+        );
+
+        //注册代理
+        MQTT_BROKERS
+            .write()
+            .insert(self.broker_name.clone(),
+                    MqttBrokerProtocol::QuicMqtt311(broker.clone()));
+        MQTT_BROKERS_MAP
+            .write()
+            .insert(self.broker_port,
+                    self.broker_name.clone());
+
+        //返回代理
+        broker
+    }
+}
+
 /// 服务器订阅增加指定的主题
 pub fn add_topic(broker_name: &String,
                  is_public: bool,
@@ -275,6 +387,9 @@ pub fn add_topic(broker_name: &String,
                 broker.get_broker().subscribed(is_public, &topic, qos, retain);
             },
             MqttBrokerProtocol::WssMqtt311(broker) => {
+                broker.get_broker().subscribed(is_public, &topic, qos, retain);
+            },
+            MqttBrokerProtocol::QuicMqtt311(broker) => {
                 broker.get_broker().subscribed(is_public, &topic, qos, retain);
             },
         }
@@ -346,6 +461,39 @@ pub fn publish_topic(broker_name: String,
                     });
 
                     if let Err(e) = tls_v311::broadcast_packet(&connects[..], &packet) {
+                        //发布消息失败，则立即返回错误原因
+                        return Err(Error::new(ErrorKind::BrokenPipe,
+                                              format!("Mqtt broker broadcast failed, broker: {:?}, reason: {:?}",
+                                                      broker_name,
+                                                      e)));
+                    }
+                }
+
+                Ok(())
+            },
+            MqttBrokerProtocol::QuicMqtt311(broker) => {
+                //获取订阅了当前主题的Mqtt会话
+                if let Some(sessions) = broker.get_broker().subscribed(is_public, &topic, qos, retain) {
+                    //获取Mqtt会话的Ws连接
+                    let mut connects: Vec<SocketHandle<UdpSocket>> = Vec::with_capacity(sessions.len());
+                    for session in sessions {
+                        //返回会话绑定的Ws连接
+                        if let Some(connect) = session.get_connect() {
+                            connects.push(connect.clone());
+                        }
+                    };
+
+                    //构建指定负载的报文
+                    let packet = Packet::Publish(Publish {
+                        dup: false,
+                        qos: QoS::AtMostOnce,
+                        retain: false,
+                        topic_name: topic.clone(),
+                        pkid: None,
+                        payload,
+                    });
+
+                    if let Err(e) = quic_v311::broadcast_packet(&connects[..], &packet) {
                         //发布消息失败，则立即返回错误原因
                         return Err(Error::new(ErrorKind::BrokenPipe,
                                               format!("Mqtt broker broadcast failed, broker: {:?}, reason: {:?}",

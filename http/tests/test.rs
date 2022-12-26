@@ -424,7 +424,11 @@ fn test_http_hosts() {
     let parser = Arc::new(DefaultParser::with(128, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
-    let file_load = Arc::new(FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let mut file_load = FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10);
+    file_load.set_min_block_size(Some(8 * 1024 * 1024));
+    file_load.set_chunk_size(Some(512 * 1024));
+    file_load.set_interval(Some(100));
+    let file_load = Arc::new(file_load);
     let files_load = Arc::new(FilesLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
     let batch_load = Arc::new(BatchLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
     let upload = Arc::new(UploadFile::new(file_rt.clone(), "../upload"));
@@ -522,8 +526,8 @@ fn test_http_hosts() {
                                1024 * 1024,
                                1024,
                                16,
-                               65535,
-                               65535,
+                               512 * 1024,
+                               512 * 1024,
                                Some(10)) {
         Err(e) => {
             println!("!!!> Http Listener Bind Error, reason: {:?}", e);
@@ -533,7 +537,7 @@ fn test_http_hosts() {
         }
     }
 
-    thread::sleep(Duration::from_millis(10000000));
+    thread::sleep(Duration::from_millis(100000000));
 }
 
 #[test]

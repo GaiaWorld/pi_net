@@ -1,9 +1,11 @@
+use std::ptr;
 use std::fs::File;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::path::Path;
 use std::cell::RefCell;
 use std::future::Future;
+use std::result::Result as GenResult;
 use std::task::{Context, Poll, Waker};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::io::{BufReader, Result, Error, ErrorKind};
@@ -330,4 +332,104 @@ struct InnerHibernate<S: Socket> {
 pub enum QuicClientTimerEvent {
     UdpConnect(usize),  //建立Udp连接
     QuicConnect(usize), //建立Quic连接
+}
+
+///
+/// 上下文句柄
+///
+pub struct ContextHandle<T: 'static>(Option<Arc<T>>);
+
+unsafe impl<T: 'static> Send for ContextHandle<T> {}
+
+impl<T: 'static> Drop for ContextHandle<T> {
+    fn drop(&mut self) {
+        if let Some(shared) = self.0.take() {
+            //当前上下文指针存在，则释放
+            Arc::into_raw(shared);
+        }
+    }
+}
+
+impl<T: 'static> ContextHandle<T> {
+    /// 获取上下文只读引用
+    pub fn as_ref(&self) -> &T {
+        self.0.as_ref().unwrap().as_ref()
+    }
+
+    /// 获取上下文可写引用
+    pub fn as_mut(&mut self) -> Option<&mut T> {
+        if let Some(shared) = self.0.as_mut() {
+            return Arc::get_mut(shared);
+        }
+
+        None
+    }
+}
+
+///
+/// 通用上下文
+/// 注意，设置上下文后，需要移除当前上下文，上下文才会自动释放
+///
+pub struct SocketContext {
+    inner: *const (), //内部上下文
+}
+
+unsafe impl Send for SocketContext {}
+
+impl SocketContext {
+    /// 创建空的上下文
+    pub fn empty() -> Self {
+        SocketContext {
+            inner: ptr::null(),
+        }
+    }
+
+    /// 判断上下文是否为空
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_null()
+    }
+
+    /// 获取上下文的句柄
+    pub fn get<T>(&self) -> Option<ContextHandle<T>> {
+        if self.is_empty() {
+            return None;
+        }
+
+        Some(unsafe { ContextHandle(Some(Arc::from_raw(self.inner as *const T))) })
+    }
+
+    /// 设置上下文，如果当前上下文不为空，则设置失败
+    pub fn set<T>(&mut self, context: T) -> bool {
+        if !self.is_empty() {
+            return false;
+        }
+
+        self.inner = Arc::into_raw(Arc::new(context)) as *const T as *const ();
+        true
+    }
+
+    /// 移除上下文，如果当前还有未释放的上下文句柄，则返回移除错误，如果当前有上下文，则返回被移除的上下文，否则返回空
+    pub fn remove<T>(&mut self) -> GenResult<Option<T>, &str> {
+        if self.is_empty() {
+            return Ok(None);
+        }
+
+        let inner = unsafe { Arc::from_raw(self.inner as *const T) };
+        if Arc::strong_count(&inner) > 1 {
+            Arc::into_raw(inner); //释放临时共享指针
+            Err("Remove context failed, reason: context shared exist")
+        } else {
+            match Arc::try_unwrap(inner) {
+                Err(inner) => {
+                    Arc::into_raw(inner); //释放临时共享指针
+                    Err("Remove context failed, reason: invalid shared")
+                },
+                Ok(context) => {
+                    //将当前内部上下文设置为空，并返回上下文
+                    self.inner = ptr::null();
+                    Ok(Some(context))
+                },
+            }
+        }
+    }
 }

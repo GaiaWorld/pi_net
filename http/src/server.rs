@@ -131,63 +131,70 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                         let mut req = Request::new(&mut header);
 
                         buf = unsafe { (&*handle.get_read_buffer().get()).as_ref().unwrap().as_ref() }; //填充本地缓冲区
-                        if let Some(_body_offset) = UpStreamHeader::read_header(handle.clone(),
-                                                                                buf,
-                                                                                &mut req,
-                                                                                &mut headers).await {
-                            //解析成功
-                            if let Some(value) = headers.get(HOST) {
-                                if let Ok(host_name) = value.to_str() {
-                                    if let &Some(method) = &req.method {
-                                        if let &Some(path) = &req.path {
-                                            //构建本次Http连接请求
-                                            let url = if handle.is_security() {
-                                                "https://".to_string() + host_name + path
-                                            } else {
-                                                "https://".to_string() + host_name + path
-                                            };
+                        match UpStreamHeader::read_header(handle.clone(),
+                                                          buf,
+                                                          &mut req,
+                                                          &mut headers).await {
+                            Err(_) => {
+                                //解决请求头失败，则立即退出本次请求
+                                return;
+                            },
+                            Ok(None) => {
+                                //解析请求头不完整，则读取后继续解析
+                                continue;
+                            },
+                            Ok(Some(_body_offset)) => {
+                                //解析成功
+                                if let Some(value) = headers.get(HOST) {
+                                    if let Ok(host_name) = value.to_str() {
+                                        if let &Some(method) = &req.method {
+                                            if let &Some(path) = &req.path {
+                                                //构建本次Http连接请求
+                                                let url = if handle.is_security() {
+                                                    "https://".to_string() + host_name + path
+                                                } else {
+                                                    "https://".to_string() + host_name + path
+                                                };
 
-                                            if let Some(request) = HttpRequest::new(handle.clone(),
-                                                                                    method,
-                                                                                    &url,
-                                                                                    Version::HTTP_11,
-                                                                                    headers,
-                                                                                    &[]) {
-                                                http_request_result = Some(request);
-                                                break;
-                                            } else {
-                                                //请求的Url无效，则立即关闭当前Tcp连接
-                                                handle.close(Err(Error::new(ErrorKind::ConnectionRefused,
-                                                                            format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, url: {:?}, reason: invalid url",
-                                                                                    handle.get_token(),
-                                                                                    handle.get_remote(),
-                                                                                    handle.get_local(),
-                                                                                    url))));
-                                                return;
+                                                if let Some(request) = HttpRequest::new(handle.clone(),
+                                                                                        method,
+                                                                                        &url,
+                                                                                        Version::HTTP_11,
+                                                                                        headers,
+                                                                                        &[]) {
+                                                    http_request_result = Some(request);
+                                                    break;
+                                                } else {
+                                                    //请求的Url无效，则立即关闭当前Tcp连接
+                                                    handle.close(Err(Error::new(ErrorKind::ConnectionRefused,
+                                                                                format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, url: {:?}, reason: invalid url",
+                                                                                        handle.get_token(),
+                                                                                        handle.get_remote(),
+                                                                                        handle.get_local(),
+                                                                                        url))));
+                                                    return;
+                                                }
                                             }
                                         }
+                                    } else {
+                                        //请求的主机头无效，则立即关闭当前连接
+                                        handle.close(Err(Error::new(ErrorKind::Other,
+                                                                    format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid host header",
+                                                                            handle.get_token(),
+                                                                            handle.get_remote(),
+                                                                            handle.get_local()))));
+                                        return;
                                     }
                                 } else {
-                                    //请求的主机头无效，则立即关闭当前连接
+                                    //请求没有主机头，则立即关闭当前连接
                                     handle.close(Err(Error::new(ErrorKind::Other,
-                                                                format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid host header",
+                                                                format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: host header not exist",
                                                                         handle.get_token(),
                                                                         handle.get_remote(),
                                                                         handle.get_local()))));
                                     return;
                                 }
-                            } else {
-                                //请求没有主机头，则立即关闭当前连接
-                                handle.close(Err(Error::new(ErrorKind::Other,
-                                                            format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: host header not exist",
-                                                                    handle.get_token(),
-                                                                    handle.get_remote(),
-                                                                    handle.get_local()))));
-                                return;
-                            }
-                        } else {
-                            //解决请求头失败，则立即退出本次请求
-                            return;
+                            },
                         }
                     }
 

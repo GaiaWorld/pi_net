@@ -3,8 +3,10 @@ use std::io::{Error, ErrorKind, Result};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Instant;
 
-use futures::future::{FutureExt, LocalBoxFuture};
+use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
+use futures::StreamExt;
 use https::{
     header::{CONTENT_LENGTH, CONTENT_TYPE},
     StatusCode,
@@ -30,8 +32,9 @@ use crate::{
         is_modified, is_unmodified, request_get_cache, set_cache_resp_headers, CacheRes,
         StaticCache,
     },
-    utils::{trim_path, HttpRecvResult},
+    utils::{DEAFULT_CHUNK_SIZE, HttpRecvResult, trim_path},
 };
+use crate::response::ResponseHandler;
 
 ///
 /// Http文件加载
@@ -45,6 +48,9 @@ pub struct FileLoad {
     is_transform:           bool,                       //设置是否允许客户端更改前端资源内容
     is_only_if_cached:      bool,                       //设置是否要求代理有缓存，则只由代理向客户端提供资源
     max_age:                u64,                        //缓存有效时长
+    min_block_size:         Option<u64>,                //最小分块大小
+    chunk_size:             Option<u64>,                //每个块大小
+    interval:               Option<usize>,              //分块加载块间隔时长
 }
 
 unsafe impl Send for FileLoad {}
@@ -175,7 +181,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FileLoad {
                     resp.header(CONTENT_LENGTH.as_str(), "0");
                     return MiddlewareResult::Break(resp);
                 }
-                Some(path) => {
+                Some((path, size)) => {
                     //文件存在，则异步加载指定文件，并根据文件扩展名，设置Mime
                     let file_mime;
                     if let Some(mime) = mime_guess::from_path(path.as_path()).first() {
@@ -197,10 +203,48 @@ impl<S: Socket> Middleware<S, GatewayContext> for FileLoad {
                         )));
                     }
 
-                    if let Err(e) = async_load_file(self.files_async_runtime.clone(),
-                                                    &resp,
-                                                    path).await {
-                        return MiddlewareResult::Throw(e);
+                    if let Some(min_block_size) = self.min_block_size {
+                        //设置了最小分块大小
+                        if size >= min_block_size {
+                            //需要分块
+                            let chunk_size = if let Some(chunk_size) = self.chunk_size {
+                                //指定了每个块大小
+                                if min_block_size > chunk_size {
+                                    //最小分块大小大于指定的每个块大小
+                                    chunk_size as usize
+                                } else {
+                                    //最小分块大小小于等于指定的每个块大小
+                                    min_block_size as usize
+                                }
+                            } else {
+                                //没有指定每个块大小
+                                if min_block_size > DEAFULT_CHUNK_SIZE {
+                                    //最小分块大小大于默认每个块大小
+                                    DEAFULT_CHUNK_SIZE as usize
+                                } else {
+                                    //最小分块大小小于等于默认每个块大小
+                                    min_block_size as usize
+                                }
+                            };
+                            resp.enable_stream(); //将当前请求的块响应改为流响应
+
+                            //异步分块加载指定文件
+                            async_load_file_chunks(self.files_async_runtime.clone(),
+                                                   &resp,
+                                                   path,
+                                                   chunk_size,
+                                                   self.interval);
+
+                            //立即完成请求处理，并立即返回当前请求的流响应
+                            return MiddlewareResult::Break(resp)
+                        }
+                    } else {
+                        //未设置最小分块大小
+                        if let Err(e) = async_load_file(self.files_async_runtime.clone(),
+                                                        &resp,
+                                                        path).await {
+                            return MiddlewareResult::Throw(e);
+                        }
                     }
                 }
             }
@@ -341,8 +385,26 @@ impl FileLoad {
                 is_transform,
                 is_only_if_cached,
                 max_age: max_age as u64,
+                min_block_size: None,
+                chunk_size: None,
+                interval: None,
             },
         }
+    }
+
+    /// 设置最小分块大小，单位字节
+    pub fn set_min_block_size(&mut self, min_block_size: Option<u64>) {
+        self.min_block_size = min_block_size;
+    }
+
+    /// 设置每个块大小，单位字节
+    pub fn set_chunk_size(&mut self, chunk_size: Option<u64>) {
+        self.chunk_size = chunk_size;
+    }
+
+    /// 设置加载每个块的间隔时长
+    pub fn set_interval(&mut self, interval: Option<usize>) {
+        self.interval = interval;
     }
 }
 
@@ -362,11 +424,11 @@ fn normalize_path(path: &Path) -> PathBuf {
         })
 }
 
-// 获取指定元信息的文件实际路径
-fn get_file_path(file_path: PathBuf, meta: &Metadata) -> Option<PathBuf> {
+// 获取指定元信息的文件实际路径和大小
+fn get_file_path(file_path: PathBuf, meta: &Metadata) -> Option<(PathBuf, u64)> {
     if meta.is_file() {
         //指定路径的文件存在，则返回
-        return Some(file_path);
+        return Some((file_path, meta.len()));
     }
 
     //指定路径的文件不存在，则默认访问指定路径下的index.html
@@ -376,7 +438,7 @@ fn get_file_path(file_path: PathBuf, meta: &Metadata) -> Option<PathBuf> {
         Ok(m) => {
             if m.is_file() {
                 //默认文件存在，则返回
-                Some(index_path)
+                Some((index_path, m.len()))
             } else {
                 None
             }
@@ -456,3 +518,128 @@ async fn async_load_file(files_async_runtime: MultiTaskRuntime<()>,
         "Load file error, reason: invalid response body",
     ))
 }
+
+// 异步分块加载指定文件
+fn async_load_file_chunks(files_async_runtime: MultiTaskRuntime<()>,
+                          resp: &HttpResponse,
+                          file_path: PathBuf,
+                          chunk_size: usize,
+                          interval: Option<usize>) -> Result<()> {
+    if let Some(resp_handler) = resp.get_response_handler() {
+        let path = file_path.clone();
+        let files_async_runtime_copy = files_async_runtime.clone();
+        if let Err(e) = files_async_runtime.spawn(files_async_runtime.alloc(), async move {
+            //调用底层open接口
+            let file = AsyncFile::open(
+                files_async_runtime_copy.clone(),
+                path.clone(),
+                AsyncFileOptions::OnlyRead,
+            )
+                .await;
+            match file {
+                Ok(file) => {
+                    // 获取文件大小
+                    async_load_file_chunk(files_async_runtime_copy,
+                                          resp_handler,
+                                          file_path,
+                                          file,
+                                          0,
+                                          chunk_size,
+                                          interval);
+                }
+                Err(e) => {
+                    warn!("Open http async file failed, file: {:?}, reason: {:?}",
+                        path,
+                        e);
+                    if let Err(e) = resp_handler.finish().await {
+                        warn!("Http body mut finish failed, file: {:?}, reason: {:?}",
+                            path,
+                            e);
+                    }
+                }
+            }
+        }) {
+            warn!("Open http async file failed, reason: {:?}", e);
+        }
+
+        return Ok(());
+    }
+
+    Err(Error::new(
+        ErrorKind::NotFound,
+        "Load file error, reason: invalid response body",
+    ))
+}
+
+// 异步加载指定文件的指定块
+fn async_load_file_chunk(files_async_runtime: MultiTaskRuntime<()>,
+                         resp_handler: ResponseHandler,
+                         file_path: PathBuf,
+                         file: AsyncFile<()>,
+                         chunk_offset: u64,
+                         chunk_size: usize,
+                         interval: Option<usize>) {
+    let files_async_runtime_copy = files_async_runtime.clone();
+    files_async_runtime.spawn(files_async_runtime.alloc(), async move {
+        let now = if let Some(timeout) = interval {
+            //设置了加载间隔时间
+            Some(Instant::now())
+        } else {
+            None
+        };
+
+        let r = file.read(chunk_offset, chunk_size).await;
+        match r {
+            Ok(bin) => {
+                let bin_len = bin.len();
+                if bin_len > 0 {
+                    //读文件成功
+                    if let Err(e) = resp_handler.write(bin).await {
+                        warn!("Write http body failed for file chunk, file: {:?}, reason: {:?}",
+                        file_path,
+                        e);
+                    } else {
+                        //发送文件的块到响应流成功，则继续异步加载指定文件的下个块
+                        if let Some(timeout) = interval {
+                            //设置了加载间隔时间
+                            if let Some(now) = now {
+                                //休眠指定的时间
+                                let real_timeout = timeout
+                                    .checked_sub(now.elapsed().as_millis() as usize)
+                                    .unwrap_or(0);
+                                files_async_runtime_copy.timeout(real_timeout).await;
+                            }
+                        }
+
+                        async_load_file_chunk(files_async_runtime_copy,
+                                              resp_handler,
+                                              file_path,
+                                              file,
+                                              chunk_offset + bin_len as u64,
+                                              chunk_size,
+                                              interval);
+                    }
+                } else {
+                    //读文件结束
+                    if let Err(e) = resp_handler.finish().await {
+                        warn!("Finish http body failed for file chunk, file: {:?}, reason: {:?}",
+                            file_path,
+                            e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Finish http body failed for file chunk, file: {:?}, reason: {:?}",
+                    file_path,
+                    e);
+                if let Err(e) = resp_handler.finish().await {
+                    warn!("Finish http body failed for file chunk, file: {:?}, reason: {:?}",
+                        file_path,
+                        e);
+                }
+            }
+        }
+    });
+}
+
+
