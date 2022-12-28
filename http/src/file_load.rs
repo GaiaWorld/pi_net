@@ -237,6 +237,13 @@ impl<S: Socket> Middleware<S, GatewayContext> for FileLoad {
 
                             //立即完成请求处理，并立即返回当前请求的流响应
                             return MiddlewareResult::Break(resp)
+                        } else {
+                            //不需要分块
+                            if let Err(e) = async_load_file(self.files_async_runtime.clone(),
+                                                            &resp,
+                                                            path).await {
+                                return MiddlewareResult::Throw(e);
+                            }
                         }
                     } else {
                         //未设置最小分块大小

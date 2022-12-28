@@ -103,9 +103,11 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 if let Some(connect) = context.as_mut() {
                     let mut http_request_result = None;
                     let mut buf: &[u8] = &[]; //初始化本地缓冲区
+                    let mut last_bin_len = 0; //初始化本地缓冲区上次长度
                     loop {
                         if let Some(bin) = unsafe { (&mut *handle.get_read_buffer().get()) } {
-                            if bin.remaining() == 0 {
+                            let remaining = bin.remaining();
+                            if remaining == 0 {
                                 //当前缓冲区还没有请求的数据，则异步准备读取后，继续尝试接收请求数据
                                 if let Ok(value) = handle.read_ready(0) {
                                     if value.await == 0 {
@@ -115,6 +117,19 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                                 }
 
                                 continue;
+                            } else if remaining == last_bin_len {
+                                //当前缓冲区的数据还没有更新，则异步准备读取后，继续尝试接收请求数据
+                                if let Ok(value) = handle.read_ready(remaining + 1) {
+                                    if value.await == 0 {
+                                        //当前连接已关闭，则立即退出
+                                        return;
+                                    }
+                                }
+
+                                continue;
+                            } else {
+                                //当前缓冲区有请求的数据或当前缓冲区的数据已更新，则更新本地缓冲区上次长度
+                                last_bin_len = remaining;
                             }
                         } else {
                             //Tcp读缓冲区不存在
