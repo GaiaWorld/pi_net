@@ -429,33 +429,34 @@ impl<S: Socket> MqttBroker<S> {
                 return None;
             }
 
-            //线程安全的确认当前主题，有会话订阅
-            let cache = self
+            if let Some(cache) = self
                 .sub_tab
                 .read()
-                .get(&topic)
-                .unwrap()
-                .clone();
-            let mut w = cache.write();
-            if let Some(session) = w.first.take() {
-                //当前主题的缓存中只有一个订阅会话，则将会话移动到会话表中，首次插入无需排序
-                w.sessions.push(session);
-            }
+                .get(&topic) {
+                //线程安全的确认当前主题，有会话订阅
+                let mut w = cache.write();
+                if let Some(session) = w.first.take() {
+                    //当前主题的缓存中只有一个订阅会话，则将会话移动到会话表中，首次插入无需排序
+                    w.sessions.push(session);
+                }
 
-            //将新会话加入当前主题的订阅缓存的会话表
-            if let Err(index) = w.sessions.binary_search_by(|s| {
-                s.cmp(&session)
-            }) {
-                //不在会话列表中
-                save_topic(self, &session, &topic); //记录当前会话订阅的主题
-                w.sessions.insert(index, session); //插入指定位置，保证列表有序
-            }
+                //将新会话加入当前主题的订阅缓存的会话表
+                if let Err(index) = w.sessions.binary_search_by(|s| {
+                    s.cmp(&session)
+                }) {
+                    //不在会话列表中
+                    save_topic(self, &session, &topic); //记录当前会话订阅的主题
+                    w.sessions.insert(index, session); //插入指定位置，保证列表有序
+                }
 
-            if let Some(retain) = w.retain.as_ref() {
-                return Some(Retain::Single(retain.clone()));
-            }
+                if let Some(retain) = w.retain.as_ref() {
+                    return Some(Retain::Single(retain.clone()));
+                }
 
-            None
+                None
+            } else {
+                None
+            }
         }
     }
 
