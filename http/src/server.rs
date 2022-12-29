@@ -104,7 +104,21 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                     let mut http_request_result = None;
                     let mut buf: &[u8] = &[]; //初始化本地缓冲区
                     let mut last_bin_len = 0; //初始化本地缓冲区上次长度
+                    let mut parse_count = 0; //初始化分析次数
                     loop {
+                        parse_count += 1; //更新分析次数
+                        if parse_count > 16 {
+                            //过多的分析次数，则立即返回错误原因
+                            handle.close(Err(Error::new(ErrorKind::Other,
+                                                        format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, buf_len: {:?}, buf: {:?}, reason: out of parse",
+                                                                handle.get_token(),
+                                                                handle.get_remote(),
+                                                                handle.get_local(),
+                                                                buf.len(),
+                                                                buf))));
+                            return;
+                        }
+
                         if let Some(bin) = unsafe { (&mut *handle.get_read_buffer().get()) } {
                             let remaining = bin.remaining();
                             if remaining == 0 {

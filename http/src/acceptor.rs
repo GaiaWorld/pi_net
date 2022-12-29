@@ -64,7 +64,21 @@ impl<S: Socket> HttpAcceptor<S> {
         let mut http_request_result = None;
         let mut buf: &[u8] = &[]; //初始化本地缓冲区
         let mut last_bin_len = 0; //初始化本地缓冲区上次长度
+        let mut parse_count = 0; //初始化分析次数
         loop {
+            parse_count += 1; //更新分析次数
+            if parse_count > 16 {
+                //过多的分析次数，则立即返回错误原因
+                handle.close(Err(Error::new(ErrorKind::Other,
+                                            format!("Http connect failed, token: {:?}, remote: {:?}, local: {:?}, buf_len: {:?}, buf: {:?}, reason: out of parse",
+                                                    handle.get_token(),
+                                                    handle.get_remote(),
+                                                    handle.get_local(),
+                                                    buf.len(),
+                                                    buf))));
+                return;
+            }
+
             if let Some(bin) = unsafe { (&mut *handle.get_read_buffer().get()) } {
                 let remaining = bin.remaining();
                 if remaining == 0 {
@@ -80,7 +94,8 @@ impl<S: Socket> HttpAcceptor<S> {
                 } else if remaining == last_bin_len {
                     //当前缓冲区的数据还没有更新，则异步准备读取后，继续尝试接收请求数据
                     if let Ok(value) = handle.read_ready(remaining + 1) {
-                        if value.await == 0 {
+                        let value = value.await;
+                        if value == 0 {
                             //当前连接已关闭，则立即退出
                             return;
                         }
