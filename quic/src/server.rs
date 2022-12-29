@@ -8,7 +8,7 @@ use std::io::{Error, Result, ErrorKind};
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use quinn_proto::{EndpointConfig, ServerConfig, Endpoint, EndpointEvent, ConnectionEvent, ConnectionHandle, Transmit};
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Receiver, Sender, unbounded, bounded};
 
 use pi_async::rt::serial_local_thread::LocalTaskRuntime;
 use pi_hash::XHashMap;
@@ -157,7 +157,7 @@ impl<S: Socket> QuicListener<S> {
                                 let mut event_sents = XHashMap::default();
                                 let mut write_sents = XHashMap::default();
                                 for rt in runtimes {
-                                    let (sender, socket_recv) = unbounded();
+                                    let (sender, socket_recv) = bounded(1024);
                                     router.push(sender);
                                     let (sender, read_recv) = unbounded();
                                     event_sents.insert(pool_id, sender);
