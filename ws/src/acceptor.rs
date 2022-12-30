@@ -224,10 +224,26 @@ impl<S: Socket> WsAcceptor<S> {
     pub async fn accept<'h, 'b>(handle: SocketHandle<S>,
                                 acceptor: WsAcceptor<S>,
                                 support_protocol: Arc<dyn ChildProtocol<S>>) {
+        let mut last_bin_len = 0; //初始化本地缓冲区上次长度
+        let mut parse_count = 0; //初始化分析次数
         let mut buf: &[u8] = &[]; //初始化本地缓冲区
         loop {
+            parse_count += 1; //更新分析次数
+            if parse_count > 16 {
+                //过多的分析次数，则立即返回错误原因
+                handle.close(Err(Error::new(ErrorKind::Other,
+                                            format!("Websocket handshake by http parse failed, token: {:?}, remote: {:?}, local: {:?}, buf_len: {:?}, buf: {:?}, reason: out of parse",
+                                                    handle.get_token(),
+                                                    handle.get_remote(),
+                                                    handle.get_local(),
+                                                    buf.len(),
+                                                    buf))));
+                return;
+            }
+
             if let Some(bin) = unsafe { (&mut *handle.get_read_buffer().get()) } {
-                if bin.remaining() == 0 {
+                let remaining = bin.remaining();
+                if remaining == 0 {
                     //当前缓冲区还没有握手请求的数据，则异步准备读取后，继续尝试接收握手数据
                     if let Ok(value) = handle.read_ready(0) {
                         if value.await == 0 {
@@ -237,6 +253,20 @@ impl<S: Socket> WsAcceptor<S> {
                     }
 
                     continue;
+                } else if remaining == last_bin_len {
+                    //当前缓冲区的数据还没有更新，则异步准备读取后，继续尝试接收握手数据
+                    if let Ok(value) = handle.read_ready(remaining + 1) {
+                        let value = value.await;
+                        if value == 0 {
+                            //当前连接已关闭，则立即退出
+                            return;
+                        }
+                    }
+
+                    continue;
+                } else {
+                    //当前缓冲区有请求的数据或当前缓冲区的数据已更新，则更新本地缓冲区上次长度
+                    last_bin_len = remaining;
                 }
             } else {
                 //Tcp读缓冲区不存在
@@ -253,14 +283,15 @@ impl<S: Socket> WsAcceptor<S> {
 
             buf = unsafe { (&*handle.get_read_buffer().get()).as_ref().unwrap().as_ref() }; //填充本地缓冲区
             match req.parse(buf) {
-                Err(e) => {
+                Err(_) => {
                     //解析握手时的Http头错误
                     handle.close(Err(Error::new(ErrorKind::Other,
-                                                format!("Websocket handshake by http parse failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                                format!("Websocket handshake by http parse failed, token: {:?}, remote: {:?}, local: {:?}, buf_len: {:?}, buf: {:?}, reason: parse request header error",
                                                         handle.get_token(),
                                                         handle.get_remote(),
                                                         handle.get_local(),
-                                                        e))));
+                                                        buf.len(),
+                                                        buf))));
                     return;
                 },
                 Ok(ref status) if status.is_partial() => {
@@ -277,14 +308,7 @@ impl<S: Socket> WsAcceptor<S> {
                             return;
                         },
                         _ => {
-                            //握手数据不完整，则强制异步准备读取后，继续尝试接收握手数据
-                            if let Ok(value) = handle.read_ready(0) {
-                                if value.await == 0 {
-                                    //当前连接已关闭，则立即退出
-                                    return;
-                                }
-                            }
-
+                            //握手数据不完整，继续尝试接收握手数据
                             continue;
                         }
                     }
