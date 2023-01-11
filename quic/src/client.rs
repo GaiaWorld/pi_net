@@ -837,6 +837,9 @@ impl<S: Socket> QuicClientConnection<S> {
                 //当前连接已关闭，则立即退出
                 return None;
             }
+        } else {
+            //当前连接的读缓冲中有数据
+            readed_len = remaining;
         }
 
         if let Some(buf) = self.0.handle.get_read_buffer().lock().as_mut() {
