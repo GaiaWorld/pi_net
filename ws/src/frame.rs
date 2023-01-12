@@ -559,6 +559,15 @@ impl WsPayload {
         false
     }
 
+    /// 获取负载大小
+    pub fn len(&self) -> usize {
+        if let WsPayload::Raw(bin) = self {
+            bin.len()
+        } else {
+            0
+        }
+    }
+
     /// 取出负载
     pub fn take(&mut self) -> Self {
         mem::take(self)
@@ -676,6 +685,11 @@ impl<S: Socket> WsFrame<S> {
             //TODO 需要实现压缩
             unimplemented!()
         }
+    }
+
+    /// 获取帧大小
+    pub fn len(&self) -> usize {
+        self.head.len() as usize + self.payload.len()
     }
 
     /// 获取头只读引用

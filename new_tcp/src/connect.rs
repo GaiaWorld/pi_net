@@ -683,7 +683,7 @@ impl Socket for TcpSocket {
         if let Some(rt) = &self.rt {
             let hibernated_queue = self.hibernated_queue.clone();
 
-            rt.spawn(async move {
+            rt.send(async move {
                 loop {
                     let task = {
                         //立即释放锁，防止锁重入

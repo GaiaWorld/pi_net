@@ -199,6 +199,19 @@ impl<S: Socket> WsSocket<S> {
         while unsafe { (&mut *handle.get_read_buffer().get()).as_ref().unwrap().remaining() } > 0 {
             let mut frame = WsFrame::<S>::default();
             WsFrame::read_head(handle, window_bits, &mut frame).await;
+
+            //TODO 临时解决方案...
+            let frame_len = frame.len();
+            if frame.len() > 1024 * 1024 {
+                close::<S>(handle, Err(Error::new(ErrorKind::Other,
+                                                  format!("Websocket Read Failed, token: {:?}, remote: {:?}, local: {:?}, frame_len: {:?}, reason: out of frame",
+                                                          handle.get_token(),
+                                                          handle.get_remote(),
+                                                          handle.get_local(),
+                                                          frame_len))));
+                return;
+            }
+
             frames.push(frame);
         }
 
