@@ -202,7 +202,7 @@ impl<S: Socket> WsSocket<S> {
 
             //TODO 临时解决方案...
             let frame_len = frame.len();
-            if frame.len() > 1024 * 1024 {
+            if frame_len > 1024 * 1024 {
                 close::<S>(handle, Err(Error::new(ErrorKind::Other,
                                                   format!("Websocket Read Failed, token: {:?}, remote: {:?}, local: {:?}, frame_len: {:?}, reason: out of frame",
                                                           handle.get_token(),
