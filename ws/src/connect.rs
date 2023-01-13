@@ -200,19 +200,17 @@ impl<S: Socket> WsSocket<S> {
             let mut frame = WsFrame::<S>::default();
             WsFrame::read_head(handle, window_bits, &mut frame).await;
 
-            //TODO 临时解决方案...
-            let frame_len = frame.len();
-            if frame_len > 1024 * 1024 {
+            frames.push(frame);
+            if frames.len() > 32 {
+                //分帧过多，则立即关闭当前连接
                 close::<S>(handle, Err(Error::new(ErrorKind::Other,
-                                                  format!("Websocket Read Failed, token: {:?}, remote: {:?}, local: {:?}, frame_len: {:?}, reason: out of frame",
+                                                  format!("Websocket Read Failed, token: {:?}, remote: {:?}, local: {:?}, frame_len: {:?}, reason: out of frames",
                                                           handle.get_token(),
                                                           handle.get_remote(),
                                                           handle.get_local(),
-                                                          frame_len))));
+                                                          frames.len()))));
                 return;
             }
-
-            frames.push(frame);
         }
 
         for mut frame in frames {
