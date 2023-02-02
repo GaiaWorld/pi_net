@@ -201,7 +201,7 @@ impl<S: Socket> WsSocket<S> {
             WsFrame::read_head(handle, window_bits, &mut frame).await;
 
             frames.push(frame);
-            if frames.len() > 32 {
+            if frames.len() > 128 {
                 //分帧过多，则立即关闭当前连接
                 close::<S>(handle, Err(Error::new(ErrorKind::Other,
                                                   format!("Websocket Read Failed, token: {:?}, remote: {:?}, local: {:?}, frame_len: {:?}, reason: out of frames",
