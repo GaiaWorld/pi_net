@@ -431,7 +431,6 @@ impl AsyncHttpRequest {
         let method = self.method;
         let request = self.builder;
         let(sender, receiver) = bounded(1);
-        let url_copy = url.clone();
         ASYNC_HTTPC_RUNTIME.spawn(async move {
             let result = request.send().await;
             sender.send(result);
