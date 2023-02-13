@@ -232,11 +232,9 @@ impl AsyncHttpc {
                 self.0.head(url)
             },
             AsyncHttpRequestMethod::Get => {
-                println!("!!!!!!Build request, get url: {}", url);
                 self.0.get(url)
             },
             AsyncHttpRequestMethod::Post => {
-                println!("!!!!!!Build request, post url: {}", url);
                 self.0.post(url)
             },
             AsyncHttpRequestMethod::Put => {
@@ -435,27 +433,23 @@ impl AsyncHttpRequest {
         let(sender, receiver) = bounded(1);
         let url_copy = url.clone();
         ASYNC_HTTPC_RUNTIME.spawn(async move {
-            println!("!!!!!!send request start, url: {}", url_copy);
             let result = request.send().await;
-            println!("!!!!!!send request finish, url: {}", url_copy);
             sender.send(result);
         });
 
         match receiver.recv_async().await {
             Err(e) => {
-                println!("!!!!!!recv response failed, url: {:?}, e: {:?}", url, e);
+                //接收响应失败
                 Err(Error::new(ErrorKind::Other, format!("Async http request failed, method: {:?}, url: {:?}, reason: {:?}", method, url, e)))
             },
             Ok(result) => {
                 match result {
                     Err(e) => {
-                        println!("!!!!!!recv response failed, url: {:?}, e: {:?}", url, e);
-                        //发送请求失败
+                        //接收响应失败
                         Err(Error::new(ErrorKind::Other, format!("Async http request failed, method: {:?}, url: {:?}, reason: {:?}", method, url, e)))
                     },
                     Ok(respone) => {
-                        println!("!!!!!!recv response ok, url: {:?}, len: {:?}", url, respone.content_length());
-                        //发送请求成功
+                        //接收响应成功
                         Ok(AsyncHttpResponse(respone))
                     },
                 }
