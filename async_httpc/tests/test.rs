@@ -1,19 +1,26 @@
+extern crate new_tcp as tcp;
+
 use std::fs;
 use std::thread;
 use std::sync::Arc;
+use std::cell::RefCell;
 use std::time::Duration;
+use std::net::SocketAddr;
 
 use env_logger;
+use futures::future::{FutureExt, LocalBoxFuture};
+use https::HeaderMap;
 use tokio;
 use bytes::{Buf, BufMut};
 
-use pi_async::rt::{AsyncRuntime, multi_thread::{MultiTaskRuntimeBuilder, MultiTaskRuntime}};
-use tcp::driver::SocketConfig;
-use tcp::buffer_pool::WriteBufferPool;
-use tcp::util::TlsConfig;
-use tcp::server::{AsyncPortsFactory, SocketListener};
-use tcp::connect::TcpSocket;
-use tcp::tls_connect::TlsSocket;
+use pi_async::rt::{AsyncRuntime,
+                   serial::AsyncRuntimeBuilder,
+                   multi_thread::{MultiTaskRuntimeBuilder, MultiTaskRuntime}};
+use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
+          connect::TcpSocket,
+          tls_connect::TlsSocket,
+          server::{PortsAdapterFactory, SocketListener},
+          utils::{TlsConfig, Ready}};
 use http::{server::HttpListenerFactory,
            virtual_host::{VirtualHostTab, VirtualHost, VirtualHostPool},
            gateway::GatewayContext,
@@ -31,18 +38,100 @@ use http::{server::HttpListenerFactory,
            static_cache::StaticCache,
            request::HttpRequest,
            response::{ResponseHandler, HttpResponse},
-           util::HttpRecvResult};
+           utils::HttpRecvResult};
+use pi_handler::{Args, Handler, SGenType};
+use pi_hash::XHashMap;
+use pi_gray::GrayVersion;
+use pi_atom::Atom;
 
 use async_httpc::{AsyncHttpcBuilder, AsyncHttpc, AsyncHttpRequestMethod, AsyncHttpForm, AsyncHttpRequestBody};
+
+#[derive(Clone)]
+struct WrapMsg(Arc<RefCell<XHashMap<String, SGenType>>>);
+
+unsafe impl Send for WrapMsg {}
+unsafe impl Sync for WrapMsg {}
+
+struct TestHttpGatewayHandler<R: AsyncRuntime>(R);
+
+unsafe impl<R: AsyncRuntime> Send for TestHttpGatewayHandler<R> {}
+unsafe impl<R: AsyncRuntime> Sync for TestHttpGatewayHandler<R> {}
+
+impl<R: AsyncRuntime> Handler for TestHttpGatewayHandler<R> {
+    type A = SocketAddr;
+    type B = Arc<HeaderMap>;
+    type C = Arc<RefCell<XHashMap<String, SGenType>>>;
+    type D = ResponseHandler;
+    type E = ();
+    type F = ();
+    type G = ();
+    type H = ();
+    type HandleResult = ();
+
+    //处理方法
+    fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> LocalBoxFuture<'static, Self::HandleResult> {
+        let rt = self.0.clone();
+        async move {
+            if let Args::FourArgs(addr, headers, msg, handler) = args {
+                handle(rt, env, topic, addr, headers, msg, handler);
+            }
+        }.boxed_local()
+    }
+}
+
+fn handle<R: AsyncRuntime>(rt: R,
+                           env: Arc<dyn GrayVersion>,
+                           topic: Atom,
+                           addr: SocketAddr,
+                           headers: Arc<HeaderMap>,
+                           msg: Arc<RefCell<XHashMap<String, SGenType>>>,
+                           handler: ResponseHandler) {
+    let msg = WrapMsg(msg);
+    let resp_handler = Arc::new(handler);
+
+    rt.spawn(rt.alloc(), async move {
+        // println!("!!!!!!http gateway handle, topic: {:?}", topic);
+        // println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
+        // println!("!!!!!!http gateway handle, headers: {:?}", headers);
+        // println!("!!!!!!http gateway handle, msg: {:?}", msg.0.borrow());
+
+        //处理Http响应
+        resp_handler.status(200);
+        // resp_handler.header("Port_Test", "true");
+        if let Err(e) = resp_handler.write(Vec::from("Hello Http".as_bytes())).await {
+            println!("!!!!!!write body failed, reason: {:?}", e);
+            return;
+        }
+
+        resp_handler.finish().await;
+        // println!("!!!!!!http gateway handle ok");
+    });
+}
 
 #[test]
 fn test_http_request() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    //初始异步运行时
-    let builder = MultiTaskRuntimeBuilder::default();
-    let rt = builder.build();
+    //启动文件异步运行时
+    let mut builder = MultiTaskRuntimeBuilder::default();
+    let file_rt = builder.build();
+
+    //启动网络异步运行时
+    let rt0 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt1 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt2 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt3 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt4 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt5 = AsyncRuntimeBuilder::default_local_thread(None, None);
+
+    //构建全局静态资源缓存，并启动缓存的整理
+    let cache = Arc::new(StaticCache::new(1024 * 1024 * 1024, 99999));
+    StaticCache::run_collect(cache.clone(), "test http cache".to_string(), 10000);
+
+    //构建请求处理器
+    let handler
+        = Arc::new(TestHttpGatewayHandler(file_rt.clone()));
 
     //构建全局静态资源缓存，并启动缓存的整理
     let cache = Arc::new(StaticCache::new(1024 * 1024 * 1024, 99999));
@@ -56,10 +145,15 @@ fn test_http_request() {
     let parser = Arc::new(DefaultParser::with(128, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
-    let file_load = Arc::new(FileLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let files_load = Arc::new(FilesLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let batch_load = Arc::new(BatchLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let upload = Arc::new(UploadFile::new(rt.clone(), "../upload"));
+    let mut file_load = FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10);
+    file_load.set_min_block_size(Some(8 * 1024 * 1024));
+    file_load.set_chunk_size(Some(512 * 1024));
+    file_load.set_interval(Some(100));
+    let file_load = Arc::new(file_load);
+    let files_load = Arc::new(FilesLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let batch_load = Arc::new(BatchLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let upload = Arc::new(UploadFile::new(file_rt.clone(), "../upload"));
+    let port = Arc::new(HttpPort::with_handler(None, handler));
 
     //构建处理CORS的Options方法的请求的中间件链
     let mut chain = MiddlewareChain::new();
@@ -103,10 +197,21 @@ fn test_http_request() {
     chain.finish();
     let upload_middleware = Arc::new(chain);
 
+    //构建处理动态资源访问的中间件链
+    let mut chain = MiddlewareChain::new();
+    chain.push_back(cors_handler.clone());
+    chain.push_back(parser);
+    chain.push_back(multi_parts);
+    chain.push_back(port);
+    chain.finish();
+    let port_middleware = Arc::new(chain);
+
     //构建路由
     let mut route = HttpRoute::new();
     route.at("/").options(cors_middleware.clone())
         .at("/**").options(cors_middleware)
+        .at("/").head(file_load_middleware.clone())
+        .at("/**").head(file_load_middleware.clone())
         .at("/").get(file_load_middleware.clone())
         .at("/**").get(file_load_middleware.clone())
         .at("/").post(file_load_middleware.clone())
@@ -115,24 +220,36 @@ fn test_http_request() {
         .at("/fs").post(files_load_middleware)
         .at("/batch").get(batch_load_middleware.clone())
         .at("/batch").post(batch_load_middleware)
-        .at("/upload").post(upload_middleware.clone());
+        .at("/upload").post(upload_middleware.clone())
+        .at("/login").get(port_middleware.clone())
+        .at("/login").post(port_middleware.clone())
+        .at("/port/**").get(port_middleware.clone())
+        .at("/port/**").post(port_middleware);
 
     //构建虚拟主机
     let host = VirtualHost::with(route);
 
     //设置虚拟主机
     let mut hosts = VirtualHostTab::new();
-    hosts.add("msg.highapp.com", host.clone());
+    hosts.add("test.17youx.cn", host.clone());
     hosts.add("127.0.0.1", host);
 
-    let mut factory = AsyncPortsFactory::<TcpSocket>::new();
+    let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(80,
-                 Box::new(HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 10000)));
-    let mut config = SocketConfig::new("0.0.0.0", factory.bind_ports().as_slice());
+                 HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 10000).new_service());
+    let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
 
-    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
+    match SocketListener::bind(vec![rt0, rt1, rt2, rt3, rt4, rt5],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               512 * 1024,
+                               512 * 1024,
+                               Some(10)) {
         Err(e) => {
             println!("!!!> Http Listener Bind Error, reason: {:?}", e);
         },
@@ -161,7 +278,7 @@ fn test_http_request() {
 
     //Optinos测试
     let httpc_copy = httpc.clone();
-    rt.spawn(rt.alloc(), async move {
+    file_rt.spawn(file_rt.alloc(), async move {
         match httpc_copy
             .build_request("http://127.0.0.1/fs", AsyncHttpRequestMethod::Optinos)
             .set_pairs(&[("d", "d=:bi(:client((js()png()tpl()):app((js()png()tpl()):res((js()png()tpl()):images(js()png()tpl())))))"), ("f", ":pi(:widget(js(util:widget:painter:forelet:style:frame_mgr:event:virtual_node):)util(js(html:util:tpl:task_mgr:res_mgr:log:hash:math:match:task_pool:event):)gui_virtual(js(frame_mgr):)lang(js(type:mod:time):))")])
@@ -194,7 +311,7 @@ fn test_http_request() {
 
     //批量获取文件
     let httpc_copy = httpc.clone();
-    rt.spawn(rt.alloc(), async move {
+    file_rt.spawn(file_rt.alloc(), async move {
         match httpc_copy
             .build_request("http://127.0.0.1/fs", AsyncHttpRequestMethod::Get)
             .set_pairs(&[("d", "d=:bi(:client((js()png()tpl()):app((js()png()tpl()):res((js()png()tpl()):images(js()png()tpl())))))"), ("f", ":pi(:widget(js(util:widget:painter:forelet:style:frame_mgr:event:virtual_node):)util(js(html:util:tpl:task_mgr:res_mgr:log:hash:math:match:task_pool:event):)gui_virtual(js(frame_mgr):)lang(js(type:mod:time):))")])
@@ -229,7 +346,7 @@ fn test_http_request() {
     println!("");
     let httpc_copy = httpc.clone();
     let body = AsyncHttpRequestBody::with_string("user=test001&pwd=你好".to_string(), true);
-    rt.spawn(rt.alloc(), async move {
+    file_rt.spawn(file_rt.alloc(), async move {
         match httpc_copy
             .build_request("http://127.0.0.1/", AsyncHttpRequestMethod::Post)
             .add_header("content-type", "application/x-www-form-urlencoded")
@@ -275,7 +392,7 @@ fn test_http_request() {
                          "mdb_stat.exe".to_string(),
                          "application/octet-stream".to_string(),
                          bin).unwrap();
-    rt.spawn(rt.alloc(), async move {
+    file_rt.spawn(file_rt.alloc(), async move {
         match httpc_copy
             .build_request("http://127.0.0.1/upload", AsyncHttpRequestMethod::Post)
             .set_body(form.into_body())
@@ -312,7 +429,7 @@ fn test_http_request() {
     let mut form = AsyncHttpRequestBody::form();
     form = form.add_field("method".to_string(), "_$remove".to_string());
     form = form.add_field("file_name".to_string(), "mdb_stat.exe".to_string());
-    rt.spawn(rt.alloc(), async move {
+    file_rt.spawn(file_rt.alloc(), async move {
         match httpc_copy
             .build_request("http://127.0.0.1/upload", AsyncHttpRequestMethod::Post)
             .set_body(form.into_body())
@@ -351,26 +468,34 @@ fn test_https_request() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    //初始异步运行时
-    let builder = MultiTaskRuntimeBuilder::default();
-    let rt = builder.build();
+    //启动文件异步运行时
+    let mut builder = MultiTaskRuntimeBuilder::default();
+    let file_rt = builder.build();
+
+    //启动网络异步运行时
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+
+    //构建请求处理器
+    let handler
+        = Arc::new(TestHttpGatewayHandler(file_rt.clone()));
 
     //构建全局静态资源缓存，并启动缓存的整理
     let cache = Arc::new(StaticCache::new(1024 * 1024 * 1024, 99999));
-    StaticCache::run_collect(cache.clone(), "test http cache".to_string(), 10000);
+    StaticCache::run_collect(cache.clone(), "test https cache".to_string(), 10000);
 
     //构建中间件
     let cors_handler = CORSHandler::new("OPTIONS, GET, POST".to_string(), None);
-    cors_handler.allow_origin("http".to_string(), "msg.highapp.com".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
-    cors_handler.allow_origin("http".to_string(), "127.0.0.1".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
+    cors_handler.allow_origin("https".to_string(), "msg.highapp.com".to_string(), 443, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
+    cors_handler.allow_origin("https".to_string(), "127.0.0.1".to_string(), 443, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     let cors_handler = Arc::new(cors_handler);
     let parser = Arc::new(DefaultParser::with(128, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
-    let file_load = Arc::new(FileLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let files_load = Arc::new(FilesLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let batch_load = Arc::new(BatchLoad::new(rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let upload = Arc::new(UploadFile::new(rt.clone(), "../upload"));
+    let file_load = Arc::new(FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let files_load = Arc::new(FilesLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let batch_load = Arc::new(BatchLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let upload = Arc::new(UploadFile::new(file_rt.clone(), "../upload"));
+    let port = Arc::new(HttpPort::with_handler(None, handler));
 
     //构建处理CORS的Options方法的请求的中间件链
     let mut chain = MiddlewareChain::new();
@@ -414,10 +539,21 @@ fn test_https_request() {
     chain.finish();
     let upload_middleware = Arc::new(chain);
 
+    //构建处理动态资源访问的中间件链
+    let mut chain = MiddlewareChain::new();
+    chain.push_back(cors_handler.clone());
+    chain.push_back(parser);
+    chain.push_back(multi_parts);
+    chain.push_back(port);
+    chain.finish();
+    let port_middleware = Arc::new(chain);
+
     //构建路由
     let mut route = HttpRoute::new();
     route.at("/").options(cors_middleware.clone())
         .at("/**").options(cors_middleware)
+        .at("/").head(file_load_middleware.clone())
+        .at("/**").head(file_load_middleware.clone())
         .at("/").get(file_load_middleware.clone())
         .at("/**").get(file_load_middleware.clone())
         .at("/").post(file_load_middleware.clone())
@@ -426,23 +562,27 @@ fn test_https_request() {
         .at("/fs").post(files_load_middleware)
         .at("/batch").get(batch_load_middleware.clone())
         .at("/batch").post(batch_load_middleware)
-        .at("/upload").post(upload_middleware.clone());
+        .at("/upload").post(upload_middleware.clone())
+        .at("/login").get(port_middleware.clone())
+        .at("/login").post(port_middleware.clone())
+        .at("/port/**").get(port_middleware.clone())
+        .at("/port/**").post(port_middleware);
 
     //构建虚拟主机
     let host = VirtualHost::with(route);
 
     //设置虚拟主机
     let mut hosts = VirtualHostTab::new();
-    hosts.add("msg.highapp.com", host.clone());
+    hosts.add("test.17youx.cn", host.clone());
     hosts.add("127.0.0.1", host);
 
-    let mut factory = AsyncPortsFactory::<TlsSocket>::new();
+    let mut factory = PortsAdapterFactory::<TlsSocket>::new();
     factory.bind(443,
-                 Box::new(HttpListenerFactory::<TlsSocket, _>::with_hosts(hosts, 30000)));
+                 HttpListenerFactory::<TlsSocket, _>::with_hosts(hosts, 10000).new_service());
     let tls_config = TlsConfig::new_server("",
                                            false,
-                                           "./3376363_msg.highapp.com.pem",
-                                           "./3376363_msg.highapp.com.key",
+                                           "./tests/7285407__17youx.cn.pem",
+                                           "./tests/7285407__17youx.cn.key",
                                            "",
                                            "",
                                            "",
@@ -450,9 +590,17 @@ fn test_https_request() {
                                            false,
                                            "").unwrap();
     let mut config = SocketConfig::with_tls("0.0.0.0", &[(443, tls_config)]);
-    config.set_option(16384, 16384, 16384, 16);
-    let buffer = WriteBufferPool::new(10000, 10, 3).ok().unwrap();
-    match SocketListener::bind(factory, buffer, config, 1024, 1024 * 1024, 1024, Some(10)) {
+
+    match SocketListener::bind(vec![rt],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               16384,
+                               16384,
+                               Some(10)) {
         Err(e) => {
             println!("!!!> Https Listener Bind Error, reason: {:?}", e);
         },
@@ -481,7 +629,7 @@ fn test_https_request() {
 
     //Options测试
     let httpc_copy = httpc.clone();
-    rt.spawn(rt.alloc(), async move {
+    file_rt.spawn(file_rt.alloc(), async move {
         match httpc_copy
             .build_request("https://msg.highapp.com/fs", AsyncHttpRequestMethod::Optinos)
             .set_pairs(&[("d", "d=:bi(:client((js()png()tpl()):app((js()png()tpl()):res((js()png()tpl()):images(js()png()tpl())))))"), ("f", ":pi(:widget(js(util:widget:painter:forelet:style:frame_mgr:event:virtual_node):)util(js(html:util:tpl:task_mgr:res_mgr:log:hash:math:match:task_pool:event):)gui_virtual(js(frame_mgr):)lang(js(type:mod:time):))")])
@@ -514,7 +662,7 @@ fn test_https_request() {
 
     //批量获取文件
     let httpc_copy = httpc.clone();
-    rt.spawn(rt.alloc(), async move {
+    file_rt.spawn(file_rt.alloc(), async move {
         match httpc_copy
             .build_request("https://msg.highapp.com/fs", AsyncHttpRequestMethod::Get)
             .set_pairs(&[("d", "d=:bi(:client((js()png()tpl()):app((js()png()tpl()):res((js()png()tpl()):images(js()png()tpl())))))"), ("f", ":pi(:widget(js(util:widget:painter:forelet:style:frame_mgr:event:virtual_node):)util(js(html:util:tpl:task_mgr:res_mgr:log:hash:math:match:task_pool:event):)gui_virtual(js(frame_mgr):)lang(js(type:mod:time):))")])
@@ -549,7 +697,7 @@ fn test_https_request() {
     println!("");
     let httpc_copy = httpc.clone();
     let body = AsyncHttpRequestBody::with_string("user=test001&pwd=你好".to_string(), true);
-    rt.spawn(rt.alloc(), async move {
+    file_rt.spawn(file_rt.alloc(), async move {
         match httpc_copy
             .build_request("http://msg.highapp.com/", AsyncHttpRequestMethod::Post)
             .add_header("content-type", "application/x-www-form-urlencoded")
@@ -592,7 +740,7 @@ fn test_https_request() {
                          "mdb_stat.exe".to_string(),
                          "application/octet-stream".to_string(),
                          bin).unwrap();
-    rt.spawn(rt.alloc(), async move {
+    file_rt.spawn(file_rt.alloc(), async move {
         match httpc_copy
             .build_request("https://msg.highapp.com/upload", AsyncHttpRequestMethod::Post)
             .set_body(form.into_body())
@@ -629,7 +777,7 @@ fn test_https_request() {
     let mut form = AsyncHttpRequestBody::form();
     form = form.add_field("method".to_string(), "_$remove".to_string());
     form = form.add_field("file_name".to_string(), "mdb_stat.exe".to_string());
-    rt.spawn(rt.alloc(), async move {
+    file_rt.spawn(file_rt.alloc(), async move {
         match httpc_copy
             .build_request("https://msg.highapp.com/upload", AsyncHttpRequestMethod::Post)
             .set_body(form.into_body())
@@ -662,3 +810,4 @@ fn test_https_request() {
 
     thread::sleep(Duration::from_millis(10000000));
 }
+
