@@ -126,6 +126,7 @@ fn test_websocket_listener() {
     config.set_option(16384, 16384, 16384, 16);
 
     match SocketListener::bind(vec![rt],
+
                                factory,
                                config,
                                1024,

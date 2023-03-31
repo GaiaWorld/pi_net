@@ -58,7 +58,7 @@ const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 ///
 /// Websocket握手时允许的最大Http头数量
 ///
-pub const MAX_HANDSHAKE_HTTP_HEADER_LIMIT: usize = 16;
+pub const MAX_HANDSHAKE_HTTP_HEADER_LIMIT: usize = 56;
 
 ///
 /// 支持的Websocket连接升级
@@ -283,15 +283,16 @@ impl<S: Socket> WsAcceptor<S> {
 
             buf = unsafe { (&*handle.get_read_buffer().get()).as_ref().unwrap().as_ref() }; //填充本地缓冲区
             match req.parse(buf) {
-                Err(_) => {
+                Err(e) => {
                     //解析握手时的Http头错误
                     handle.close(Err(Error::new(ErrorKind::Other,
-                                                format!("Websocket handshake by http parse failed, token: {:?}, remote: {:?}, local: {:?}, buf_len: {:?}, buf: {:?}, reason: parse request header error",
+                                                format!("Websocket handshake by http parse failed, token: {:?}, remote: {:?}, local: {:?}, buf_len: {:?}, buf: {:?}, reason: {:?}",
                                                         handle.get_token(),
                                                         handle.get_remote(),
                                                         handle.get_local(),
                                                         buf.len(),
-                                                        buf))));
+                                                        buf,
+                                                        e))));
                     return;
                 },
                 Ok(ref status) if status.is_partial() => {

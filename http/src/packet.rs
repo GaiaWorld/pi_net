@@ -45,15 +45,16 @@ impl UpStreamHeader {
         where 'b: 'h,
               S: Socket {
         match req.parse(buf) {
-            Err(_) => {
+            Err(e) => {
                 //解析Http头错误
                 handle.close(Err(Error::new(ErrorKind::Other,
-                                            format!("Http server parse header failed, token: {:?}, remote: {:?}, local: {:?}, reason: parse request header error, buf_len: {:?}, buf: {:?}",
+                                            format!("Http server parse header failed, token: {:?}, remote: {:?}, local: {:?}, reason: parse request header error, buf_len: {:?}, buf: {:?}, reason: {:?}",
                                                     handle.get_token(),
                                                     handle.get_remote(),
                                                     handle.get_local(),
                                                     buf.len(),
-                                                    buf))));
+                                                    buf,
+                                                    e))));
 
                 return Err(Error::new(ErrorKind::Other,
                                       format!("Http server parse header failed, token: {:?}, remote: {:?}, local: {:?}, reason: parse request header error, buf_len: {:?}, buf: {:?}",

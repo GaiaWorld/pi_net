@@ -21,7 +21,7 @@ use crate::{virtual_host::VirtualHostPool,
 ///
 /// Http连接时允许的最大Http头数量
 ///
-pub const MAX_CONNECT_HTTP_HEADER_LIMIT: usize = 32;
+pub const MAX_CONNECT_HTTP_HEADER_LIMIT: usize = 56;
 
 ///
 /// Http连接接受器
