@@ -511,7 +511,7 @@ fn test_http_hosts() {
     //设置虚拟主机
     let mut hosts = VirtualHostTab::new();
     hosts.add("test.17youx.cn", host.clone());
-    hosts.add("127.0.0.1", host);
+    hosts.add_default(host);
 
     let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(80,
@@ -651,7 +651,7 @@ fn test_https_hosts() {
     //设置虚拟主机
     let mut hosts = VirtualHostTab::new();
     hosts.add("test.17youx.cn", host.clone());
-    hosts.add("127.0.0.1", host);
+    hosts.add_default(host);
 
     let mut factory = PortsAdapterFactory::<TlsSocket>::new();
     factory.bind(443,

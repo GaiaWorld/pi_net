@@ -26,6 +26,9 @@ pub trait VirtualHostPool<S: Socket>: Clone + Send + Sync + 'static {
 
     //增加指定主机名的虚拟主机
     fn add(&mut self, name: &str, host: Self::Host) -> Result<()>;
+
+    //增加默认的虚拟主机
+    fn add_default(&mut self, host: Self::Host) -> Result<()>;
 }
 
 ///
@@ -51,7 +54,11 @@ impl<S: Socket, H: Middleware<S, GatewayContext>> VirtualHostPool<S> for Virtual
 
     fn get(&self, name: &str) -> Option<&Self::Host> {
         let host: Vec<&str> = name.split(":").collect();
-        self.0.get(&Atom::from(host[0]))
+        if let Some(host) = self.0.get(&Atom::from(host[0])) {
+            Some(host)
+        } else {
+            self.0.get(&Atom::from(""))
+        }
     }
 
     fn add(&mut self, name: &str, host: Self::Host) -> Result<()> {
@@ -63,6 +70,10 @@ impl<S: Socket, H: Middleware<S, GatewayContext>> VirtualHostPool<S> for Virtual
         Err(Error::new(ErrorKind::Other,
                        format!("Add virtual host error, host: {:?}, reason: not writable",
                                name)))
+    }
+
+    fn add_default(&mut self, host: Self::Host) -> Result<()> {
+        self.add("", host)
     }
 }
 
