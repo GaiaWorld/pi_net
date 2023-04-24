@@ -16,7 +16,7 @@ num_cpus = "1.13"
 rustls = "0.20"
 rustls-pemfile = "1.0"
 slotmap = "1.0"
-
+spin_sleep = "1.1"
 log = "0.4"
 pi_async = "0.5"
 pi_async_buffer = "0.6"

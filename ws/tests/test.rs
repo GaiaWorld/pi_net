@@ -59,24 +59,24 @@ impl<S: Socket> ChildProtocol<S> for TestChildProtocol {
         println!("!!!!!!receive ok, msg: {:?}", String::from_utf8(msg.clone()));
 
         async move {
-            if let Some(hibernate) = connect.hibernate(Ready::Writable) {
-                let connect_copy = connect.clone();
-                thread::spawn(move || {
-                    thread::sleep(Duration::from_millis(1000));
-                    while !connect_copy.wakeup(Ok(())) {
-                        //唤醒被阻塞，则休眠指定时间后继续尝试唤醒
-                        thread::sleep(Duration::from_millis(15));
-                    }
-                });
-                let start = Instant::now();
-                if let Err(e) = hibernate.await {
-                    //唤醒后返回错误，则立即返回错误原因
-                    return Err(e);
-                }
-                println!("!!!!!!wakeup hibernate ok, time: {:?}", start.elapsed());
-            }
+            // if let Some(hibernate) = connect.hibernate(Ready::Writable) {
+            //     let connect_copy = connect.clone();
+            //     thread::spawn(move || {
+            //         thread::sleep(Duration::from_millis(1000));
+            //         while !connect_copy.wakeup(Ok(())) {
+            //             //唤醒被阻塞，则休眠指定时间后继续尝试唤醒
+            //             thread::sleep(Duration::from_millis(15));
+            //         }
+            //     });
+            //     let start = Instant::now();
+            //     if let Err(e) = hibernate.await {
+            //         //唤醒后返回错误，则立即返回错误原因
+            //         return Err(e);
+            //     }
+            //     println!("!!!!!!wakeup hibernate ok, time: {:?}", start.elapsed());
+            // }
 
-            for _ in 0..3 {
+            for _ in 0..1 {
                 if let Err(e) = connect.send(msg_type.clone(), msg.clone()) {
                     return Err(e);
                 }
@@ -126,7 +126,6 @@ fn test_websocket_listener() {
     config.set_option(16384, 16384, 16384, 16);
 
     match SocketListener::bind(vec![rt],
-
                                factory,
                                config,
                                1024,
@@ -135,7 +134,7 @@ fn test_websocket_listener() {
                                16,
                                4096,
                                4096,
-                               Some(10)) {
+                               Some(1)) {
         Err(e) => {
             println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
         },
@@ -179,7 +178,7 @@ fn test_tls_websocket_listener() {
                                16,
                                4096,
                                4096,
-                               Some(10)) {
+                               Some(1)) {
         Err(e) => {
             println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
         },

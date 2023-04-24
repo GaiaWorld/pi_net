@@ -7,8 +7,9 @@ use std::io::{Error, Result, ErrorKind};
 use mio::{Poll, Token, Events};
 use futures::future::{FutureExt, LocalBoxFuture};
 use crossbeam_channel::{Sender, Receiver, unbounded};
-use pi_slotmap::{Key, DefaultKey, KeyData, SlotMap};
+use spin_sleep::LoopHelper;
 use log::{warn, error};
+use pi_slotmap::{Key, DefaultKey, KeyData, SlotMap};
 use pi_async::{lock::spin_lock::SpinLock,
                rt::{serial::AsyncRuntime,
                     serial_local_thread::LocalTaskRuntime}};
@@ -93,9 +94,32 @@ impl<
             };
 
             //启动Udp连接事件循环
+            let (helper, poll_timeout) = if let Some(poll_timeout) = timeout {
+                if cfg!(windows) {
+                    (LoopHelper::builder()
+                         .native_accuracy_ns(100_000)
+                         .build_with_target_rate(1000u32
+                             .checked_div(poll_timeout as u32)
+                             .unwrap_or(1000)),
+                     Some(Duration::from_millis(0)))
+                } else {
+                    (LoopHelper::builder()
+                         .native_accuracy_ns(100_000)
+                         .build_with_target_rate(1000u32
+                             .checked_div(poll_timeout as u32)
+                             .unwrap_or(1000)),
+                     Some(Duration::from_millis(poll_timeout as u64)))
+                }
+            } else {
+                (LoopHelper::builder()
+                    .native_accuracy_ns(100_000)
+                    .build_with_target_rate(10000),
+                 Some(Duration::from_millis(0)))
+            };
             event_loop(rt_copy,
                        pool,
                        event_size,
+                       helper,
                        poll_timeout).await;
         });
 
@@ -108,10 +132,12 @@ impl<
 fn event_loop<S, A>(rt: LocalTaskRuntime<()>,
                     mut pool: UdpSocketPool<S, A>,
                     event_size: usize,
+                    mut helper: LoopHelper,
                     poll_timeout: Option<Duration>) -> LocalBoxFuture<'static, ()>
     where S: Socket,
           A: SocketAdapter<Connect = S> {
     async move {
+        helper.loop_start(); //开始处理事件
         let mut events = Events::with_capacity(event_size);
         handle_binded(&rt, &mut pool);
 
@@ -122,7 +148,7 @@ fn event_loop<S, A>(rt: LocalTaskRuntime<()>,
             .poll(&mut events, poll_timeout.clone()) {
             if e.kind() != ErrorKind::Interrupted {
                 //轮询连接事件错误，则立即退出Udp连接事件循环
-                error!("Udp socket pool poll failed, timeout: {:?}, ports: {:?}, reason: {:?}",
+                error!("Udp socket pool poll failed, poll_timeout: {:?}, ports: {:?}, reason: {:?}",
                     poll_timeout,
                     pool.name,
                     e);
@@ -139,6 +165,7 @@ fn event_loop<S, A>(rt: LocalTaskRuntime<()>,
             let event_loop = event_loop(rt.clone(),
                                         pool,
                                         event_size,
+                                        helper,
                                         poll_timeout);
             rt.spawn(event_loop);
             return;
@@ -149,10 +176,11 @@ fn event_loop<S, A>(rt: LocalTaskRuntime<()>,
         handle_close_event(&rt, &mut pool);
 
         //继续异步调用Udp连接事件循环
+        helper.loop_sleep_no_spin(); //开始休眠
         let event_loop = event_loop(rt.clone(),
                                     pool,
                                     event_size,
-                                    poll_timeout);
+                                    helper, poll_timeout);
         rt.spawn(event_loop);
     }.boxed_local()
 }

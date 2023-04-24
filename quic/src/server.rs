@@ -1,25 +1,26 @@
+use std::fs;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::path::Path;
-use std::time::Instant;
 use std::net::SocketAddr;
 use std::cell::UnsafeCell;
+use std::path::{Path, PathBuf};
+use std::time::{Instant, SystemTime};
 use std::io::{Error, Result, ErrorKind};
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use quinn_proto::{EndpointConfig, ServerConfig, Endpoint, EndpointEvent, ConnectionEvent, ConnectionHandle, Transmit};
 use crossbeam_channel::{Receiver, Sender, unbounded};
+use rustls;
 
 use pi_async::rt::serial_local_thread::LocalTaskRuntime;
 use pi_hash::XHashMap;
-
 use udp::{Socket, AsyncService, SocketHandle,
           connect::UdpSocket, utils::AsyncServiceContext};
 
 use crate::{acceptor::QuicAcceptor,
             AsyncService as QuicAsyncService,
             connect_pool::QuicSocketPool,
-            utils::{load_certs, load_private_key}};
+            utils::{load_certs_file, load_key_file}};
 
 ///
 /// Quic连接监听器
@@ -122,83 +123,111 @@ impl<S: Socket> QuicListener<S> {
     pub fn new<P: AsRef<Path>>(runtimes: Vec<LocalTaskRuntime<()>>,
                                server_certs_path: P,
                                server_key_path: P,
+                               verify_level: ClientCertVerifyLevel,
                                config: EndpointConfig,
                                readed_read_size_limit: usize,
                                readed_write_size_limit: usize,
                                service: Arc<dyn QuicAsyncService<S>>,
                                timeout: Option<usize>) -> Result<Self> {
-        match load_certs(server_certs_path) {
+        match load_certs_file(server_certs_path) {
             Err(e) => {
                 //加载指定的证书失败，则立即返回错误原因
                 Err(e)
             },
             Ok(certs) => {
                 //加载指定的证书成功
-                match load_private_key(server_key_path) {
+                match load_key_file(server_key_path) {
                     Err(e) => {
                         //加载指定的私钥失败，则立即返回错误原因
                         Err(e)
                     },
                     Ok(key) => {
                         //加载指定的私钥成功
-                        match ServerConfig::with_single_cert(certs, key) {
-                            Err(e) => {
-                                //创建服务端配置失败，则立即返回错误原因
-                                Err(Error::new(ErrorKind::Other,
-                                               format!("Creat server config failed, reason: {:?}",
-                                                       e)))
-                            },
-                            Ok(server_config) => {
-                                //创建服务端配置成功
-                                let mut pool_id = 0;
-                                let clock = Instant::now();
-                                let mut router = Vec::with_capacity(runtimes.len());
-                                let (endpoint_event_sent, endpoint_event_recv) = unbounded();
-                                let mut event_sents = XHashMap::default();
-                                let mut write_sents = XHashMap::default();
-                                for rt in runtimes {
-                                    let (sender, socket_recv) = unbounded();
-                                    router.push(sender);
-                                    let (sender, read_recv) = unbounded();
-                                    event_sents.insert(pool_id, sender);
-                                    let (write_sent, write_recv) = unbounded();
-                                    write_sents.insert(pool_id, write_sent.clone());
-
-                                    //创建并运行连接池
-                                    let connect_pool = QuicSocketPool::new(pool_id,
-                                                                           endpoint_event_sent.clone(),
-                                                                           socket_recv,
-                                                                           read_recv,
-                                                                           write_sent,
-                                                                           write_recv,
-                                                                           service.clone(),
-                                                                           clock,
-                                                                           timeout);
-                                    connect_pool.run(rt);
-                                    pool_id += 1; //更新连接池唯一id
+                        let server_config = match verify_level {
+                            ClientCertVerifyLevel::Ignore => {
+                                //不需要严格验证客户端证书
+                                match ServerConfig::with_single_cert(certs, key) {
+                                    Err(e) => {
+                                        //创建服务端配置失败，则立即返回错误原因
+                                        return Err(Error::new(ErrorKind::Other,
+                                                              format!("Create quic server failed, client_verify_level: ignore, reason: {:?}",
+                                                                      e)))
+                                    },
+                                    Ok(config) => {
+                                        config
+                                    },
                                 }
-
-                                //创建Quic状态机
-                                let end_point = Rc::new(UnsafeCell::new(Endpoint::new(Arc::new(config), Some(Arc::new(server_config)))));
-
-                                //创建Quic连接接受器
-                                let acceptor = QuicAcceptor::new(end_point.clone(), router, clock);
-
-                                let inner = InnerQuicListener {
-                                    rt: None,
-                                    acceptor,
-                                    endpoint_event_recv,
-                                    event_sents,
-                                    write_sents,
-                                    end_point,
-                                    readed_read_size_limit,
-                                    readed_write_size_limit,
-                                    clock,
-                                };
-
-                                Ok(QuicListener(Rc::new(inner)))
                             },
+                            ClientCertVerifyLevel::Custom(verifier) => {
+                                //需要验证客户端证书，使用指定的自定义验证器
+                                match rustls::ServerConfig::builder()
+                                    .with_safe_default_cipher_suites()
+                                    .with_safe_default_kx_groups()
+                                    .with_protocol_versions(&[&rustls::version::TLS13])
+                                    .unwrap()
+                                    .with_client_cert_verifier(verifier)
+                                    .with_single_cert(certs, key) {
+                                    Err(e) => {
+                                        //创建服务端配置失败，则立即返回错误原因
+                                        return Err(Error::new(ErrorKind::Other,
+                                                              format!("Create quic server failed, client_verify_level: custom, reason: {:?}",
+                                                                      e)))
+                                    },
+                                    Ok(config) => {
+                                        ServerConfig::with_crypto(Arc::new(config))
+                                    }
+                                }
+                            },
+                        };
+
+                        //创建服务端配置成功
+                        let mut pool_id = 0;
+                        let clock = Instant::now();
+                        let mut router = Vec::with_capacity(runtimes.len());
+                        let (endpoint_event_sent, endpoint_event_recv) = unbounded();
+                        let mut event_sents = XHashMap::default();
+                        let mut write_sents = XHashMap::default();
+                        for rt in runtimes {
+                            let (sender, socket_recv) = unbounded();
+                            router.push(sender);
+                            let (sender, read_recv) = unbounded();
+                            event_sents.insert(pool_id, sender);
+                            let (write_sent, write_recv) = unbounded();
+                            write_sents.insert(pool_id, write_sent.clone());
+
+                            //创建并运行连接池
+                            let connect_pool = QuicSocketPool::new(pool_id,
+                                                                   endpoint_event_sent.clone(),
+                                                                   socket_recv,
+                                                                   read_recv,
+                                                                   write_sent,
+                                                                   write_recv,
+                                                                   service.clone(),
+                                                                   clock,
+                                                                   timeout);
+                            connect_pool.run(rt);
+                            pool_id += 1; //更新连接池唯一id
                         }
+
+                        //创建Quic状态机
+                        let end_point = Rc::new(UnsafeCell::new(Endpoint::new(Arc::new(config), Some(Arc::new(server_config)))));
+
+                        //创建Quic连接接受器
+                        let acceptor = QuicAcceptor::new(end_point.clone(), router, clock);
+
+                        let inner = InnerQuicListener {
+                            rt: None,
+                            acceptor,
+                            endpoint_event_recv,
+                            event_sents,
+                            write_sents,
+                            end_point,
+                            readed_read_size_limit,
+                            readed_write_size_limit,
+                            clock,
+                        };
+
+                        Ok(QuicListener(Rc::new(inner)))
                     },
                 }
             },
@@ -231,7 +260,6 @@ fn handle_endpoint_events<S>(listener: &QuicListener<S>)
             let index = connection_handle.0 % listener.0.event_sents.len(); //路由到指定连接池
             if let Some(event) = end_point.handle_event(connection_handle, endpoint_event) {
                 if let Some(sender) = listener.0.event_sents.get(&index) {
-                    println!("!!!!!!connection_event: {:?}", event);
                     //向连接所在连接池发送Socket事件
                     sender.send((connection_handle, event));
                 }
@@ -258,4 +286,28 @@ struct InnerQuicListener<S: Socket> {
     readed_read_size_limit:     usize,                                                          //Quic已读读缓冲大小限制
     readed_write_size_limit:    usize,                                                          //Quic已读写缓冲大小限制
     clock:                      Instant,                                                        //内部时钟
+}
+
+///
+/// 客户端证书验证级别
+///
+pub enum ClientCertVerifyLevel {
+    Ignore,                                                 //忽略验证
+    Custom(Arc<dyn rustls::server::ClientCertVerifier>),    //自定义验证
+}
+
+// 非可靠客户端证书验证器
+struct InsecureClientCertVerifier;
+
+impl rustls::server::ClientCertVerifier for InsecureClientCertVerifier {
+    fn client_auth_root_subjects(&self) -> Option<rustls::DistinguishedNames> {
+        None
+    }
+
+    fn verify_client_cert(&self,
+                          _end_entity: &rustls::Certificate,
+                          _intermediates: &[rustls::Certificate],
+                          _now: SystemTime) -> std::result::Result<rustls::server::ClientCertVerified, rustls::Error> {
+        Ok(rustls::server::ClientCertVerified::assertion())
+    }
 }

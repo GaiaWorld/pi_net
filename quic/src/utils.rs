@@ -141,7 +141,7 @@ pub enum QuicCloseEvent {
 }
 
 // 加载指定Pem文件的证书
-pub fn load_certs<P: AsRef<Path>>(file_path: P) -> Result<Vec<Certificate>> {
+pub fn load_certs_file<P: AsRef<Path>>(file_path: P) -> Result<Vec<Certificate>> {
     let certfile = match File::open(&file_path) {
         Err(e) => {
             return Err(Error::new(ErrorKind::Other,
@@ -170,8 +170,14 @@ pub fn load_certs<P: AsRef<Path>>(file_path: P) -> Result<Vec<Certificate>> {
     }
 }
 
+// 加载指定Pem证书数据
+#[inline]
+pub fn load_cert(bin: Vec<u8>) -> Certificate {
+    Certificate(bin)
+}
+
 // 加载指定Pem文件的私钥
-pub fn load_private_key<P: AsRef<Path>>(file_path: P) -> Result<PrivateKey> {
+pub fn load_key_file<P: AsRef<Path>>(file_path: P) -> Result<PrivateKey> {
     let keyfile = match File::open(&file_path) {
         Err(e) => {
             return Err(Error::new(ErrorKind::Other,
@@ -208,6 +214,12 @@ pub fn load_private_key<P: AsRef<Path>>(file_path: P) -> Result<PrivateKey> {
     Err(Error::new(ErrorKind::Other,
                    format!("no keys found in {:?} (encrypted keys not supported)",
                            file_path.as_ref())))
+}
+
+// 加载指定Pem私钥数据
+#[inline]
+pub fn load_key(bin: Vec<u8>) -> PrivateKey {
+    PrivateKey(bin)
 }
 
 /// 线程安全的异步休眠对象

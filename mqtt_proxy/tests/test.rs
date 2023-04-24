@@ -202,7 +202,7 @@ fn test_mqtt_proxy_service() {
                                16,
                                4096,
                                4096,
-                               Some(10)) {
+                               Some(1)) {
         Err(e) => {
             println!("!!!> Rpc Listener Bind Error, reason: {:?}", e);
         },
@@ -259,7 +259,7 @@ fn test_tls_mqtt_proxy_service() {
                                16,
                                4096,
                                4096,
-                               Some(10)) {
+                               Some(1)) {
         Err(e) => {
             println!("!!!> Rpc Listener Bind Error, reason: {:?}", e);
         },
@@ -427,7 +427,7 @@ fn test_mqtt_proxy_service_by_quic() {
                                      65535,
                                      65535,
                                      broker_factory.new_quic_service(),
-                                     Some(10))
+                                     Some(1))
         .expect("Create quic mqtt listener failed");
 
     let mut factory = UdpPortsAdapterFactory::<UdpSocket>::new();
@@ -442,7 +442,7 @@ fn test_mqtt_proxy_service_by_quic() {
                                   1024,
                                   0xffff,
                                   0xffff,
-                                  Some(10)) {
+                                  Some(1)) {
         Err(e) => {
             println!("!!!> Rpc Listener Bind Error, reason: {:?}", e);
         },

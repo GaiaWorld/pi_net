@@ -12,6 +12,7 @@ use quinn_proto::{EndpointEvent, ConnectionEvent, Event, ConnectionHandle, Dir, 
 use dashmap::DashMap;
 use slotmap::{Key, KeyData};
 use bytes::{Buf, BufMut};
+use spin_sleep::LoopHelper;
 use log::{debug, warn, error};
 
 use pi_cancel_timer::Timer;
@@ -19,7 +20,6 @@ use pi_async::rt::{serial::AsyncRuntime,
                    serial_local_thread::LocalTaskRuntime};
 use quinn_proto::Event::{Connected, ConnectionLost, DatagramReceived, HandshakeDataReady, Stream};
 use rustls::Connection;
-
 use udp::{Socket,
           connect::UdpSocket};
 
@@ -101,17 +101,29 @@ impl<S: Socket> QuicSocketPool<S> {
                rt: LocalTaskRuntime<()>) {
         let mut pool = self;
         let rt_copy = rt.clone();
-        rt.spawn(event_loop(rt_copy, pool));
+        let helper = if let Some(loop_timeout) = pool.timeout {
+            LoopHelper::builder()
+                .native_accuracy_ns(100_000)
+                .build_with_target_rate(1000u32
+                    .checked_div(loop_timeout as u32)
+                    .unwrap_or(1000))
+        } else {
+            LoopHelper::builder()
+                .native_accuracy_ns(100_000)
+                .build_with_target_rate(10000)
+        };
+        rt.spawn(event_loop(rt_copy, pool, helper));
     }
 }
 
 // Quic连接事件循环
 #[inline]
 fn event_loop<S>(rt: LocalTaskRuntime<()>,
-                 mut pool: QuicSocketPool<S>) -> LocalBoxFuture<'static, ()>
+                 mut pool: QuicSocketPool<S>,
+                 mut helper: LoopHelper) -> LocalBoxFuture<'static, ()>
     where S: Socket {
     async move {
-        let now = Instant::now();
+        helper.loop_start(); //开始处理事件
 
         handle_udp_accepted(&rt, &mut pool);
 
@@ -129,15 +141,8 @@ fn event_loop<S>(rt: LocalTaskRuntime<()>,
 
         handle_timeout_timer(&mut pool);
 
-        if let Some(timeout) = pool.timeout {
-            //如果事件循环执行过快，则强制休眠指定时长
-            let sleep_timeout = timeout
-                .checked_sub(now.elapsed().as_millis() as usize)
-                .unwrap_or(0);
-            thread::sleep(Duration::from_millis(sleep_timeout as u64));
-        }
-
-        rt.spawn(event_loop(rt.clone(), pool));
+        helper.loop_sleep_no_spin(); //开始休眠
+        rt.spawn(event_loop(rt.clone(), pool, helper));
     }.boxed_local()
 }
 

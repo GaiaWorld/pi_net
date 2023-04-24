@@ -202,7 +202,7 @@ fn test_mqtt_311() {
                                16,
                                4096,
                                4096,
-                               Some(10)) {
+                               Some(1)) {
         Err(e) => {
             println!("!!!> Mqtt Listener Bind Error, reason: {:?}", e);
         },
@@ -256,7 +256,7 @@ fn test_tls_mqtt_311() {
                                16,
                                4096,
                                4096,
-                               Some(10)) {
+                               Some(1)) {
         Err(e) => {
             println!("!!!> Mqtt Listener Bind Error, reason: {:?}", e);
         },
@@ -392,7 +392,7 @@ fn test_quic_mqtt_311() {
                                      65535,
                                      65535,
                                      broker_factory.new_quic_service(),
-                                     Some(10))
+                                     Some(1))
         .expect("Create quic mqtt listener failed");
 
     let mut factory = UdpPortsAdapterFactory::<UdpSocket>::new();
@@ -407,7 +407,7 @@ fn test_quic_mqtt_311() {
                                   1024,
                                   0xffff,
                                   0xffff,
-                                  Some(10)) {
+                                  Some(1)) {
         Err(e) => {
             println!("!!!> Quic mqtt Listener Bind Error, reason: {:?}", e);
         },
@@ -525,7 +525,7 @@ fn test_mqtt_311_passive() {
                                16,
                                4096,
                                4096,
-                               Some(10)) {
+                               Some(1)) {
         Err(e) => {
             println!("!!!> Mqtt Listener Bind Error, reason: {:?}", e);
         },
@@ -579,7 +579,7 @@ fn test_tls_mqtt_311_passive() {
                                16,
                                4096,
                                4096,
-                               Some(10)) {
+                               Some(1)) {
         Err(e) => {
             println!("!!!> Mqtt Listener Bind Error, reason: {:?}", e);
         },
