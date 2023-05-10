@@ -538,8 +538,8 @@ async fn subscribe(protocol: WsMqtt311,
 
 // 退订主题
 async fn unsubscribe(protocol: WsMqtt311,
-               connect: WsSocket<TcpSocket>,
-               packet: Unsubscribe) -> Result<()> {
+                     connect: WsSocket<TcpSocket>,
+                     packet: Unsubscribe) -> Result<()> {
     let (client_id, keep_alive) = match get_client_context(&connect) {
         Err(e) => {
             return Err(e);

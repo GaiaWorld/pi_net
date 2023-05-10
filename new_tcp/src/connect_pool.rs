@@ -108,32 +108,26 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
         pool.driver = Some(driver);
         let rt_copy = rt.clone();
         rt.spawn(async move {
-            let poll_timeout = if let Some(t) = timeout {
-                Some(Duration::from_millis(t as u64))
-            } else {
-                None
-            };
-
             //启动Tcp连接事件循环
             let (helper, poll_timeout) = if let Some(poll_timeout) = timeout {
-                if cfg!(windows) {
+                if cfg!(windows) && poll_timeout < 15000 {
                     (LoopHelper::builder()
-                         .native_accuracy_ns(100_000)
-                         .build_with_target_rate(1000u32
+                         .native_accuracy_ns(10_000)
+                         .build_with_target_rate(1000000u32
                              .checked_div(poll_timeout as u32)
                              .unwrap_or(1000)),
-                     Some(Duration::from_millis(0)))
+                     Some(Duration::from_micros(0)))
                 } else {
                     (LoopHelper::builder()
-                         .native_accuracy_ns(100_000)
-                         .build_with_target_rate(1000u32
+                         .native_accuracy_ns(10_000)
+                         .build_with_target_rate(1000000u32
                              .checked_div(poll_timeout as u32)
                              .unwrap_or(1000)),
-                     Some(Duration::from_millis(poll_timeout as u64)))
+                     Some(Duration::from_micros(poll_timeout as u64)))
                 }
             } else {
                 (LoopHelper::builder()
-                     .native_accuracy_ns(100_000)
+                     .native_accuracy_ns(10_000)
                      .build_with_target_rate(10000),
                  Some(Duration::from_millis(0)))
             };
@@ -158,7 +152,9 @@ fn event_loop<S, A>(rt: LocalTaskRuntime<()>,
     where S: Socket + Stream,
           A: SocketAdapter<Connect = S> {
     async move {
-        helper.loop_start(); //开始处理事件
+        if cfg!(windows) || poll_timeout.is_some_and(|time| time.is_zero()) {
+            helper.loop_start(); //开始处理事件
+        }
         let mut events = Events::with_capacity(event_size);
         handle_accepted(&rt, &mut pool).await;
 
@@ -203,7 +199,9 @@ fn event_loop<S, A>(rt: LocalTaskRuntime<()>,
         handle_timer(&mut pool).await; //必须在关闭处理完成后执行
 
         //继续异步调用Tcp连接事件循环
-        helper.loop_sleep_no_spin(); //开始休眠
+        if cfg!(windows) || poll_timeout.is_some_and(|time| time.is_zero()) {
+            helper.loop_sleep_no_spin(); //开始休眠
+        }
         let event_loop = event_loop(rt.clone(),
                                     pool,
                                     event_size,

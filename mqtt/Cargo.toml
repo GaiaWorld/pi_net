@@ -15,7 +15,7 @@ pi_hash = { version = "0.1", features = ["xxhash"] }
 pi_async = "0.5"
 tcp = { package = "new_tcp", path = "../new_tcp" }
 ws = { path = "../ws" }
-udp = { path = "../udp" }
+udp = { path = "../blocking_udp", package = "blocking_udp" }
 quic = { path = "../quic" }
 quinn-proto = "0.8"
 bytes = "1.3"

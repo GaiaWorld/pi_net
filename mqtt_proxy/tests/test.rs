@@ -24,10 +24,8 @@ use ws::{server::WebsocketListener,
          connect::WsSocket,
          frame::WsHead,
          utils::{ChildProtocol, WsSession}};
-use udp::{Socket as SocketTrait,
-          connect::UdpSocket,
-          server::{PortsAdapterFactory as UdpPortsAdapterFactory, SocketListener as UdpSocketListener}};
-use quic::{server::QuicListener,
+use udp::terminal::UdpTerminal;
+use quic::{server::{QuicListener, ClientCertVerifyLevel},
            utils::QuicSocketReady};
 use mqtt::server::{WsMqttBrokerFactory, WssMqttBrokerFactory, QuicMqttBrokerFactory,
                    register_mqtt_listener, register_mqtt_service, register_quic_mqtt_service,
@@ -271,12 +269,12 @@ fn test_tls_mqtt_proxy_service() {
     thread::sleep(Duration::from_millis(10000000));
 }
 
-struct TestQuicMqttConnectHandler<S: SocketTrait>(PhantomData<S>);
+struct TestQuicMqttConnectHandler;
 
-unsafe impl<S: SocketTrait> Send for TestQuicMqttConnectHandler<S> {}
-unsafe impl<S: SocketTrait> Sync for TestQuicMqttConnectHandler<S> {}
+unsafe impl Send for TestQuicMqttConnectHandler {}
+unsafe impl Sync for TestQuicMqttConnectHandler {}
 
-impl<S: SocketTrait> Handler for TestQuicMqttConnectHandler<S> {
+impl Handler for TestQuicMqttConnectHandler {
     type A = QuicMqttEvent;
     type B = ();
     type C = ();
@@ -291,7 +289,7 @@ impl<S: SocketTrait> Handler for TestQuicMqttConnectHandler<S> {
               env: Arc<dyn GrayVersion>, _: Atom,
               args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> LocalBoxFuture<'static, Self::HandleResult> {
         async move {
-            let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const QuicMqttConnectHandle<S>) };
+            let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const QuicMqttConnectHandle) };
             match args {
                 Args::OneArgs(QuicMqttEvent::Connect(socket_id, broker_name, client_id, keep_alive, is_clean_session, user, pwd)) => {
                     //处理Mqtt连接
@@ -324,18 +322,18 @@ impl<S: SocketTrait> Handler for TestQuicMqttConnectHandler<S> {
     }
 }
 
-impl<S: SocketTrait> TestQuicMqttConnectHandler<S> {
+impl TestQuicMqttConnectHandler {
     pub fn new() -> Self {
-        TestQuicMqttConnectHandler(PhantomData)
+        TestQuicMqttConnectHandler
     }
 }
 
-struct TestQuicMqttRequestHandler<S: SocketTrait>(PhantomData<S>);
+struct TestQuicMqttRequestHandler;
 
-unsafe impl<S: SocketTrait> Send for TestQuicMqttRequestHandler<S> {}
-unsafe impl<S: SocketTrait> Sync for TestQuicMqttRequestHandler<S> {}
+unsafe impl Send for TestQuicMqttRequestHandler {}
+unsafe impl Sync for TestQuicMqttRequestHandler {}
 
-impl<S: SocketTrait> Handler for TestQuicMqttRequestHandler<S> {
+impl Handler for TestQuicMqttRequestHandler {
     type A = QuicMqttEvent;
     type B = ();
     type C = ();
@@ -348,7 +346,7 @@ impl<S: SocketTrait> Handler for TestQuicMqttRequestHandler<S> {
 
     fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> LocalBoxFuture<'static, Self::HandleResult> {
         async move {
-            let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const QuicMqttConnectHandle<S>) };
+            let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const QuicMqttConnectHandle) };
             match args {
                 Args::OneArgs(QuicMqttEvent::Sub(socket_id, broker_name, client_id, topics)) => {
                     //处理Mqtt订阅主题
@@ -394,9 +392,9 @@ impl<S: SocketTrait> Handler for TestQuicMqttRequestHandler<S> {
     }
 }
 
-impl<S: SocketTrait> TestQuicMqttRequestHandler<S> {
+impl TestQuicMqttRequestHandler {
     pub fn new() -> Self {
-        TestQuicMqttRequestHandler(PhantomData)
+        TestQuicMqttRequestHandler
     }
 }
 
@@ -405,7 +403,8 @@ fn test_mqtt_proxy_service_by_quic() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let udp_rt = AsyncRuntimeBuilder::default_local_thread(Some("server_udp_rt"), None);
+    let quic_rt = AsyncRuntimeBuilder::default_local_thread(Some("server_quic_rt"), None);
 
     let broker_name = "test_quic_mqtt";
     let port = 38080;
@@ -413,36 +412,33 @@ fn test_mqtt_proxy_service_by_quic() {
     //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
     let broker_factory = Arc::new(QuicMqttBrokerFactory::new(broker_name,
                                                              port));
-    let event_handler = Arc::new(TestQuicMqttConnectHandler::<UdpSocket>::new());
-    let rpc_handler = Arc::new(TestQuicMqttRequestHandler::<UdpSocket>::new());
+    let event_handler = Arc::new(TestQuicMqttConnectHandler::new());
+    let rpc_handler = Arc::new(TestQuicMqttRequestHandler::new());
     let listener = Arc::new(QuicMqttProxyListener::with_handler(Some(event_handler)));
     let service = Arc::new(QuicMqttProxyService::with_handler(Some(rpc_handler)));
     register_quic_mqtt_listener(broker_name, listener);
     register_quic_mqtt_service(broker_name, service);
 
-    let listener = QuicListener::new(vec![rt.clone()],
-                                     "./tests/7285407__17youx.cn.pem",
-                                     "./tests/7285407__17youx.cn.key",
+    let listener = QuicListener::new(vec![quic_rt],
+                                     "./tests/quic.com.crt",
+                                     "./tests/quic.com.key",
+                                     ClientCertVerifyLevel::Ignore,
                                      Default::default(),
                                      65535,
                                      65535,
                                      broker_factory.new_quic_service(),
-                                     Some(1))
-        .expect("Create quic mqtt listener failed");
-
-    let mut factory = UdpPortsAdapterFactory::<UdpSocket>::new();
-    factory.bind(port, Box::new(listener));
-    let addrs = vec![SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), port)];
+                                     10)
+        .expect("Create quic listener failed");
+    let addrs = SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), port);
 
     //用于Quic的udp连接监听器，有且只允许有一个运行时
-    match UdpSocketListener::bind(vec![rt],
-                                  factory,
-                                  addrs,
-                                  1024,
-                                  1024,
-                                  0xffff,
-                                  0xffff,
-                                  Some(1)) {
+    match UdpTerminal::bind(addrs,
+                            udp_rt,
+                            8 * 1024 * 1024,
+                            8 * 1024 * 1024,
+                            0xffff,
+                            0xffff,
+                            Box::new(listener)) {
         Err(e) => {
             println!("!!!> Rpc Listener Bind Error, reason: {:?}", e);
         },
@@ -453,3 +449,11 @@ fn test_mqtt_proxy_service_by_quic() {
 
     thread::sleep(Duration::from_millis(10000000));
 }
+
+
+
+
+
+
+
+

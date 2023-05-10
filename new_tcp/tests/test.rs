@@ -177,7 +177,7 @@ fn test_tcp_connect() {
                                16,
                                4096,
                                4096,
-                               Some(1)) {
+                               Some(100)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 & Ipv6 Address Error, reason: {:?}", e);
         },
@@ -220,7 +220,7 @@ fn test_tls_connect() {
                                16,
                                4096,
                                4096,
-                               Some(1)) {
+                               Some(100)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 & Ipv6 Address Error, reason: {:?}", e);
         },

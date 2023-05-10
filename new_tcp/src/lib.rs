@@ -1,4 +1,5 @@
 #![allow(warnings)]
+#![feature(is_some_and)]
 #![feature(io_slice_advance)]
 
 use std::ptr;

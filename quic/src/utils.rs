@@ -18,12 +18,9 @@ use futures::future::{FutureExt, LocalBoxFuture};
 use quinn_proto::{Connection, ConnectionEvent, ConnectionHandle, StreamId};
 use rustls::{Certificate, PrivateKey};
 
-use udp::{Socket,
-          connect::UdpSocket};
-
 use crate::{SocketHandle,
-            connect::QuicSocket};
-use crate::client::QuicClient;
+            connect::QuicSocket,
+            client::QuicClient};
 
 ///
 /// 连接令牌
@@ -223,15 +220,15 @@ pub fn load_key(bin: Vec<u8>) -> PrivateKey {
 }
 
 /// 线程安全的异步休眠对象
-pub struct Hibernate<S: Socket>(Arc<InnerHibernate<S>>);
+pub struct Hibernate(Arc<InnerHibernate>);
 
-impl<S: Socket> Clone for Hibernate<S> {
+impl Clone for Hibernate {
     fn clone(&self) -> Self {
         Hibernate(self.0.clone())
     }
 }
 
-impl<S: Socket> Future for Hibernate<S> {
+impl Future for Hibernate {
     type Output = Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -278,9 +275,9 @@ impl<S: Socket> Future for Hibernate<S> {
     }
 }
 
-impl<S: Socket> Hibernate<S> {
+impl Hibernate {
     /// 构建一个异步休眠对象
-    pub fn new(handle: SocketHandle<S>,
+    pub fn new(handle: SocketHandle,
                ready: QuicSocketReady) -> Self {
         let inner = InnerHibernate {
             handle,
@@ -329,8 +326,8 @@ impl<S: Socket> Hibernate<S> {
 }
 
 // 内部线程安全的异步休眠对象
-struct InnerHibernate<S: Socket> {
-    handle:         SocketHandle<S>,            //当前Quic连接的句柄
+struct InnerHibernate {
+    handle:         SocketHandle,            //当前Quic连接的句柄
     ready:          QuicSocketReady,            //唤醒后感兴趣的事件
     waker:          SpinLock<Option<Waker>>,    //休眠唤醒器
     waker_status:   AtomicU8,                   //唤醒状态

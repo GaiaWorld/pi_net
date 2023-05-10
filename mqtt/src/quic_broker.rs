@@ -7,8 +7,6 @@ use mqtt311::{TopicPath, Publish};
 
 use pi_hash::XHashMap;
 
-use udp::Socket;
-
 use crate::{server::MqttBrokerProtocol,
             quic_session::{MqttSession, MqttConnect, QosZeroSession},
             utils::{PathTree, QuicBrokerSession}};
@@ -23,16 +21,16 @@ lazy_static! {
 ///
 /// Mqtt代理监听器
 ///
-pub trait MqttBrokerListener<S: Socket>: Send + Sync + 'static {
+pub trait MqttBrokerListener: Send + Sync + 'static {
     /// 处理Mqtt客户端已连接事件
     fn connected(&self,
                  protocol: MqttBrokerProtocol,
-                 connect: Arc<dyn MqttConnect<S>>) -> LocalBoxFuture<'static, Result<()>>;
+                 connect: Arc<dyn MqttConnect>) -> LocalBoxFuture<'static, Result<()>>;
 
     /// 处理Mqtt客户端关闭事件
     fn closed(&self,
               protocol: MqttBrokerProtocol,
-              connect: Arc<dyn MqttConnect<S>>,
+              connect: Arc<dyn MqttConnect>,
               context: QuicBrokerSession,
               reason: Result<()>) -> LocalBoxFuture<'static, ()>;
 }
@@ -40,23 +38,23 @@ pub trait MqttBrokerListener<S: Socket>: Send + Sync + 'static {
 ///
 /// Mqtt代理服务
 ///
-pub trait MqttBrokerService<S: Socket>: Send + Sync + 'static {
+pub trait MqttBrokerService: Send + Sync + 'static {
     /// 指定Mqtt客户端订阅指定主题的服务
     fn subscribe(&self,
                  protocol: MqttBrokerProtocol,
-                 connect: Arc<dyn MqttConnect<S>>,
+                 connect: Arc<dyn MqttConnect>,
                  topics: Vec<(String, u8)>) -> LocalBoxFuture<'static, Result<()>>;
 
     /// 指定Mqtt客户端取消订阅指定主题的服务
     fn unsubscribe(&self,
                    protocol: MqttBrokerProtocol,
-                   connect: Arc<dyn MqttConnect<S>>,
+                   connect: Arc<dyn MqttConnect>,
                    topics: Vec<String>) -> LocalBoxFuture<'static, Result<()>>;
 
     /// 指定Mqtt客户端发布指定主题的服务
     fn publish(&self,
                protocol: MqttBrokerProtocol,
-               connect: Arc<dyn MqttConnect<S>>,
+               connect: Arc<dyn MqttConnect>,
                topic: String,
                payload: Arc<Vec<u8>>) -> LocalBoxFuture<'static, Result<()>>;
 }
@@ -72,17 +70,17 @@ pub enum Retain {
 ///
 /// 订阅缓存，缓存订阅指定主题的会话，和主题的retain
 ///
-struct SubCache<S: Socket> {
+struct SubCache {
     retain:     Option<Publish>,                //retain
-    first:      Option<Arc<QosZeroSession<S>>>, //主题的首个订阅者
-    sessions:   Vec<Arc<QosZeroSession<S>>>,    //会话表
+    first:      Option<Arc<QosZeroSession>>, //主题的首个订阅者
+    sessions:   Vec<Arc<QosZeroSession>>,    //会话表
 }
 
-unsafe impl<S: Socket> Send for SubCache<S> {}
+unsafe impl Send for SubCache {}
 
-impl<S: Socket> SubCache<S> {
+impl SubCache {
     /// 构建指定会话和retain的订阅缓存
-    pub fn with_session(first: Option<Arc<QosZeroSession<S>>>,
+    pub fn with_session(first: Option<Arc<QosZeroSession>>,
                         retain: Option<Publish>) -> Self {
         SubCache {
             retain,
@@ -95,37 +93,37 @@ impl<S: Socket> SubCache<S> {
 ///
 /// Mqtt监听器
 ///
-pub struct MqttListener<S: Socket>(pub Arc<dyn MqttBrokerListener<S>>);
+pub struct MqttListener(pub Arc<dyn MqttBrokerListener>);
 
-unsafe impl<S: Socket> Send for MqttListener<S> {}
-unsafe impl<S: Socket> Sync for MqttListener<S> {}
+unsafe impl Send for MqttListener {}
+unsafe impl Sync for MqttListener {}
 
 ///
 /// Mqtt服务
 ///
-pub struct MqttService<S: Socket>(pub Arc<dyn MqttBrokerService<S>>);
+pub struct MqttService(pub Arc<dyn MqttBrokerService>);
 
-unsafe impl<S: Socket> Send for MqttService<S> {}
-unsafe impl<S: Socket> Sync for MqttService<S> {}
+unsafe impl Send for MqttService {}
+unsafe impl Sync for MqttService {}
 
 ///
 /// Mqtt代理
 ///
-pub struct MqttBroker<S: Socket> {
-    listener:   Arc<RwLock<Option<Arc<dyn MqttBrokerListener<S>>>>>,           //监听器，用于监听Mqtt连接和关闭事件
-    service:    Arc<RwLock<Option<Arc<dyn MqttBrokerService<S>>>>>,            //通用主题服务
-    services:   Arc<RwLock<XHashMap<String, Arc<dyn MqttBrokerService<S>>>>>,  //服务表，保存指定主题的服务
-    sessions:   Arc<RwLock<XHashMap<String, Arc<QosZeroSession<S>>>>>,          //会话表
-    sub_tab:    Arc<RwLock<XHashMap<String, Arc<RwLock<SubCache<S>>>>>>,        //会话订阅表
-    patterns:   Arc<RwLock<PathTree<Arc<QosZeroSession<S>>>>>,                  //订阅模式表
+pub struct MqttBroker {
+    listener:   Arc<RwLock<Option<Arc<dyn MqttBrokerListener>>>>,           //监听器，用于监听Mqtt连接和关闭事件
+    service:    Arc<RwLock<Option<Arc<dyn MqttBrokerService>>>>,            //通用主题服务
+    services:   Arc<RwLock<XHashMap<String, Arc<dyn MqttBrokerService>>>>,  //服务表，保存指定主题的服务
+    sessions:   Arc<RwLock<XHashMap<String, Arc<QosZeroSession>>>>,          //会话表
+    sub_tab:    Arc<RwLock<XHashMap<String, Arc<RwLock<SubCache>>>>>,        //会话订阅表
+    patterns:   Arc<RwLock<PathTree<Arc<QosZeroSession>>>>,                  //订阅模式表
     publics:    Arc<RwLock<Vec<(String, u8)>>>,                                 //已发布的公共主题列表
-    topics:     Arc<RwLock<XHashMap<Arc<QosZeroSession<S>>, Vec<String>>>>,     //用户已订阅主题表
+    topics:     Arc<RwLock<XHashMap<Arc<QosZeroSession>, Vec<String>>>>,     //用户已订阅主题表
 }
 
-unsafe impl<S: Socket> Send for MqttBroker<S> {}
-unsafe impl<S: Socket> Sync for MqttBroker<S> {}
+unsafe impl Send for MqttBroker {}
+unsafe impl Sync for MqttBroker {}
 
-impl<S: Socket> Clone for MqttBroker<S> {
+impl Clone for MqttBroker {
     fn clone(&self) -> Self {
         MqttBroker {
             listener: self.listener.clone(),
@@ -140,7 +138,7 @@ impl<S: Socket> Clone for MqttBroker<S> {
     }
 }
 
-impl<S: Socket> MqttBroker<S> {
+impl MqttBroker {
     /// 构建Mqtt代理
     pub fn new() -> Self {
         MqttBroker {
@@ -156,7 +154,7 @@ impl<S: Socket> MqttBroker<S> {
     }
 
     /// 获取代理监听器
-    pub fn get_listener(&self) -> Option<MqttListener<S>> {
+    pub fn get_listener(&self) -> Option<MqttListener> {
         if let Some(listener) = self.listener.read().as_ref() {
             return Some(MqttListener(listener.clone()));
         }
@@ -165,12 +163,12 @@ impl<S: Socket> MqttBroker<S> {
     }
 
     /// 注册代理监听器
-    pub fn register_listener(&self, listener: Arc<dyn MqttBrokerListener<S>>) {
+    pub fn register_listener(&self, listener: Arc<dyn MqttBrokerListener>) {
         *self.listener.write() = Some(listener);
     }
 
     /// 获取通用服务
-    pub fn get_service(&self) -> Option<MqttService<S>> {
+    pub fn get_service(&self) -> Option<MqttService> {
         if let Some(service) = self.service.read().as_ref() {
             return Some(MqttService(service.clone()));
         }
@@ -179,12 +177,12 @@ impl<S: Socket> MqttBroker<S> {
     }
 
     /// 注册通用服务
-    pub fn register_service(&self, service: Arc<dyn MqttBrokerService<S>>) {
+    pub fn register_service(&self, service: Arc<dyn MqttBrokerService>) {
         *self.service.write() = Some(service);
     }
 
     /// 获取指定主题的服务
-    pub fn get_topic_service(&self, topic: &String) -> Option<MqttService<S>> {
+    pub fn get_topic_service(&self, topic: &String) -> Option<MqttService> {
         if let Some(service) = self.services.read().get(topic) {
             return Some(MqttService(service.clone()));
         }
@@ -194,7 +192,7 @@ impl<S: Socket> MqttBroker<S> {
 
     /// 注册指定主题的服务
     pub fn register_topic_service(&self, topic: String,
-                                  service: Arc<dyn MqttBrokerService<S>>) {
+                                  service: Arc<dyn MqttBrokerService>) {
         self.services.write().insert(topic, service);
     }
 
@@ -224,7 +222,7 @@ impl<S: Socket> MqttBroker<S> {
     }
 
     /// 获取指定会话
-    pub fn get_session(&self, client_id: &String) -> Option<Arc<QosZeroSession<S>>> {
+    pub fn get_session(&self, client_id: &String) -> Option<Arc<QosZeroSession>> {
         if let Some(r) = self.sessions.read().get(client_id) {
             return Some(r.clone());
         }
@@ -234,14 +232,14 @@ impl<S: Socket> MqttBroker<S> {
 
     /// 插入指定会话
     pub fn insert_session(&self, client_id: String,
-                          session: QosZeroSession<S>) -> Arc<QosZeroSession<S>> {
+                          session: QosZeroSession) -> Arc<QosZeroSession> {
         let connect = Arc::new(session);
         self.sessions.write().insert(client_id, connect.clone());
         connect
     }
 
     /// 移除指定会话，返回被移除的会话
-    pub fn remove_session(&self, client_id: &String) -> Option<Arc<QosZeroSession<S>>> {
+    pub fn remove_session(&self, client_id: &String) -> Option<Arc<QosZeroSession>> {
         self.sessions.write().remove(client_id)
     }
 
@@ -249,7 +247,7 @@ impl<S: Socket> MqttBroker<S> {
     pub fn subscribed(&self, is_public: bool,
                       topic: &String,
                       qos: u8,
-                      retain: Option<Publish>) -> Option<Vec<Arc<QosZeroSession<S>>>> {
+                      retain: Option<Publish>) -> Option<Vec<Arc<QosZeroSession>>> {
         let mut is_new_public = false; //是否是新的公共主题
         if is_public {
             //如果是公共主题
@@ -380,7 +378,7 @@ impl<S: Socket> MqttBroker<S> {
     }
 
     /// 为指定会话订阅指定主题，返回指定主题缓存的最新的发布消息
-    pub fn subscribe(&self, session: Arc<QosZeroSession<S>>, topic: String) -> Option<Retain> {
+    pub fn subscribe(&self, session: Arc<QosZeroSession>, topic: String) -> Option<Retain> {
         let path = TopicPath::from(topic.clone());
         if path.wildcards {
             //订阅的是主题模式，则匹配公共主题列表
@@ -460,7 +458,7 @@ impl<S: Socket> MqttBroker<S> {
     }
 
     /// 为指定会话退订指定主题
-    pub fn unsubscribe(&self, session: &Arc<QosZeroSession<S>>, topic: String) {
+    pub fn unsubscribe(&self, session: &Arc<QosZeroSession>, topic: String) {
         let path = TopicPath::from(topic.clone());
         if path.wildcards {
             //退订的是主题模式，则移除匹配主题模式的指定会话
@@ -544,7 +542,7 @@ impl<S: Socket> MqttBroker<S> {
     }
 
     /// 退订指定会话已订阅的所有主题
-    pub fn unsubscribe_all(&self, session: &Arc<QosZeroSession<S>>) {
+    pub fn unsubscribe_all(&self, session: &Arc<QosZeroSession>) {
         //从用户已订阅主题中移除当前会话
         let opt = self.topics.write().remove(session);
 
@@ -613,8 +611,8 @@ fn is_match(pattern: &TopicPath, path: &TopicPath) -> bool {
 }
 
 // 为指定会话记录订阅主题，包括主题、主题模式和匹配主题模式的主题
-fn save_topic<S: Socket>(broker: &MqttBroker<S>,
-                         session: &Arc<QosZeroSession<S>>,
+fn save_topic(broker: &MqttBroker,
+                         session: &Arc<QosZeroSession>,
                          topic: &String) {
     if broker.topics.read().contains_key(session) {
         //指定会话的已订阅主题存在

@@ -20,10 +20,8 @@ use ws::{server::WebsocketListener,
          connect::WsSocket,
          frame::WsHead,
          utils::{ChildProtocol, WsSession}};
-use udp::{Socket as SocketTrait,
-          connect::UdpSocket,
-          server::{PortsAdapterFactory as UdpPortsAdapterFactory, SocketListener as UdpSocketListener}};
-use quic::{server::QuicListener,
+use udp::terminal::UdpTerminal;
+use quic::{server::{QuicListener, ClientCertVerifyLevel},
            utils::QuicSocketReady};
 use mqtt::{server::{register_mqtt_listener, register_mqtt_service,
                     register_mqtts_listener, register_mqtts_service,
@@ -270,10 +268,10 @@ fn test_tls_mqtt_311() {
 
 struct TestQuicBrokerService;
 
-impl<S: SocketTrait> QuicMqttBrokerListener<S> for TestQuicBrokerService {
+impl QuicMqttBrokerListener for TestQuicBrokerService {
     fn connected(&self,
                  protocol: MqttBrokerProtocol,
-                 connect: Arc<dyn QuicMqttConnect<S>>) -> LocalBoxFuture<'static, Result<()>> {
+                 connect: Arc<dyn QuicMqttConnect>) -> LocalBoxFuture<'static, Result<()>> {
         async move{
             println!("mqtt connected, connect: {:?}", connect);
 
@@ -301,7 +299,7 @@ impl<S: SocketTrait> QuicMqttBrokerListener<S> for TestQuicBrokerService {
 
     fn closed(&self,
               protocol: MqttBrokerProtocol,
-              connect: Arc<dyn QuicMqttConnect<S>>,
+              connect: Arc<dyn QuicMqttConnect>,
               context: QuicBrokerSession,
               reason: Result<()>) -> LocalBoxFuture<'static, ()> {
         async move {
@@ -314,11 +312,11 @@ impl<S: SocketTrait> QuicMqttBrokerListener<S> for TestQuicBrokerService {
     }
 }
 
-impl<S: SocketTrait> QuicMqttBrokerService<S> for TestQuicBrokerService {
+impl QuicMqttBrokerService for TestQuicBrokerService {
     //指定Mqtt客户端订阅指定主题的服务
     fn subscribe(&self,
                  protocol: MqttBrokerProtocol,
-                 connect: Arc<dyn QuicMqttConnect<S>>,
+                 connect: Arc<dyn QuicMqttConnect>,
                  topics: Vec<(String, u8)>) -> LocalBoxFuture<'static, Result<()>> {
         async move {
             println!("mqtt subscribe, connect: {:?}", connect);
@@ -348,7 +346,7 @@ impl<S: SocketTrait> QuicMqttBrokerService<S> for TestQuicBrokerService {
     //指定Mqtt客户端取消订阅指定主题的服务
     fn unsubscribe(&self,
                    protocol: MqttBrokerProtocol,
-                   connect: Arc<dyn QuicMqttConnect<S>>,
+                   connect: Arc<dyn QuicMqttConnect>,
                    topics: Vec<String>) -> LocalBoxFuture<'static, Result<()>> {
         async move {
             println!("mqtt unsubscribe, connect: {:?}", connect);
@@ -359,7 +357,7 @@ impl<S: SocketTrait> QuicMqttBrokerService<S> for TestQuicBrokerService {
     //指定Mqtt客户端发布指定主题的服务
     fn publish(&self,
                protocol: MqttBrokerProtocol,
-               connect: Arc<dyn QuicMqttConnect<S>>,
+               connect: Arc<dyn QuicMqttConnect>,
                topic: String,
                payload: Arc<Vec<u8>>) -> LocalBoxFuture<'static, Result<()>> {
         async move {
@@ -373,7 +371,8 @@ fn test_quic_mqtt_311() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let udp_rt = AsyncRuntimeBuilder::default_local_thread(Some("server_udp_rt"), None);
+    let quic_rt = AsyncRuntimeBuilder::default_local_thread(Some("server_quic_rt"), None);
 
     let broker_name = "test_quic_mqtt";
     let port = 38080;
@@ -385,29 +384,26 @@ fn test_quic_mqtt_311() {
     register_quic_mqtt_listener(broker_name, service.clone());
     register_quic_mqtt_service(broker_name, service);
 
-    let listener = QuicListener::new(vec![rt.clone()],
-                                     "./tests/7285407__17youx.cn.pem",
-                                     "./tests/7285407__17youx.cn.key",
+    let listener = QuicListener::new(vec![quic_rt],
+                                     "./tests/quic.com.crt",
+                                     "./tests/quic.com.key",
+                                     ClientCertVerifyLevel::Ignore,
                                      Default::default(),
                                      65535,
                                      65535,
                                      broker_factory.new_quic_service(),
-                                     Some(1))
-        .expect("Create quic mqtt listener failed");
-
-    let mut factory = UdpPortsAdapterFactory::<UdpSocket>::new();
-    factory.bind(port, Box::new(listener));
-    let addrs = vec![SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), port)];
+                                     10)
+        .expect("Create quic listener failed");
+    let addrs = SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), port);
 
     //用于Quic的udp连接监听器，有且只允许有一个运行时
-    match UdpSocketListener::bind(vec![rt],
-                                  factory,
-                                  addrs,
-                                  1024,
-                                  1024,
-                                  0xffff,
-                                  0xffff,
-                                  Some(1)) {
+    match UdpTerminal::bind(addrs,
+                            udp_rt,
+                            8 * 1024 * 1024,
+                            8 * 1024 * 1024,
+                            0xffff,
+                            0xffff,
+                            Box::new(listener)) {
         Err(e) => {
             println!("!!!> Quic mqtt Listener Bind Error, reason: {:?}", e);
         },

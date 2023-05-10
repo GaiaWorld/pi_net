@@ -15,8 +15,6 @@ use log::{warn, error};
 use pi_atom::Atom;
 use pi_hash::XHashMap;
 
-use udp::{Socket,
-          connect::UdpSocket};
 use quic::{AsyncService, SocketHandle, SocketEvent,
            connect::QuicSocket,
            utils::QuicSocketReady};
@@ -31,17 +29,17 @@ use crate::{server::MqttBrokerProtocol,
 ///
 #[derive(Clone)]
 pub struct QuicMqtt311 {
-    broker_name:    String,                 //代理名
-    qos:            QoS,                    //支持的最大Qos
-    broker:         MqttBroker<UdpSocket>,  //Mqtt代理
+    broker_name:    String,     //代理名
+    qos:            QoS,        //支持的最大Qos
+    broker:         MqttBroker, //Mqtt代理
 }
 
 unsafe impl Send for QuicMqtt311 {}
 unsafe impl Sync for QuicMqtt311 {}
 
-impl AsyncService<UdpSocket> for QuicMqtt311 {
+impl AsyncService for QuicMqtt311 {
     fn handle_connected(&self,
-                        handle: SocketHandle<UdpSocket>,
+                        handle: SocketHandle,
                         result: Result<()>) -> LocalBoxFuture<'static, ()> {
         async move {
             if let Err(e) = result {
@@ -58,7 +56,7 @@ impl AsyncService<UdpSocket> for QuicMqtt311 {
     }
 
     fn handle_readed(&self,
-                     handle: SocketHandle<UdpSocket>,
+                     handle: SocketHandle,
                      result: Result<usize>) -> LocalBoxFuture<'static, ()> {
         let quic_mqtt = self.clone();
         async move {
@@ -164,7 +162,7 @@ impl AsyncService<UdpSocket> for QuicMqtt311 {
     }
 
     fn handle_writed(&self,
-                     _handle: SocketHandle<UdpSocket>,
+                     _handle: SocketHandle,
                      _result: Result<()>) -> LocalBoxFuture<'static, ()> {
         async move {
 
@@ -172,7 +170,7 @@ impl AsyncService<UdpSocket> for QuicMqtt311 {
     }
 
     fn handle_closed(&self,
-                     handle: SocketHandle<UdpSocket>,
+                     handle: SocketHandle,
                      stream_id: Option<StreamId>,
                      code: u32,
                      result: Result<()>) -> LocalBoxFuture<'static, ()> {
@@ -219,7 +217,7 @@ impl AsyncService<UdpSocket> for QuicMqtt311 {
 
     /// 异步处理已超时
     fn handle_timeouted(&self,
-                        handle: SocketHandle<UdpSocket>,
+                        handle: SocketHandle,
                         result: Result<SocketEvent>) -> LocalBoxFuture<'static, ()> {
         if let Err(e) = send_packet(&handle, &Packet::Disconnect) {
             //发送关闭连接报文失败，则立即返回错误原因
@@ -243,7 +241,7 @@ impl AsyncService<UdpSocket> for QuicMqtt311 {
 }
 
 // 更新当前会话的连接超时时长
-fn update_timeout(connect: &SocketHandle<UdpSocket>,
+fn update_timeout(connect: &SocketHandle,
                   client_id: String,
                   keep_alive: u16) {
     //设置当前会话超时时长，一般为keep_alive的1.5倍
@@ -253,7 +251,7 @@ fn update_timeout(connect: &SocketHandle<UdpSocket>,
 }
 
 // 发送指定的Mqtt报文，一般用于报文回应
-fn send_packet(connect: &SocketHandle<UdpSocket>,
+fn send_packet(connect: &SocketHandle,
                packet: &Packet) -> Result<()> {
     let mut buf: Cursor<Vec<u8>> = Cursor::new(Vec::new());
     if let Err(e) = buf.write_packet(packet) {
@@ -268,7 +266,7 @@ fn send_packet(connect: &SocketHandle<UdpSocket>,
 }
 
 /// 广播指定的Mqtt报文，用于发布消息的发送
-pub fn broadcast_packet(connects: &[SocketHandle<UdpSocket>],
+pub fn broadcast_packet(connects: &[SocketHandle],
                         packet: &Packet) -> Result<()> {
     if connects.len() == 0 {
         //Ws连接列表为空，则忽略
@@ -289,8 +287,8 @@ pub fn broadcast_packet(connects: &[SocketHandle<UdpSocket>],
             continue;
         }
 
-        return SocketHandle::<UdpSocket>::broadcast(connects,
-                                                    buf.into_inner());
+        return SocketHandle::broadcast(connects,
+                                       buf.into_inner());
     }
 
     Ok(())
@@ -298,7 +296,7 @@ pub fn broadcast_packet(connects: &[SocketHandle<UdpSocket>],
 
 // 接受Mqtt连接请求
 async fn accept(protocol: QuicMqtt311,
-                connect: SocketHandle<UdpSocket>,
+                connect: SocketHandle,
                 packet: Connect) -> Result<()> {
     let clean_session = packet.clean_session;
     let client_id = packet.client_id.clone();
@@ -388,9 +386,9 @@ async fn accept(protocol: QuicMqtt311,
 
 // 创建新会话，并重置会话
 fn reset_session(protocol: &QuicMqtt311,
-                 connect: SocketHandle<UdpSocket>,
+                 connect: SocketHandle,
                  client_id: String,
-                 packet: Connect) -> Arc<QosZeroSession<UdpSocket>> {
+                 packet: Connect) -> Arc<QosZeroSession> {
     let mut session = QosZeroSession::with_client_id(client_id.clone());
     session.bind_connect(connect.clone());
     session.set_accept(true);
@@ -408,7 +406,7 @@ fn reset_session(protocol: &QuicMqtt311,
 
 // 获取Ws连接绑定的客户端id和客户端保持时长
 #[inline(always)]
-fn get_client_context(connect: &SocketHandle<UdpSocket>) -> Result<(String, u16)> {
+fn get_client_context(connect: &SocketHandle) -> Result<(String, u16)> {
     if let Some(handle) = connect.get_session::<QuicBrokerSession>() {
         //Ws连接绑定的客户端存在
         let h = handle.as_ref();
@@ -422,7 +420,7 @@ fn get_client_context(connect: &SocketHandle<UdpSocket>) -> Result<(String, u16)
 
 // 发布消息
 async fn publish(protocol: QuicMqtt311,
-                 connect: SocketHandle<UdpSocket>,
+                 connect: SocketHandle,
                  mut packet: Publish) -> Result<()> {
     let (client_id, keep_alive) = match get_client_context(&connect) {
         Err(e) => {
@@ -496,7 +494,7 @@ async fn publish(protocol: QuicMqtt311,
                                                        qos,
                                                        retain) {
         //指定主题有订阅
-        let mut connects: Vec<SocketHandle<UdpSocket>> = Vec::with_capacity(sessions.len());
+        let mut connects: Vec<SocketHandle> = Vec::with_capacity(sessions.len());
         for session in sessions {
             //返回会话绑定的Ws连接
             if let Some(connect) = session.get_connect() {
@@ -517,7 +515,7 @@ async fn publish(protocol: QuicMqtt311,
 
 // 订阅主题
 async fn subscribe(protocol: QuicMqtt311,
-                   connect: SocketHandle<UdpSocket>,
+                   connect: SocketHandle,
                    packet: Subscribe) -> Result<()> {
     let (client_id, keep_alive) = match get_client_context(&connect) {
         Err(e) => {
@@ -609,7 +607,7 @@ async fn subscribe(protocol: QuicMqtt311,
 
 // 退订主题
 async fn unsubscribe(protocol: QuicMqtt311,
-                     connect: SocketHandle<UdpSocket>,
+                     connect: SocketHandle,
                      packet: Unsubscribe) -> Result<()> {
     let (client_id, keep_alive) = match get_client_context(&connect) {
         Err(e) => {
@@ -656,7 +654,7 @@ async fn unsubscribe(protocol: QuicMqtt311,
 }
 
 // 处理ping请求
-fn ping_req(connect: SocketHandle<UdpSocket>) -> Result<()> {
+fn ping_req(connect: SocketHandle) -> Result<()> {
     match get_client_context(&connect) {
         Err(e) => {
             return Err(e);
@@ -675,7 +673,7 @@ fn ping_req(connect: SocketHandle<UdpSocket>) -> Result<()> {
 }
 
 // 处理关闭连接请求
-fn disconnect(connect: SocketHandle<UdpSocket>) -> Result<()> {
+fn disconnect(connect: SocketHandle) -> Result<()> {
     connect.close(0, Ok(()))
 }
 
@@ -712,7 +710,7 @@ impl QuicMqtt311 {
     }
 
     //获取内部代理
-    pub fn get_broker(&self) -> &MqttBroker<UdpSocket> {
+    pub fn get_broker(&self) -> &MqttBroker {
         &self.broker
     }
 }

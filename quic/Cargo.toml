@@ -1,6 +1,6 @@
 [package]
 name = "quic"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["vmos <vmosone007@gmail.com>"]
 edition = "2018"
 description = "Quic client/server"
@@ -19,11 +19,11 @@ crossbeam-channel = "0.5"
 pi_hash = "0.1"
 dashmap = "4.0"
 log = "0.4"
-udp = { path = "../udp" }
+udp = { path = "../blocking_udp", package = "blocking_udp" }
 pi_cancel_timer = "0.2"
 slotmap = "1.0"
 flume = "0.10"
-spin_sleep = "1.1"
+parking = "2.1"
 tracing = "0.1"
 
 [dev-dependencies]

@@ -23,15 +23,13 @@ use ed25519_dalek::PublicKey;
 use x509_parser::pem::Pem;
 use pem::parse;
 use der_parser::parse_ber;
-use spin_sleep;
 use env_logger;
 use tracing::Instrument;
 use tracing_chrome::ChromeLayerBuilder;
 use tracing_subscriber::{registry::Registry, prelude::*};
 
-use udp::{Socket, AsyncService,
-          connect::UdpSocket,
-          server::{PortsAdapterFactory, SocketListener}};
+use udp::{AsyncService,
+          terminal::UdpTerminal};
 
 use quic::{AsyncService as QuicAsyncService, SocketHandle, SocketEvent,
            connect::QuicSocket,
@@ -78,7 +76,7 @@ fn test_quinn() {
         }
     });
 
-    thread::sleep(Duration::from_millis(5000));
+    thread::sleep(Duration::from_millis(1000));
 
     let client_rt = Builder::new_multi_thread()
         .worker_threads(2)
@@ -113,7 +111,7 @@ fn test_quinn() {
             .await
             .map_err(|e| println!("failed to connect: {:?}", e))
             .expect("Client connect failed");
-        println!("!!!!!!Client connect ok, conn: {:?}, time: {:?}", con, now.elapsed());
+        println!("!!!!!!Client connect ok, conn: {:?}", con);
 
         let (mut send, recv) = con
             .connection
@@ -123,7 +121,9 @@ fn test_quinn() {
             .expect("Open stream failed");
         println!("!!!!!!Client open bi ok, time: {:?}", now.elapsed());
 
-        loop_client(con, send, recv, 1000).await;
+        thread::sleep(Duration::from_millis(1000));
+
+        loop_client(con, send, recv, 10).await;
     });
 
     thread::sleep(Duration::from_millis(10000000));
@@ -166,19 +166,21 @@ fn loop_server(mut send_stream: quinn::SendStream,
                mut recv_stream: quinn::RecvStream)
     -> BoxFuture<'static, ()> {
     async move {
-        let mut buf = Vec::with_capacity(3600);
-        buf.resize(3600, 0);
-        match recv_stream.read(buf.as_mut_slice()).await {
-            Err(e) => println!("Server recv failed, reason: {:?}", e),
-            Ok(Some(len)) => {
-                println!("Server recv ok, len: {}", len);
-                buf.truncate(len);
-                send_stream.write_all(buf.as_slice()).await;
-            },
-            Ok(None) => (),
-        }
+        loop {
+            let mut buf = Vec::with_capacity(3600);
+            buf.resize(3600, 0);
+            match recv_stream.read(buf.as_mut_slice()).await {
+                Err(_e) => {
 
-        tokio::spawn(loop_server(send_stream, recv_stream));
+                },
+                Ok(Some(len)) => {
+                    println!("Server recv success, len: {}", len);
+                    buf.truncate(len);
+                    send_stream.write_all(buf.as_slice()).await;
+                },
+                Ok(None) => (),
+            }
+        }
     }.boxed()
 }
 
@@ -192,6 +194,7 @@ fn loop_client(conn: quinn::NewConnection,
             return;
         }
 
+        let now = Instant::now();
         send_stream.write_all(b"Hello World!").await;
         let mut buf = Vec::with_capacity(3600);
         buf.resize(3600, 0);
@@ -199,7 +202,7 @@ fn loop_client(conn: quinn::NewConnection,
             Err(e) => println!("Client recv failed, reason: {:?}", e),
             Ok(Some(len)) => {
                 buf.truncate(len);
-                println!("Client recv ok, len: {}, buf: {:?}", len, String::from_utf8(buf))
+                println!("Client recv success, time: {:?}, len: {:?}, buf: {:?}", now.elapsed(), len, String::from_utf8(buf))
             },
             Ok(None) => (),
         }
@@ -210,9 +213,9 @@ fn loop_client(conn: quinn::NewConnection,
 
 struct TestService;
 
-impl<S: Socket> QuicAsyncService<S> for TestService {
+impl QuicAsyncService for TestService {
     fn handle_connected(&self,
-                        handle: SocketHandle<S>,
+                        handle: SocketHandle,
                         result: Result<()>) -> LocalBoxFuture<'static, ()> {
         async move {
             if let Err(e) = result {
@@ -235,7 +238,7 @@ impl<S: Socket> QuicAsyncService<S> for TestService {
     }
 
     fn handle_readed(&self,
-                     handle: SocketHandle<S>,
+                     handle: SocketHandle,
                      result: Result<usize>) -> LocalBoxFuture<'static, ()> {
         async move {
             if let Err(e) = result {
@@ -289,7 +292,7 @@ impl<S: Socket> QuicAsyncService<S> for TestService {
     }
 
     fn handle_writed(&self,
-                     handle: SocketHandle<S>,
+                     handle: SocketHandle,
                      result: Result<()>) -> LocalBoxFuture<'static, ()> {
         async move {
             if let Err(e) = result {
@@ -305,7 +308,7 @@ impl<S: Socket> QuicAsyncService<S> for TestService {
     }
 
     fn handle_closed(&self,
-                     handle: SocketHandle<S>,
+                     handle: SocketHandle,
                      stream_id: Option<StreamId>,
                      code: u32,
                      result: Result<()>) -> LocalBoxFuture<'static, ()> {
@@ -322,7 +325,7 @@ impl<S: Socket> QuicAsyncService<S> for TestService {
 
     /// 异步处理已超时
     fn handle_timeouted(&self,
-                        handle: SocketHandle<S>,
+                        handle: SocketHandle,
                         result: Result<SocketEvent>) -> LocalBoxFuture<'static, ()> {
         async move {
 
@@ -332,38 +335,32 @@ impl<S: Socket> QuicAsyncService<S> for TestService {
 
 #[test]
 fn test_server_with_quinn_client() {
-    let (chrome_layer, _guard) = ChromeLayerBuilder::new().build();
-    tracing_subscriber::registry().with(chrome_layer).init();
-
     //启动日志系统
-    // env_logger::builder().format_timestamp_millis().init();
+    env_logger::builder().format_timestamp_millis().init();
 
-    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
-
-    let mut factory = PortsAdapterFactory::<UdpSocket>::new();
     //Quic连接监听器可以有多个运行时
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
     let listener = QuicListener::new(vec![rt.clone()],
-                                     "./tests/7285407__17youx.cn.pem",
-                                     "./tests/7285407__17youx.cn.key",
+                                     "./tests/quic.com.crt",
+                                     "./tests/quic.com.key",
                                      ClientCertVerifyLevel::Ignore,
                                      Default::default(),
                                      65535,
                                      65535,
                                      Arc::new(TestService),
-                                     Some(0))
+                                     1)
         .expect("Create quic listener failed");
-    factory.bind(38080, Box::new(listener));
-    let addrs = vec![SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), 38080)];
+    let addrs = SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), 38080);
 
     //用于Quic的udp连接监听器，有且只允许有一个运行时
-    match SocketListener::bind(vec![rt],
-                               factory,
-                               addrs,
-                               1024,
-                               1024,
-                               0xffff,
-                               0xffff,
-                               Some(10)) {
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    match UdpTerminal::bind(addrs,
+                            rt,
+                            8 * 1024 * 1024,
+                            8 * 1024 * 1024,
+                            0xffff,
+                            0xffff,
+                            Box::new(listener)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 Address Error, reason: {:?}", e);
         },
@@ -379,7 +376,7 @@ fn test_server_with_quinn_client() {
             tokio_rt.spawn(async move {
                 //构建客户端证书
                 let mut roots = rustls::RootCertStore::empty();
-                roots.add(&rustls::Certificate(std::fs::read("./tests/DigiCert Global Root CA.der")
+                roots.add(&rustls::Certificate(std::fs::read("./tests/example.com.der")
                     .unwrap()))
                     .unwrap();
 
@@ -397,7 +394,7 @@ fn test_server_with_quinn_client() {
                 //连接指定的服务端
                 let now = Instant::now();
                 let mut con = endpoint
-                    .connect("127.0.0.1:38080".parse().unwrap(), "test.17youx.cn")
+                    .connect("127.0.0.1:38080".parse().unwrap(), "test.quic.com")
                     .unwrap()
                     .await
                     .map_err(|e| println!("failed to connect: {:?}", e))
@@ -411,7 +408,7 @@ fn test_server_with_quinn_client() {
                     .map_err(|e| println!("failed to open stream: {:?}", e))
                     .expect("Open stream failed");
 
-                thread::sleep(Duration::from_millis(10000));
+                thread::sleep(Duration::from_millis(1000));
 
                 loop_client(con, send, recv, 10).await;
             });
@@ -428,6 +425,7 @@ fn test_client_with_quinn_server() {
 
     let udp_rt = AsyncRuntimeBuilder::default_local_thread(None, None);
     let quic_rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let client_rt = AsyncRuntimeBuilder::default_local_thread(None, None);
     let server_rt = Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -462,24 +460,25 @@ fn test_client_with_quinn_server() {
         }
     });
 
-    thread::sleep(Duration::from_millis(5000));
+    thread::sleep(Duration::from_millis(1000));
 
-    let client = QuicClient::<UdpSocket>::new(udp_rt.clone(),
-                                              vec![quic_rt],
-                                              ServerCertVerifyLevel::CaCertFile("./tests/DigiCert Global Root CA.der".into()),
-                                              EndpointConfig::default(),
-                                              65535,
-                                              65535,
-                                              65535,
-                                              65535,
-                                              5000,
-                                              Some(10),
-                                              None)
+    let client = QuicClient::new("127.0.0.1:5000".parse().unwrap(),
+                                 udp_rt.clone(),
+                                 vec![quic_rt],
+                                 ServerCertVerifyLevel::CaCertFile("./tests/DigiCert Global Root CA.der".into()),
+                                 EndpointConfig::default(),
+                                 65535,
+                                 65535,
+                                 8 * 1024 * 1024,
+                                 8 * 1024 * 1024,
+                                 65535,
+                                 65535,
+                                 5000,
+                                 1)
         .unwrap();
-    udp_rt.spawn(async move {
+    client_rt.spawn(async move {
         let now = Instant::now();
-        match client.connect("127.0.0.1:5000".parse().unwrap(),
-                             "127.0.0.1:38080".parse().unwrap(),
+        match client.connect("127.0.0.1:38080".parse().unwrap(),
                              "test.17youx.cn",
                              None,
                              None).await {
@@ -493,7 +492,7 @@ fn test_client_with_quinn_server() {
                          connection.get_local(),
                          now.elapsed());
 
-                thread::sleep(Duration::from_millis(10000));
+                thread::sleep(Duration::from_millis(1000));
 
                 for index in 0..10 {
                     if let Err(e) = connection.write([b"Hello World ", index.to_string().as_bytes()].concat()) {
@@ -539,54 +538,53 @@ fn test_client() {
 
     let udp_rt = AsyncRuntimeBuilder::default_local_thread(None, None);
     let quic_rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let client_rt = AsyncRuntimeBuilder::default_local_thread(None, None);
 
-    let mut factory = PortsAdapterFactory::<UdpSocket>::new();
-    //Quic连接监听器可以有多个运行时
-    let listener = QuicListener::new(vec![quic_rt.clone()],
-                                     "./tests/7285407__17youx.cn.pem",
-                                     "./tests/7285407__17youx.cn.key",
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let listener = QuicListener::new(vec![rt.clone()],
+                                     "./tests/quic.com.crt",
+                                     "./tests/quic.com.key",
                                      ClientCertVerifyLevel::Ignore,
                                      Default::default(),
                                      65535,
                                      65535,
                                      Arc::new(TestService),
-                                     Some(1))
+                                     1)
         .expect("Create quic listener failed");
-    factory.bind(38080, Box::new(listener));
-    let addrs = vec![SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), 38080)];
+    let addrs = SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), 38080);
 
     //用于Quic的udp连接监听器，有且只允许有一个运行时
-    match SocketListener::bind(vec![udp_rt.clone()],
-                               factory,
-                               addrs,
-                               1024,
-                               1024,
-                               0xffff,
-                               0xffff,
-                               Some(10)) {
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    match UdpTerminal::bind(addrs,
+                            rt,
+                            8 * 1024 * 1024,
+                            8 * 1024 * 1024,
+                            0xffff,
+                            0xffff,
+                            Box::new(listener)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 Address Error, reason: {:?}", e);
         },
         Ok(_) => {
             println!("===> Socket Listener Bind Ipv4 Address Ok");
 
-            let client = QuicClient::<UdpSocket>::new(udp_rt.clone(),
-                                                      vec![quic_rt],
-                                                      ServerCertVerifyLevel::CaCertFile("./tests/DigiCert Global Root CA.der".into()),
-                                                      EndpointConfig::default(),
-                                                      65535,
-                                                      65535,
-                                                      65535,
-                                                      65535,
-                                                      5000,
-                                                      Some(10),
-                                                      None)
+            let client = QuicClient::new("127.0.0.1:5000".parse().unwrap(),
+                                         udp_rt.clone(),
+                                         vec![quic_rt],
+                                         ServerCertVerifyLevel::CaCertFile("./tests/example.com.der".into()),
+                                         EndpointConfig::default(),
+                                         65535,
+                                         65535,
+                                         8 * 1024 * 1024,
+                                         8 * 1024 * 1024,
+                                         65535,
+                                         65535,
+                                         5000,
+                                         1)
                 .unwrap();
-
-            udp_rt.spawn(async move {
-                match client.connect("127.0.0.1:5000".parse().unwrap(),
-                                     "127.0.0.1:38080".parse().unwrap(),
-                                     "test.17youx.cn",
+            client_rt.spawn(async move {
+                match client.connect("127.0.0.1:38080".parse().unwrap(),
+                                     "test.quic.com",
                                      None,
                                      None).await {
                     Err(e) => {
@@ -639,15 +637,15 @@ fn test_client() {
 
 #[test]
 fn test_client_with_self_signed_certificate() {
+    // let (chrome_layer, _guard) = ChromeLayerBuilder::new().build();
+    // tracing_subscriber::registry().with(chrome_layer).init();
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    let udp_rt = AsyncRuntimeBuilder::default_local_thread(None, None);
-    let quic_rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let udp_rt = AsyncRuntimeBuilder::default_local_thread(Some("server_udp_rt"), None);
+    let quic_rt = AsyncRuntimeBuilder::default_local_thread(Some("server_quic_rt"), None);
 
-    let mut factory = PortsAdapterFactory::<UdpSocket>::new();
-    //Quic连接监听器可以有多个运行时
-    let listener = QuicListener::new(vec![quic_rt.clone()],
+    let listener = QuicListener::new(vec![quic_rt],
                                      "./tests/quic.com.crt",
                                      "./tests/quic.com.key",
                                      ClientCertVerifyLevel::Ignore,
@@ -655,49 +653,49 @@ fn test_client_with_self_signed_certificate() {
                                      65535,
                                      65535,
                                      Arc::new(TestService),
-                                     None)
+                                     10)
         .expect("Create quic listener failed");
-    factory.bind(38080, Box::new(listener));
-    let addrs = vec![SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), 38080)];
+    let addrs = SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), 38080);
 
     //用于Quic的udp连接监听器，有且只允许有一个运行时
-    match SocketListener::bind(vec![udp_rt.clone()],
-                               factory,
-                               addrs,
-                               1024,
-                               1024,
-                               0xffff,
-                               0xffff,
-                               None) {
+    match UdpTerminal::bind(addrs,
+                            udp_rt,
+                            8 * 1024 * 1024,
+                            8 * 1024 * 1024,
+                            0xffff,
+                            0xffff,
+                            Box::new(listener)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 Address Error, reason: {:?}", e);
         },
         Ok(_) => {
             println!("===> Socket Listener Bind Ipv4 Address Ok");
 
-            let udp_rt = AsyncRuntimeBuilder::default_local_thread(None, None);
-            let quic_rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+            let udp_rt = AsyncRuntimeBuilder::default_local_thread(Some("client_udp_rt"), None);
+            let quic_rt = AsyncRuntimeBuilder::default_local_thread(Some("client_quic_rt"), None);
+            let client_rt = AsyncRuntimeBuilder::default_local_thread(Some("client_rt"), None);
 
-            let client = QuicClient::<UdpSocket>::new(udp_rt.clone(),
-                                                      vec![quic_rt],
-                                                      ServerCertVerifyLevel::Ignore,
-                                                      EndpointConfig::default(),
-                                                      65535,
-                                                      65535,
-                                                      65535,
-                                                      65535,
-                                                      5000,
-                                                      None,
-                                                      None)
+            let client = QuicClient::new("127.0.0.1:5000".parse().unwrap(),
+                                         udp_rt,
+                                         vec![quic_rt],
+                                         ServerCertVerifyLevel::Custom(Arc::new(TestServerCertVerifier::new())),
+                                         EndpointConfig::default(),
+                                         65535,
+                                         65535,
+                                         8 * 1024 * 1024,
+                                         8 * 1024 * 1024,
+                                         65535,
+                                         65535,
+                                         5000,
+                                         10)
                 .unwrap();
 
             let pem = parse(read("./tests/quic.com.pub").unwrap()).unwrap();
             println!("!!!!!!public key: {:?}", parse_ber(pem.contents()));
 
-            udp_rt.spawn(async move {
+            client_rt.spawn(async move {
                 let now = Instant::now();
-                match client.connect("127.0.0.1:5000".parse().unwrap(),
-                                     "127.0.0.1:38080".parse().unwrap(),
+                match client.connect("127.0.0.1:38080".parse().unwrap(),
                                      "0f.16.58.ff.00.ab.08.ff.0f.16.58.ff.00.ab.08.ff.0f.16.58.ff.00.ab.08.ff.0f.16.58.ff.00.ab.08.ff",
                                      None,
                                      None).await {
@@ -711,25 +709,28 @@ fn test_client_with_self_signed_certificate() {
                                  connection.get_local(),
                                  now.elapsed());
 
-                        for index in 0..10 {
-                            let now = Instant::now();
-                            if let Err(e) = connection.write([b"Hello World ", index.to_string().as_bytes()].concat()) {
-                                println!("Quic client send failed, uid: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
-                                         connection.get_uid(),
-                                         connection.get_remote(),
-                                         connection.get_local(),
-                                         e);
-                                break;
-                            }
+                        for _ in 0..3 {
+                            for index in 0..10 {
+                                let now = Instant::now();
+                                if let Err(e) = connection.write([b"Hello World ", index.to_string().as_bytes()].concat()) {
+                                    println!("Quic client send failed, uid: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                             connection.get_uid(),
+                                             connection.get_remote(),
+                                             connection.get_local(),
+                                             e);
+                                    break;
+                                }
 
-                            if let Some(resp) = connection.read().await {
-                                println!("Quic client receive ok, uid: {:?}, remote: {:?}, local: {:?}, bin: {:?}",
-                                         connection.get_uid(),
-                                         connection.get_remote(),
-                                         connection.get_local(),
-                                         String::from_utf8(resp.to_vec()));
+                                if let Some(resp) = connection.read().await {
+                                    println!("Quic client receive ok, uid: {:?}, remote: {:?}, local: {:?}, bin: {:?}",
+                                             connection.get_uid(),
+                                             connection.get_remote(),
+                                             connection.get_local(),
+                                             String::from_utf8(resp.to_vec()));
+                                }
+                                println!("!!!!!!roll time: {:?}", now.elapsed());
                             }
-                            println!("!!!!!!roll time: {:?}", now.elapsed());
+                            thread::sleep(Duration::from_millis(1000));
                         }
 
                         let uid = connection.get_uid();
@@ -743,6 +744,8 @@ fn test_client_with_self_signed_certificate() {
                                  remote,
                                  local,
                                  result);
+
+                        thread::sleep(Duration::from_millis(1000000000));
                     }
                 }
             });
@@ -778,17 +781,6 @@ impl rustls::client::ServerCertVerifier for TestServerCertVerifier {
 impl TestServerCertVerifier {
     pub fn new() -> Self {
         TestServerCertVerifier
-    }
-}
-
-#[test]
-fn test_spin_sleep() {
-    let now = Instant::now();
-    let spin_sleeper = spin_sleep::SpinSleeper::new(100_000)
-        .with_spin_strategy(spin_sleep::SpinStrategy::YieldThread);
-    for _ in 0..1000 {
-        spin_sleeper.sleep(Duration::from_millis(1));
-        println!("!!!!!!time: {:?}", now.elapsed());
     }
 }
 

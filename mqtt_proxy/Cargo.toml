@@ -7,7 +7,6 @@ edition = "2018"
 [dependencies]
 futures = "0.3"
 tcp = { package = "new_tcp", path = "../new_tcp" }
-udp = { path = "../udp" }
 quic = { path = "../quic" }
 mqtt = { path = "../mqtt" }
 pi_async = "0.5"
@@ -19,3 +18,4 @@ log = "0.4"
 [dev-dependencies]
 ws = { path = "../ws" }
 env_logger = "0.9"
+udp = { path = "../blocking_udp", package = "blocking_udp" }

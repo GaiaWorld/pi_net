@@ -12,7 +12,6 @@ use pi_atom::Atom;
 use pi_gray::GrayVersion;
 use pi_handler::{Args, Handler};
 
-use udp::Socket;
 use quic::utils::{ContextHandle, Hibernate, QuicSocketReady};
 use mqtt::server::MqttBrokerProtocol;
 use mqtt::quic_broker::{MQTT_RESPONSE_SYS_TOPIC, MqttBrokerListener, MqttBrokerService};
@@ -33,18 +32,18 @@ pub enum MqttEvent {
 ///
 /// Mqtt连接句柄
 ///
-pub struct MqttConnectHandle<S: Socket> {
-    gray:       AtomicIsize,                //灰度，负数代表无灰度
-    client_id:  String,                     //Mqtt客户端id
-    protocol:   MqttBrokerProtocol,         //Mqtt代理
-    connect:    Arc<dyn MqttConnect<S>>,    //Mqtt连接
-    is_closed:  AtomicBool,                 //Mqtt连接是否已关闭
+pub struct MqttConnectHandle {
+    gray:       AtomicIsize,            //灰度，负数代表无灰度
+    client_id:  String,                 //Mqtt客户端id
+    protocol:   MqttBrokerProtocol,     //Mqtt代理
+    connect:    Arc<dyn MqttConnect>,   //Mqtt连接
+    is_closed:  AtomicBool,             //Mqtt连接是否已关闭
 }
 
-unsafe impl<S: Socket> Send for MqttConnectHandle<S> {}
-unsafe impl<S: Socket> Sync for MqttConnectHandle<S> {}
+unsafe impl Send for MqttConnectHandle {}
+unsafe impl Sync for MqttConnectHandle {}
 
-impl<S: Socket> GrayVersion for MqttConnectHandle<S> {
+impl GrayVersion for MqttConnectHandle {
     fn get_gray(&self) -> &Option<usize> {
         let gray = self.gray.load(Ordering::Relaxed);
         if gray < 0 {
@@ -72,7 +71,7 @@ impl<S: Socket> GrayVersion for MqttConnectHandle<S> {
     }
 }
 
-impl<S: Socket> MqttConnectHandle<S> {
+impl MqttConnectHandle {
     /// 获取连接的唯一id
     pub fn get_uid(&self) -> Option<usize> {
         self.connect.get_uid()
@@ -164,7 +163,7 @@ impl<S: Socket> MqttConnectHandle<S> {
     }
 
     /// 休眠当前连接，直到被唤醒，返回空表示连接已关闭
-    pub fn hibernate(&self, ready: QuicSocketReady) -> Option<Hibernate<S>> {
+    pub fn hibernate(&self, ready: QuicSocketReady) -> Option<Hibernate> {
         self.connect.hibernate(ready)
     }
 
@@ -269,10 +268,10 @@ pub struct MqttProxyListener {
 
 unsafe impl Send for MqttProxyListener {}
 
-impl<S: Socket> MqttBrokerListener<S> for MqttProxyListener {
+impl MqttBrokerListener for MqttProxyListener {
     fn connected(&self,
                  protocol: MqttBrokerProtocol,
-                 connect: Arc<dyn MqttConnect<S>>) -> LocalBoxFuture<'static, Result<()>> {
+                 connect: Arc<dyn MqttConnect>) -> LocalBoxFuture<'static, Result<()>> {
         //Mqtt已连接
         if let Some(handler) = &self.connect_handler {
             let handler = handler.clone();
@@ -316,7 +315,7 @@ impl<S: Socket> MqttBrokerListener<S> for MqttProxyListener {
 
     fn closed(&self,
               protocol: MqttBrokerProtocol,
-              connect: Arc<dyn MqttConnect<S>>,
+              connect: Arc<dyn MqttConnect>,
               mut context: QuicBrokerSession,
               reason: Result<()>) -> LocalBoxFuture<'static, ()> {
         //Mqtt连接已关闭
@@ -410,10 +409,10 @@ pub struct MqttProxyService {
 
 unsafe impl Send for MqttProxyService {}
 
-impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
+impl MqttBrokerService for MqttProxyService {
     fn subscribe(&self,
                  protocol: MqttBrokerProtocol,
-                 connect: Arc<dyn MqttConnect<S>>,
+                 connect: Arc<dyn MqttConnect>,
                  topics: Vec<(String, u8)>) -> LocalBoxFuture<'static, Result<()>> {
         //Mqtt订阅主题
         if let Some(handler) = &self.request_handler {
@@ -455,7 +454,7 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
 
     fn unsubscribe(&self,
                    protocol: MqttBrokerProtocol,
-                   connect: Arc<dyn MqttConnect<S>>,
+                   connect: Arc<dyn MqttConnect>,
                    topics: Vec<String>) -> LocalBoxFuture<'static, Result<()>> {
         if let Some(mut handle) = connect.get_session() {
             if let Some(session) = handle.as_mut() {
@@ -495,7 +494,7 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
 
     fn publish(&self,
                protocol: MqttBrokerProtocol,
-               connect: Arc<dyn MqttConnect<S>>,
+               connect: Arc<dyn MqttConnect>,
                topic: String,
                payload: Arc<Vec<u8>>) -> LocalBoxFuture<'static, Result<()>> {
         if let Some(mut handle) = connect.get_session() {

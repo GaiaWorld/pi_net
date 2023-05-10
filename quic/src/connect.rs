@@ -4,10 +4,11 @@ use std::time::Instant;
 use std::future::Future;
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
+use std::fmt::{Debug, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::result::Result as GenResult;
 use std::io::{Cursor, Result, Error, ErrorKind};
-use std::sync::{Arc, atomic::{AtomicU8, AtomicUsize, Ordering}};
+use std::sync::{Arc, atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering}};
 
 use quinn_proto::{ConnectionHandle, Connection, Transmit, StreamId, SendStream, RecvStream, ReadError, WriteError, VarInt, Dir};
 use crossbeam_channel::Sender;
@@ -15,13 +16,12 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::future::{FutureExt, LocalBoxFuture};
 
 use pi_async::{lock::spin_lock::SpinLock,
-               rt::{serial::AsyncValue,
+               rt::{serial::AsyncValueNonBlocking,
                     serial_local_thread::LocalTaskRuntime}};
 
-use udp::{Socket, SocketHandle};
+use udp::SocketHandle;
 
-use crate::{SocketHandle as QuicSocketHandle, SocketEvent,
-            utils::{QuicSocketStatus, QuicSocketReady, QuicCloseEvent, Hibernate, SocketContext}};
+use crate::{SocketHandle as QuicSocketHandle, SocketEvent, utils::{QuicSocketStatus, QuicSocketReady, QuicCloseEvent, Hibernate, SocketContext}, QuicEvent};
 
 /// 默认的读取块大小，单位字节
 const DEFAULT_READ_BLOCK_LEN: usize = 4096;
@@ -44,21 +44,19 @@ const DEAFULT_READED_WRITE_BUF_SIZE_LIMIT: usize = 64 * 1024;
 ///
 /// Quic连接
 ///
-pub struct QuicSocket<S: Socket> {
+pub struct QuicSocket {
     rt:                 Option<LocalTaskRuntime<()>>,                                       //连接所在运行时
     uid:                usize,                                                              //连接唯一id
     status:             Arc<AtomicU8>,                                                      //连接状态
-    udp_handle:         SocketHandle<S>,                                                    //Udp连接句柄
+    is_client:          AtomicBool,                                                         //是否是客户端
+    udp_handle:         SocketHandle,                                                       //Udp连接句柄
     handle:             ConnectionHandle,                                                   //Quic内部连接句柄
     connect:            Connection,                                                         //Quic内部连接
     main_stream_id:     Option<StreamId>,                                                   //连接的主流唯一id
-    write_sent:         Option<Sender<(ConnectionHandle, Transmit)>>,                       //Socket发送事件发送器
-    ready_sent:         Option<Sender<(ConnectionHandle, QuicSocketReady)>>,                //连接流就绪请求发送器
     clock:              Instant,                                                            //内部时钟
     expired:            Option<Instant>,                                                    //下次到期时间
     timer_ref:          Option<u64>,                                                        //内部定时器
     timer_handle:       Option<u64>,                                                        //外部定时器
-    timer_listener:     Option<Sender<(ConnectionHandle, Option<(usize, SocketEvent)>)>>,   //定时事件监听器
     wait_recv_len:      usize,                                                              //连接需要接收的字节数
     recv_len:           usize,                                                              //连接已接收的字节数
     read_len:           Arc<AtomicUsize>,                                                   //连接读取块大小
@@ -67,26 +65,35 @@ pub struct QuicSocket<S: Socket> {
     read_buf:           Arc<SpinLock<Option<BytesMut>>>,                                    //连接流读缓冲
     wait_ready_len:     usize,                                                              //连接异步准备读取的字节数
     ready_len:          usize,                                                              //连接异步准备读取已就绪的字节数
-    ready_reader:       SpinLock<Option<AsyncValue<usize>>>,                                //异步准备读取器
+    ready_reader:       SpinLock<Option<AsyncValueNonBlocking<usize>>>,                     //异步准备读取器
     wait_sent_len:      AtomicUsize,                                                        //连接需要发送的字节数
     sent_len:           usize,                                                              //连接已发送的字节数
     write_len:          Arc<AtomicUsize>,                                                   //连接写入块大小
     readed_write_limit: Arc<AtomicUsize>,                                                   //已读写缓冲大小限制
     readed_write_len:   usize,                                                              //已读写缓冲大小
-    write_listener:     Option<Sender<(ConnectionHandle, Option<StreamId>, Vec<u8>)>>,      //连接写事件监听器
     write_buf:          Option<BytesMut>,                                                   //连接写缓冲
-    hibernate:          SpinLock<Option<Hibernate<S>>>,                                     //连接异步休眠对象
+    hibernate:          SpinLock<Option<Hibernate>>,                                        //连接异步休眠对象
     hibernate_wakers:   SpinLock<VecDeque<Waker>>,                                          //连接正在休眠时，其它休眠对象的唤醒器队列
     hibernated_queue:   Arc<SpinLock<VecDeque<LocalBoxFuture<'static, ()>>>>,               //连接休眠时任务队列
-    socket_handle:      Option<QuicSocketHandle<S>>,                                        //Quic连接句柄
+    socket_handle:      Option<QuicSocketHandle>,                                           //Quic连接句柄
     context:            Rc<UnsafeCell<SocketContext>>,                                      //Quic连接上下文
+    event_send:         Option<Sender<QuicEvent>>,                                          //Quic事件发送器
     close_reason:       Option<(u32, Result<()>)>,                                          //连接关闭的原因
-    close_listener:     Option<Sender<QuicCloseEvent>>,                                     //连接关闭事件监听器
 }
 
-impl<S: Socket> QuicSocket<S> {
+impl Debug for QuicSocket {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f,
+               "QuicSocket[uid = {:?}, local = {:?}, remote = {:?}]",
+               self.get_uid(),
+               self.get_local(),
+               self.get_remote())
+    }
+}
+
+impl QuicSocket {
     /// 构建一个Quic连接
-    pub fn new(udp_handle: SocketHandle<S>,
+    pub fn new(udp_handle: SocketHandle,
                handle: ConnectionHandle,
                connect: Connection,
                readed_read_size_limit: usize,
@@ -107,6 +114,7 @@ impl<S: Socket> QuicSocket<S> {
         };
 
         let status = Arc::new(AtomicU8::new(QuicSocketStatus::UdpAccepted.into()));
+        let is_client = AtomicBool::new(false); //默认是非客户端
         let read_len = Arc::new(AtomicUsize::new(DEFAULT_READ_BLOCK_LEN));
         let readed_read_limit = Arc::new(AtomicUsize::new(readed_read_size_limit));
         let read_buf = Arc::new(SpinLock::new(Some(BytesMut::new())));
@@ -124,17 +132,15 @@ impl<S: Socket> QuicSocket<S> {
             rt: None,
             uid: handle.0,
             status,
+            is_client,
             udp_handle,
             handle,
             connect,
             main_stream_id: None,
-            write_sent: None,
-            ready_sent: None,
             clock,
             expired: None,
             timer_ref: None,
             timer_handle: None,
-            timer_listener: None,
             wait_recv_len: 0,
             recv_len: 0,
             read_len,
@@ -149,15 +155,14 @@ impl<S: Socket> QuicSocket<S> {
             write_len,
             readed_write_limit,
             readed_write_len: 0,
-            write_listener: None,
             write_buf,
             hibernate,
             hibernate_wakers,
             hibernated_queue,
             socket_handle: None,
             context,
+            event_send: None,
             close_reason: None,
-            close_listener: None,
         }
     }
 
@@ -245,34 +250,28 @@ impl<S: Socket> QuicSocket<S> {
         }
     }
 
-    /// 设置连接的写入Quic数据报文发送器
-    pub fn set_write_sent(&mut self, write_sent: Option<Sender<(ConnectionHandle, Transmit)>>) {
-        self.write_sent = write_sent;
-    }
-
-    /// 设置连接的连接流就绪请求发送器
-    pub fn set_ready_sent(&mut self, ready_sent: Option<Sender<(ConnectionHandle, QuicSocketReady)>>) {
-        self.ready_sent = ready_sent;
-    }
-
-    /// 设置写事件监听器
-    pub fn set_write_listener(&mut self,
-                              listener: Option<Sender<(ConnectionHandle, Option<StreamId>, Vec<u8>)>>) {
-        self.write_listener = listener;
+    /// 设置连接的Quic事件发送器
+    pub fn set_event_sent(&mut self, event_send: Option<Sender<QuicEvent>>) {
+        self.event_send = event_send;
     }
 
     /// 获取Udp连接句柄的只读引用
-    pub fn get_udp_handle(&self) -> &SocketHandle<S> {
+    pub fn get_udp_handle(&self) -> &SocketHandle {
         &self.udp_handle
     }
 
     /// 判断当前连接是否是客户端连接
     pub fn is_client(&self) -> bool {
-        self.udp_handle.get_remote().is_some()
+        self.is_client.load(Ordering::Relaxed)
+    }
+
+    /// 启用客户端
+    pub(crate) fn enable_client(&self) {
+        self.is_client.store(true, Ordering::Relaxed);
     }
 
     /// 获取Quic连接句柄
-    pub fn get_socket_handle(&self) -> QuicSocketHandle<S> {
+    pub fn get_socket_handle(&self) -> QuicSocketHandle {
         self
             .socket_handle
             .as_ref()
@@ -288,14 +287,13 @@ impl<S: Socket> QuicSocket<S> {
                                                   socket,
                                                   self.udp_handle.get_local().clone(),
                                                   self.get_remote(),
-                                                  self.timer_listener.as_ref().unwrap().clone(),
-                                                  self.close_listener.as_ref().unwrap().clone());
+                                                  self.event_send.as_ref().unwrap().clone());
 
         self.socket_handle = Some(socket_handle);
     }
 
     /// 移除Quic连接句柄
-    pub fn remove_socket_handle(&mut self) -> Option<QuicSocketHandle<S>> {
+    pub fn remove_socket_handle(&mut self) -> Option<QuicSocketHandle> {
         self.socket_handle.take()
     }
 
@@ -346,22 +344,18 @@ impl<S: Socket> QuicSocket<S> {
 
     /// 设置连接的超时定时器，同时只允许设置一个定时器，新的定时器会覆盖未超时的旧定时器
     pub fn set_timeout(&self, timeout: usize, event: SocketEvent) {
-        if let Some(listener) = &self.timer_listener {
-            listener.send((self.handle, Some((timeout, event))));
+        if let Some(sender) = &self.event_send {
+            sender
+                .send(QuicEvent::Timeout(self.handle, Some((timeout, event))));
         }
     }
 
     /// 取消连接的未超时超时定时器
     pub fn unset_timeout(&self) {
-        if let Some(listener) = &self.timer_listener {
-            listener.send((self.handle, None));
+        if let Some(sender) = &self.event_send {
+            sender
+                .send(QuicEvent::Timeout(self.handle, None));
         }
-    }
-
-    /// 设置定时器监听器
-    pub fn set_timer_listener(&mut self,
-                              listener: Option<Sender<(ConnectionHandle, Option<(usize, SocketEvent)>)>>) {
-        self.timer_listener = listener;
     }
 
     /// 设置外部定时器句柄，返回上个定时器句柄
@@ -376,16 +370,10 @@ impl<S: Socket> QuicSocket<S> {
         self.timer_handle.take()
     }
 
-    /// 设置关闭事件监听器
-    pub fn set_close_listener(&mut self,
-                              listener: Option<Sender<QuicCloseEvent>>) {
-        self.close_listener = listener;
-    }
-
     /// 写入指定的Quic数据报文
     pub fn write_transmit(&self, data: Transmit) -> Result<()> {
-        if let Some(write_sent) = &self.write_sent {
-            if let Err(e) = write_sent.send((self.handle, data)) {
+        if let Some(sender) = &self.event_send {
+            if let Err(e) = sender.send(QuicEvent::ConnectionSend(self.handle, data)) {
                 return Err(Error::new(ErrorKind::Other,
                                       format!("Send quic data failed, uid: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                                               self.get_uid(),
@@ -405,7 +393,7 @@ impl<S: Socket> QuicSocket<S> {
             let mut offset = 0; //数据报文的帧偏移
             let mut len = data.contents.len(); //数据报文的剩余大小
             while len > size {
-                if let Err(e) = self.udp_handle.write_ready(Cursor::new((&data.contents[offset..offset + size]).to_vec()), Some(data.destination)) {
+                if let Err(e) = self.udp_handle.write((&data.contents[offset..offset + size]).to_vec(), Some(data.destination)) {
                     return Err(Error::new(ErrorKind::Other,
                                           format!("Send transmit next frame failed, uid: {:?}, remote: {:?}, local: {:?}, size: {:?}, offset: {:?}, len: {:?}, reason: {:?}",
                                                   self.get_uid(),
@@ -419,7 +407,7 @@ impl<S: Socket> QuicSocket<S> {
                 offset += size; //更新数据报文的帧偏移
                 len -= size; //更新数据报文的剩余大小
             }
-            if let Err(e) = self.udp_handle.write_ready(Cursor::new((&data.contents[offset..offset + len]).to_vec()), Some(data.destination)) {
+            if let Err(e) = self.udp_handle.write((&data.contents[offset..offset + len]).to_vec(), Some(data.destination)) {
                 return Err(Error::new(ErrorKind::Other,
                                       format!("Send transmit tail frame failed, uid: {:?}, remote: {:?}, local: {:?}, size: {:?}, offset: {:?}, len: {:?}, reason: {:?}",
                                               self.get_uid(),
@@ -433,7 +421,7 @@ impl<S: Socket> QuicSocket<S> {
         } else {
             //单帧Quic数据报文
             let mut len = data.contents.len(); //数据报文的大小
-            if let Err(e) = self.udp_handle.write_ready(Cursor::new(data.contents), Some(data.destination)) {
+            if let Err(e) = self.udp_handle.write(data.contents, Some(data.destination)) {
                 return Err(Error::new(ErrorKind::Other,
                                       format!("Send transmit single frame failed, uid: {:?}, remote: {:?}, local: {:?}, size: None, offset: {:?}, len: {:?}, reason: {:?}",
                                               self.get_uid(),
@@ -452,8 +440,9 @@ impl<S: Socket> QuicSocket<S> {
     /// 设置当前连接感兴趣的事件
     #[inline]
     pub fn set_ready(&self, ready: QuicSocketReady) {
-        if let Some(sender) = &self.ready_sent {
-            sender.send((self.handle, ready));
+        if let Some(sender) = &self.event_send {
+            sender
+                .send(QuicEvent::StreamReady(self.handle, ready));
         }
     }
 
@@ -563,8 +552,9 @@ impl<S: Socket> QuicSocket<S> {
 
                 if self.wait_recv_len > self.recv_len {
                     //本次接收已完成，但当前连接未接收足够的数据，则设置连接需要继续处理接收事件
-                    if let Some(sender) = &self.ready_sent {
-                        sender.send((self.handle, QuicSocketReady::Readable));
+                    if let Some(sender) = &self.event_send {
+                        sender
+                            .send(QuicEvent::StreamReady(self.handle, QuicSocketReady::Readable));
                     }
                 }
             }
@@ -588,13 +578,13 @@ impl<S: Socket> QuicSocket<S> {
         result
     }
 
-    /// 通知连接读就绪，可以开始接收指定字节数的数据，如果当前需要等待接收则返回AsyncValue, 否则返回接收缓冲区中已有数据的字节数
+    /// 通知连接读就绪，可以开始接收指定字节数的数据，如果当前需要等待接收则返回AsyncValueNonBlocking, 否则返回接收缓冲区中已有数据的字节数
     /// 设置准备读取的字节大小为0，则表示准备接收任意数量的字节，直到当前连接的流没有可接收的数据
     /// 设置准备读取的字节大小大于0，则表示至少需要接收指定数量的字节，如果还未接收到指定数量的字节，则继续从流中接收
     /// 异步阻塞读取读缓冲前应该保证调用此函数对读缓冲进行填充，避免异步读取被异步阻塞
     /// 返回0长度，表示当前连接已关闭，继续操作将是未定义行为
     /// 注意调用此方法，在保持连接的前提下，必须保证后续一定还可以接收到数据，否则会导致无法唤醒当前异步准备读取器
-    pub fn read_ready(&mut self, adjust: usize) -> GenResult<AsyncValue<usize>, usize> {
+    pub fn read_ready(&mut self, adjust: usize) -> GenResult<AsyncValueNonBlocking<usize>, usize> {
         if self.is_closed() {
             //连接已关闭，则忽略，并立即返回
             return Err(0);
@@ -615,7 +605,7 @@ impl<S: Socket> QuicSocket<S> {
         }
 
         //连接当前读缓冲区没有足够的数据，则只读需要的字节数
-        let value = AsyncValue::new();
+        let value = AsyncValueNonBlocking::new();
         let value_copy = value.clone();
         *self.ready_reader.lock() = Some(value); //设置当前连接的异步准备读取器
         self.wait_ready_len = adjust - remaining; //设置本次异步准备读取实际需要的字节数
@@ -805,8 +795,8 @@ impl<S: Socket> QuicSocket<S> {
         //发送指定数据
         self.wait_sent_len
             .fetch_add(buf.as_ref().len(), Ordering::Relaxed); //首先要同步增加需要发送的字节数
-        if let Some(listener) = &self.write_listener {
-            listener.send((self.handle, None, buf.as_ref().to_vec()));
+        if let Some(sender) = &self.event_send {
+            sender.send(QuicEvent::StreamWrite(self.handle, None, buf.as_ref().to_vec()));
         }
 
         Ok(())
@@ -856,8 +846,8 @@ impl<S: Socket> QuicSocket<S> {
 
     /// 获取当前连接的休眠对象，返回空表示连接已关闭
     pub fn hibernate(&self,
-                     handle: QuicSocketHandle<S>,
-                     ready: QuicSocketReady) -> Option<Hibernate<S>> {
+                     handle: QuicSocketHandle,
+                     ready: QuicSocketReady) -> Option<Hibernate> {
         if self.is_closed() {
             //连接已关闭，则立即返回空
             return None;
@@ -870,7 +860,7 @@ impl<S: Socket> QuicSocket<S> {
     }
 
     /// 设置当前连接的休眠对象，设置成功返回真
-    pub fn set_hibernate(&self, hibernate: Hibernate<S>) -> bool {
+    pub fn set_hibernate(&self, hibernate: Hibernate) -> bool {
         let mut locked = self.hibernate.lock();
         if locked.is_some() {
             //当前连接已设置了休眠对象，则返回失败
@@ -959,9 +949,11 @@ impl<S: Socket> QuicSocket<S> {
         self.close_reason = Some((code, reason)); //设置连接关闭的原因
 
         //通知连接关闭
-        if let Some(listener) = &self.close_listener {
-            if let Err(e) = listener.send(QuicCloseEvent::CloseStream(self.get_connection_handle().clone(), None, code)) {
-                return Err(Error::new(ErrorKind::BrokenPipe, e));
+        if let Some(sender) = &self.event_send {
+            if let Err(e) = sender.send(QuicEvent::StreamClose(self.get_connection_handle().clone(), None, code)) {
+                return Err(Error::new(ErrorKind::BrokenPipe,
+                                      format!("Close quic connection failed, reason: {:?}",
+                                              e)));
             }
         }
 

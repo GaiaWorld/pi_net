@@ -166,24 +166,24 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
                                                                         readed_write_size_limit: usize,
                                                                         timeout: Option<usize>) {
     let (mut helper, poll_timeout) = if let Some(poll_timeout) = timeout {
-        if cfg!(windows) {
+        if cfg!(windows) && poll_timeout < 15000 {
             (LoopHelper::builder()
-                 .native_accuracy_ns(100_000)
-                 .build_with_target_rate(1000u32
+                 .native_accuracy_ns(10_000)
+                 .build_with_target_rate(1000000u32
                      .checked_div(poll_timeout as u32)
                      .unwrap_or(1000)),
-             Some(Duration::from_millis(0)))
+             Some(Duration::from_micros(0)))
         } else {
             (LoopHelper::builder()
-                 .native_accuracy_ns(100_000)
-                 .build_with_target_rate(1000u32
+                 .native_accuracy_ns(10_000)
+                 .build_with_target_rate(1000000u32
                      .checked_div(poll_timeout as u32)
                      .unwrap_or(1000)),
-             Some(Duration::from_millis(poll_timeout as u64)))
+             Some(Duration::from_micros(poll_timeout as u64)))
         }
     } else {
         (LoopHelper::builder()
-             .native_accuracy_ns(100_000)
+             .native_accuracy_ns(10_000)
              .build_with_target_rate(10000),
          Some(Duration::from_millis(0)))
     };
@@ -194,7 +194,9 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
     let acceptor_name = acceptor.name.clone();
     let mut events = Events::with_capacity(event_size);
     loop {
-        helper.loop_start(); //开始处理事件
+        if cfg!(windows) || poll_timeout.is_some_and(|time| time.is_zero()) {
+            helper.loop_start(); //开始处理事件
+        }
         if let Err(e) = acceptor.poll.poll(&mut events, poll_timeout) {
             if e.kind() != ErrorKind::Interrupted {
                 warn!("Tcp acceptor poll failed, timeout: {:?}, ports: {:?}, reason: {:?}",
@@ -314,7 +316,9 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
             }
         }
 
-        helper.loop_sleep_no_spin(); //开始休眠
+        if cfg!(windows) || poll_timeout.is_some_and(|time| time.is_zero()) {
+            helper.loop_sleep_no_spin(); //开始休眠
+        }
     }
 }
 

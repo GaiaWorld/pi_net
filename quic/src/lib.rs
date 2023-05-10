@@ -10,14 +10,11 @@ use std::io::{Error, Result, ErrorKind};
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use futures::future::LocalBoxFuture;
-use quinn_proto::{ConnectionHandle, StreamId};
+use quinn_proto::{ConnectionHandle, ConnectionEvent, StreamId, Transmit};
 use crossbeam_channel::Sender;
 use bytes::BytesMut;
 use pi_async::prelude::SpinLock;
-use pi_async::rt::serial::AsyncValue;
-
-use udp::{Socket,
-          connect::UdpSocket};
+use pi_async::rt::serial::AsyncValueNonBlocking;
 
 pub mod acceptor;
 pub mod connect;
@@ -32,73 +29,71 @@ use crate::utils::{QuicSocketStatus, QuicSocketReady, QuicCloseEvent, Hibernate,
 ///
 /// Quic连接异步服务
 ///
-pub trait AsyncService<S: Socket = UdpSocket>: Send + Sync + 'static {
+pub trait AsyncService: Send + Sync + 'static {
     /// 异步处理已连接
     fn handle_connected(&self,
-                        handle: SocketHandle<S>,
+                        handle: SocketHandle,
                         result: Result<()>) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已读
     fn handle_readed(&self,
-                     handle: SocketHandle<S>,
+                     handle: SocketHandle,
                      result: Result<usize>) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已写
     fn handle_writed(&self,
-                     handle: SocketHandle<S>,
+                     handle: SocketHandle,
                      result: Result<()>) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已关闭
     fn handle_closed(&self,
-                     handle: SocketHandle<S>,
+                     handle: SocketHandle,
                      stream_id: Option<StreamId>,
                      code: u32,
                      result: Result<()>) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已超时
     fn handle_timeouted(&self,
-                        handle: SocketHandle<S>,
+                        handle: SocketHandle,
                         result: Result<SocketEvent>) -> LocalBoxFuture<'static, ()>;
 }
 
 ///
 /// Quic连接句柄
 ///
-pub struct SocketHandle<S: Socket = UdpSocket>(Arc<InnerSocketHandle<S>>);
+pub struct SocketHandle(Arc<InnerSocketHandle>);
 
-unsafe impl<S: Socket> Send for SocketHandle<S> {}
-unsafe impl<S: Socket> Sync for SocketHandle<S> {}
+unsafe impl Send for SocketHandle {}
+unsafe impl Sync for SocketHandle {}
 
-impl<S: Socket> Clone for SocketHandle<S> {
+impl Clone for SocketHandle {
     fn clone(&self) -> Self {
         SocketHandle(self.0.clone())
     }
 }
 
-impl<S: Socket> SocketHandle<S> {
+impl SocketHandle {
     /// 构建一个Quic连接句柄
     pub fn new(uid: usize,
                status: Arc<AtomicU8>,
-               socket: Arc<UnsafeCell<QuicSocket<S>>>,
+               socket: Arc<UnsafeCell<QuicSocket>>,
                local: SocketAddr,
                remote: SocketAddr,
-               timer_listener: Sender<(ConnectionHandle, Option<(usize, SocketEvent)>)>,
-               close_listener: Sender<QuicCloseEvent>) -> Self {
+               sender: Sender<QuicEvent>) -> Self {
         let inner = InnerSocketHandle {
             uid,
             status,
             inner: socket,
             local,
             remote,
-            timer_listener,
-            close_listener,
+            sender,
         };
 
         SocketHandle(Arc::new(inner))
     }
 
     /// 线程安全的异步广播指定负载
-    pub fn broadcast(handles: &[SocketHandle<S>],
+    pub fn broadcast(handles: &[SocketHandle],
                      payload: Vec<u8>) -> Result<()> {
         if handles.len() == 0 {
             //连接为空，则忽略
@@ -210,7 +205,7 @@ impl<S: Socket> SocketHandle<S> {
     }
 
     /// 通知连接读就绪
-    pub fn read_ready(&self, adjust: usize) -> GenResult<AsyncValue<usize>, usize> {
+    pub fn read_ready(&self, adjust: usize) -> GenResult<AsyncValueNonBlocking<usize>, usize> {
         unsafe {
             (&mut *self.0.inner.get()).read_ready(adjust)
         }
@@ -261,14 +256,14 @@ impl<S: Socket> SocketHandle<S> {
 
     /// 获取当前连接的休眠对象，返回空表示连接已关闭
     pub fn hibernate(&self,
-                     ready: QuicSocketReady) -> Option<Hibernate<S>> {
+                     ready: QuicSocketReady) -> Option<Hibernate> {
         unsafe {
             (&*self.0.inner.get()).hibernate(self.clone(), ready)
         }
     }
 
     /// 设置当前连接的休眠对象，设置成功返回真
-    pub fn set_hibernate(&self, hibernate: Hibernate<S>) -> bool {
+    pub fn set_hibernate(&self, hibernate: Hibernate) -> bool {
         unsafe {
             (&*self.0.inner.get()).set_hibernate(hibernate)
         }
@@ -306,14 +301,13 @@ impl<S: Socket> SocketHandle<S> {
 }
 
 // 内部Quic连接句柄
-struct InnerSocketHandle<S: Socket> {
+struct InnerSocketHandle {
     uid:            usize,                                                      //Quic连接唯一id
     status:         Arc<AtomicU8>,                                              //Quic连接状态
-    inner:          Arc<UnsafeCell<QuicSocket<S>>>,                             //Quic连接指针
+    inner:          Arc<UnsafeCell<QuicSocket>>,                                //Quic连接指针
     local:          SocketAddr,                                                 //Quic连接本地地址
     remote:         SocketAddr,                                                 //Quic连接远端地址
-    timer_listener: Sender<(ConnectionHandle, Option<(usize, SocketEvent)>)>,   //定时事件监听器
-    close_listener: Sender<QuicCloseEvent>,                                     //关闭事件监听器
+    sender:         Sender<QuicEvent>,                                          //Quic事件发送器
 }
 
 ///
@@ -368,6 +362,21 @@ impl SocketEvent {
         self.inner = ptr::null_mut();
         result
     }
+}
+
+///
+/// Quic事件
+///
+#[derive(Debug)]
+pub enum QuicEvent {
+    Accepted(QuicSocket),                                       //Quic已接受连接
+    ConnectionReceived(ConnectionHandle, ConnectionEvent),      //Quic连接接收数据
+    ConnectionSend(ConnectionHandle, Transmit),                 //Quic连接发送数据
+    StreamReady(ConnectionHandle, QuicSocketReady),             //Quic流就绪
+    StreamWrite(ConnectionHandle, Option<StreamId>, Vec<u8>),   //Quic流写数据
+    Timeout(ConnectionHandle, Option<(usize, SocketEvent)>),    //Quic连接超时
+    StreamClose(ConnectionHandle, Option<StreamId>, u32),       //Quic流关闭
+    ConnectionClose(ConnectionHandle),                          //Quic连接关闭
 }
 
 

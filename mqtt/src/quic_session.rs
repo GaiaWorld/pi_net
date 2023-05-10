@@ -8,7 +8,6 @@ use std::io::{Cursor, Result, Error, ErrorKind};
 
 use mqtt311::{MqttWrite, QoS, LastWill, Packet, Publish};
 
-use udp::Socket;
 use quic::{SocketHandle,
            utils::{ContextHandle, Hibernate, QuicSocketReady}};
 
@@ -85,7 +84,7 @@ pub trait MqttSession: Debug + Send + Sync + 'static {
 ///
 /// Mqtt连接
 ///
-pub trait MqttConnect<S: Socket>: Debug + Send + Sync + 'static {
+pub trait MqttConnect: Debug + Send + Sync + 'static {
     /// 获取Tcp连接唯一id
     fn get_uid(&self) -> Option<usize>;
 
@@ -113,7 +112,7 @@ pub trait MqttConnect<S: Socket>: Debug + Send + Sync + 'static {
     fn send(&self, topic: &String, payload: Arc<Vec<u8>>) -> Result<()>;
 
     /// 线程安全的异步休眠当前连接，直到被唤醒，返回空表示连接已关闭
-    fn hibernate(&self, ready: QuicSocketReady) -> Option<Hibernate<S>>;
+    fn hibernate(&self, ready: QuicSocketReady) -> Option<Hibernate>;
 
     /// 线程安全的唤醒被休眠的当前连接，如果当前连接未被休眠，则忽略
     fn wakeup(&self, result: Result<()>) -> bool;
@@ -125,8 +124,8 @@ pub trait MqttConnect<S: Socket>: Debug + Send + Sync + 'static {
 ///
 /// Qos0的Mqtt会话
 ///
-pub struct QosZeroSession<S: Socket> {
-    connect:        Option<SocketHandle<S>>,    //Quic连接
+pub struct QosZeroSession {
+    connect:        Option<SocketHandle>,    //Quic连接
     is_passive:     Arc<AtomicBool>,            //是否被动接收消息
     client_id:      String,                     //客户端id
     is_accepted:    Arc<AtomicBool>,            //是否已连接
@@ -137,30 +136,30 @@ pub struct QosZeroSession<S: Socket> {
     keep_alive:     u16,                        //连接保持间隔时长，单位秒，服务器端在1.5倍间隔时长内没有收到任何控制报文，则主动关闭连接
 }
 
-unsafe impl<S: Socket> Send for QosZeroSession<S> {}
-unsafe impl<S: Socket> Sync for QosZeroSession<S> {}
+unsafe impl Send for QosZeroSession {}
+unsafe impl Sync for QosZeroSession {}
 
-impl<S: Socket> PartialEq<QosZeroSession<S>> for QosZeroSession<S> {
+impl PartialEq<QosZeroSession> for QosZeroSession {
     fn eq(&self, other: &Self) -> bool {
         self.client_id.eq(&other.client_id)
     }
 }
 
-impl<S: Socket> Eq for QosZeroSession<S> {}
+impl Eq for QosZeroSession {}
 
-impl<S: Socket> PartialOrd<QosZeroSession<S>> for QosZeroSession<S> {
+impl PartialOrd<QosZeroSession> for QosZeroSession {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.client_id.partial_cmp(&other.client_id)
     }
 }
 
-impl<S: Socket> Ord for QosZeroSession<S> {
+impl Ord for QosZeroSession {
     fn cmp(&self, other: &Self) -> Ordering {
         self.client_id.cmp(&other.client_id)
     }
 }
 
-impl<S: Socket> Hash for QosZeroSession<S> {
+impl Hash for QosZeroSession {
     fn hash<H: Hasher>(&self, state: &mut H) {
         if let Some(ws) = &self.connect {
             ws.get_uid().hash(state);
@@ -168,7 +167,7 @@ impl<S: Socket> Hash for QosZeroSession<S> {
     }
 }
 
-impl<S: Socket> Debug for QosZeroSession<S> {
+impl Debug for QosZeroSession {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "QosZeroSession {{ client_id: {:?}, is_accepted: {}, is_clean: {}, keep_alive: {} }}",
                self.client_id,
@@ -178,7 +177,7 @@ impl<S: Socket> Debug for QosZeroSession<S> {
     }
 }
 
-impl<S: Socket> Clone for QosZeroSession<S> {
+impl Clone for QosZeroSession {
     fn clone(&self) -> Self {
         QosZeroSession {
             connect: self.connect.clone(),
@@ -194,14 +193,14 @@ impl<S: Socket> Clone for QosZeroSession<S> {
     }
 }
 
-impl<S: Socket> ValueEq for Arc<QosZeroSession<S>> {
+impl ValueEq for Arc<QosZeroSession> {
     fn value_eq(this: &Self, other: &Self) -> bool {
         Arc::ptr_eq(this, other)
     }
 }
 
-impl<S: Socket> MqttSession for QosZeroSession<S> {
-    type Connect = SocketHandle<S>;
+impl MqttSession for QosZeroSession {
+    type Connect = SocketHandle;
 
     fn get_connect(&self) -> Option<&Self::Connect> {
         self.connect.as_ref()
@@ -286,7 +285,7 @@ impl<S: Socket> MqttSession for QosZeroSession<S> {
     }
 }
 
-impl<S: Socket> MqttConnect<S> for QosZeroSession<S> {
+impl MqttConnect for QosZeroSession {
     fn get_uid(&self) -> Option<usize> {
         if let Some(connect) = &self.connect {
             return Some(connect.get_uid());
@@ -359,7 +358,7 @@ impl<S: Socket> MqttConnect<S> for QosZeroSession<S> {
         Ok(())
     }
 
-    fn hibernate(&self, ready: QuicSocketReady) -> Option<Hibernate<S>> {
+    fn hibernate(&self, ready: QuicSocketReady) -> Option<Hibernate> {
         if let Some(connect) = &self.connect {
             connect.hibernate(ready)
         } else {
@@ -384,7 +383,7 @@ impl<S: Socket> MqttConnect<S> for QosZeroSession<S> {
     }
 }
 
-impl<S: Socket> QosZeroSession<S> {
+impl QosZeroSession {
     //构建指定客户端id的会话
     pub fn with_client_id(client_id: String) -> Self {
         QosZeroSession {

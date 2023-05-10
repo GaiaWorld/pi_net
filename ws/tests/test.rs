@@ -117,7 +117,14 @@ fn test_websocket_listener() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt0 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt1 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt2 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt3 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt4 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt5 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt6 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt7 = AsyncRuntimeBuilder::default_local_thread(None, None);
 
     let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(38080,
@@ -125,7 +132,7 @@ fn test_websocket_listener() {
     let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
 
-    match SocketListener::bind(vec![rt],
+    match SocketListener::bind(vec![rt0, rt1, rt2, rt3, rt4, rt5, rt6, rt7],
                                factory,
                                config,
                                1024,
@@ -134,7 +141,7 @@ fn test_websocket_listener() {
                                16,
                                4096,
                                4096,
-                               Some(1)) {
+                               Some(1000)) {
         Err(e) => {
             println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
         },
@@ -151,7 +158,14 @@ fn test_tls_websocket_listener() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt0 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt1 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt2 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt3 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt4 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt5 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt6 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt7 = AsyncRuntimeBuilder::default_local_thread(None, None);
 
     let mut factory = PortsAdapterFactory::<TlsSocket>::new();
     factory.bind(38080,
@@ -169,7 +183,7 @@ fn test_tls_websocket_listener() {
     let mut config = SocketConfig::with_tls("0.0.0.0", &[(38080, tls_config)]);
     config.set_option(16384, 16384, 16384, 16);
 
-    match SocketListener::bind(vec![rt],
+    match SocketListener::bind(vec![rt0, rt1, rt2, rt3, rt4, rt5, rt6, rt7],
                                factory,
                                config,
                                1024,
@@ -178,7 +192,7 @@ fn test_tls_websocket_listener() {
                                16,
                                4096,
                                4096,
-                               Some(1)) {
+                               Some(1000)) {
         Err(e) => {
             println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
         },
