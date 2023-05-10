@@ -171,7 +171,8 @@ fn event_loop<P: EndPointPoller>(rt: LocalTaskRuntime<()>,
 
         poll_connection(&rt, &mut pool); //推动所有连接
         rt.spawn(event_loop(rt.clone(), pool, timeout));
-    }.instrument(tracing::info_span!("quic_event_loop")).boxed_local()
+    }.boxed_local()
+    // .instrument(tracing::info_span!("quic_event_loop")).boxed_local()
 }
 
 // 处理已接受的Udp连接
@@ -179,8 +180,8 @@ fn event_loop<P: EndPointPoller>(rt: LocalTaskRuntime<()>,
 fn handle_udp_accepted<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                                           pool: &mut QuicSocketPool<P>,
                                           mut socket: QuicSocket) {
-    let span = tracing::info_span!("quic_handle_udp_accepted");
-    let _enter = span.enter();
+    /*let span = tracing::info_span!("quic_handle_udp_accepted");
+    let _enter = span.enter();*/
 
     //接受新的Quic连接，并创建Quic连接初始双向流
     socket.set_status(QuicSocketStatus::Handshaking); //为注册成功的连接设置状态为正在握手
@@ -197,8 +198,8 @@ fn handle_udp_accepted<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 #[inline]
 fn poll_timer<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                                  pool: &mut QuicSocketPool<P>) {
-    let span = tracing::info_span!("quic_poll_timer");
-    let _enter = span.enter();
+    /*let span = tracing::info_span!("quic_poll_timer");
+    let _enter = span.enter();*/
     //推动连接池定时器
     let now = pool.clock.elapsed().as_millis() as u64;
     while pool.timer.is_ok(now) {
@@ -235,8 +236,8 @@ fn poll_timer<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 #[inline]
 fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                                       pool: &mut QuicSocketPool<P>) {
-    let span = tracing::info_span!("quic_poll_connection");
-    let _enter = span.enter();
+    // let span = tracing::info_span!("quic_poll_connection");
+    // let _enter = span.enter();
 
     //轮询所有连接
     let mut iter = pool.sockets.iter();
@@ -468,8 +469,8 @@ fn handle_connection_received<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                                                  pool: &mut QuicSocketPool<P>,
                                                  connection_handle: ConnectionHandle,
                                                  event: ConnectionEvent) {
-    let span = tracing::info_span!("quic_handle_connection_readed");
-    let _enter = span.enter();
+    // let span = tracing::info_span!("quic_handle_connection_readed");
+    // let _enter = span.enter();
 
     match pool.sockets.get(&connection_handle.0) {
         None => {
@@ -494,8 +495,8 @@ fn handle_connection_sended<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                                                pool: &mut QuicSocketPool<P>,
                                                connection_handle: ConnectionHandle,
                                                transmit: Transmit) {
-    let span = tracing::info_span!("quic_handle_connection_writed");
-    let _enter = span.enter();
+    // let span = tracing::info_span!("quic_handle_connection_writed");
+    // let _enter = span.enter();
 
     if let Some(item) = pool.sockets.get(&connection_handle.0) {
         //准备写数据报文的Quic连接存在
@@ -514,8 +515,8 @@ fn handle_stream_write_event<P: EndPointPoller>(pool: &mut QuicSocketPool<P>,
                                                 connection_handle: ConnectionHandle,
                                                 stream_id: Option<StreamId>,
                                                 buf: Vec<u8>) {
-    let span = tracing::info_span!("quic_handle_stream_write_event");
-    let _enter = span.enter();
+    // let span = tracing::info_span!("quic_handle_stream_write_event");
+    // let _enter = span.enter();
 
     //当前连接池有连接流的写事件
     if let Some(item) = pool.sockets.get(&connection_handle.0) {
@@ -541,8 +542,8 @@ fn handle_streams<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                                      pool: &mut QuicSocketPool<P>,
                                      connction_handle: ConnectionHandle,
                                      ready: QuicSocketReady) {
-    let span = tracing::info_span!("quic_handle_streams");
-    let _enter = span.enter();
+    // let span = tracing::info_span!("quic_handle_streams");
+    // let _enter = span.enter();
 
     //处理所有连接流的就绪请求
     if let Some(item) = pool.sockets.get(&connction_handle.0) {
@@ -628,8 +629,8 @@ fn handle_stream_close<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                                           connection_handle: ConnectionHandle,
                                           stream_id: Option<StreamId>,
                                           code: u32) {
-    let span = tracing::info_span!("quic_handle_stream_close");
-    let _enter = span.enter();
+    // let span = tracing::info_span!("quic_handle_stream_close");
+    // let _enter = span.enter();
 
     //关闭指定连接的指定流
     if let Some(item) = pool
@@ -682,8 +683,8 @@ fn handle_stream_close<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 fn handle_connection_close<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                                               pool: &mut QuicSocketPool<P>,
                                               connection_handle: ConnectionHandle) {
-    let span = tracing::info_span!("quic_handle_connection_close");
-    let _enter = span.enter();
+    // let span = tracing::info_span!("quic_handle_connection_close");
+    // let _enter = span.enter();
 
     //关闭指定连接
     if let Some((_, socket)) = pool.sockets.remove(&connection_handle.0) {
@@ -731,8 +732,8 @@ fn handle_connection_close<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 async fn handle_timeout_timer<P: EndPointPoller>(pool: &mut QuicSocketPool<P>,
                                                  connection_handle: ConnectionHandle,
                                                  opt: Option<(usize, SocketEvent)>) {
-    let span = tracing::info_span!("quic_handle_timeout_timer");
-    let _enter = span.enter();
+    // let span = tracing::info_span!("quic_handle_timeout_timer");
+    // let _enter = span.enter();
 
     //设置或取消指定Tcp连接的定时器
     if let Some((timeout, event)) = opt {

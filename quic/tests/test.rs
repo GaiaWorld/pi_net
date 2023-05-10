@@ -653,7 +653,7 @@ fn test_client_with_self_signed_certificate() {
                                      65535,
                                      65535,
                                      Arc::new(TestService),
-                                     10)
+                                     1)
         .expect("Create quic listener failed");
     let addrs = SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), 38080);
 
@@ -687,7 +687,7 @@ fn test_client_with_self_signed_certificate() {
                                          65535,
                                          65535,
                                          5000,
-                                         10)
+                                         1)
                 .unwrap();
 
             let pem = parse(read("./tests/quic.com.pub").unwrap()).unwrap();
