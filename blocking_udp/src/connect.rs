@@ -1,3 +1,4 @@
+use std::fmt::{Debug, Formatter};
 use std::net::{SocketAddr, UdpSocket};
 use std::io::{Error, Result, ErrorKind};
 use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
@@ -65,6 +66,16 @@ pub struct InnerBlockingUdpSocket {
 
 unsafe impl Send for InnerBlockingUdpSocket {}
 unsafe impl Sync for InnerBlockingUdpSocket {}
+
+impl Debug for InnerBlockingUdpSocket {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f,
+               "BlockingUdpSocket[uid = {:?}, local = {:?}, remote = {:?}]",
+               self.uid,
+               self.local,
+               self.remote)
+    }
+}
 
 impl Socket for InnerBlockingUdpSocket {
     fn is_closed(&self) -> bool {

@@ -5,7 +5,7 @@ use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
 use std::time::Duration;
 
 use futures::future::{FutureExt, LocalBoxFuture};
-use crossbeam_channel::{Sender, Receiver, unbounded};
+use crossbeam_channel::{Sender, Receiver, bounded, unbounded};
 use async_channel::unbounded as async_unbounded;
 use socket2::{Domain, Type, Protocol, Socket as SocketDef};
 use log::{warn, error};
@@ -45,7 +45,7 @@ pub fn alloc_terminal_socket_uid() -> usize {
 ///
 /// Udp终端
 ///
-pub struct UdpTerminal(Sender<UdpEvent>, BlockingUdpSocket, Option<SocketAddr>);
+pub struct UdpTerminal(Sender<UdpEvent>, BlockingUdpSocket, Option<SocketAddr>, Receiver<()>);
 
 impl UdpTerminal {
     /// 绑定指定配置的终端Udp连接
@@ -110,13 +110,18 @@ impl UdpTerminal {
         //启动事件处理循环
         let rt_copy = rt.clone();
         let socket_handle = udp_socket.clone();
+        let (closed_send, closed_recv) = bounded(1);
         rt.spawn(event_loop(rt_copy,
                             event_receiver,
                             socket_handle,
                             service,
-                            running));
+                            running,
+                            closed_send));
 
-        Ok(UdpTerminal(event_sender, udp_socket, None))
+        Ok(UdpTerminal(event_sender,
+                       udp_socket,
+                       None,
+                       closed_recv))
     }
 
     /// 绑定指定配置的终端Udp连接，不需要指定服务
@@ -176,6 +181,7 @@ impl UdpTerminal {
 
         //生成初始化闭包
         let socket_handle = udp_socket.clone();
+        let (closed_send, closed_recv) = bounded(1);
         let func = move |mut service: Box<dyn AsyncService>| {
             let rt_copy = rt.clone();
 
@@ -187,10 +193,15 @@ impl UdpTerminal {
                                 event_receiver,
                                 socket_handle,
                                 service,
-                                running));
+                                running,
+                                closed_send));
         };
 
-        Ok((UdpTerminal(event_sender, udp_socket, None), func))
+        Ok((UdpTerminal(event_sender,
+                        udp_socket,
+                        None,
+                        closed_recv),
+            func))
     }
 
     /// 是否是客户端
@@ -208,8 +219,21 @@ impl UdpTerminal {
         self.1.get_uid()
     }
 
-    /// 连接指定的对端地址，可连接多个对端地址，与connect_to_peer
-    pub fn connect_to_peer(&self, to: SocketAddr) -> Result<BlockingUdpSocket> {
+    /// 连接指定的对端地址，可连接多个对端地址
+    pub fn connect_to_peer(&self, _to: SocketAddr) -> Result<BlockingUdpSocket> {
+        if self.2.is_some() {
+            Err(Error::new(ErrorKind::AlreadyExists,
+                           format!("Connect to peer failed, uid: {:?}, remote: {:?}, local: {:?}, reason: already connect to server",
+                                   self.1.get_uid(),
+                                   self.2,
+                                   self.1.get_local())))
+        } else {
+            Ok(self.1.clone())
+        }
+    }
+
+    /// 重新连接
+    pub fn reconnect_to_peer(&self) -> Result<BlockingUdpSocket> {
         if self.2.is_some() {
             Err(Error::new(ErrorKind::AlreadyExists,
                            format!("Connect to peer failed, uid: {:?}, remote: {:?}, local: {:?}, reason: already connect to server",
@@ -248,7 +272,13 @@ impl UdpTerminal {
                            format!("Close Udp listener failed, reason: {:?}",
                                    e)))
         } else {
-            Ok(())
+            if let Err(e) = self.3.recv_timeout(Duration::from_millis(5000 )) {
+                Err(Error::new(ErrorKind::Other,
+                               format!("Close Udp listener failed, reason: {:?}",
+                                       e)))
+            } else {
+                Ok(())
+            }
         }
     }
 }
@@ -287,7 +317,8 @@ fn event_loop(rt: LocalTaskRuntime<()>,
               event_receiver: Receiver<UdpEvent>,
               socket_handle: SocketHandle,
               service: Box<dyn AsyncService>,
-              recv_loop_running: Arc<AtomicBool>) -> LocalBoxFuture<'static, ()> {
+              recv_loop_running: Arc<AtomicBool>,
+              closed_send: Sender<()>) -> LocalBoxFuture<'static, ()> {
     async move {
         //调用服务的处理Udp连接已绑定本地地址的处理方法
         service
@@ -325,6 +356,8 @@ fn event_loop(rt: LocalTaskRuntime<()>,
                             //处理异步事件
                             if let TaskResult::ExitReady = task.await {
                                 //立即退出事件处理循环
+                                warn!("Event loop already exited, local: {:?}", socket_handle.get_local());
+                                closed_send.send(()); //通知已关闭
                                 return;
                             }
                         },
@@ -340,6 +373,11 @@ fn event_loop(rt: LocalTaskRuntime<()>,
                                                reason)
                                 .await;
                             recv_loop_running.store(false, Ordering::Relaxed); //退出接收循环
+
+                            //异步通知退出当前事件循环
+                            socket_handle.spawn(async move {
+                                TaskResult::ExitReady
+                            }.boxed_local());
                         },
                         UdpEvent::CloseListener(reason) => {
                             //处理关闭监听器事件
