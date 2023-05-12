@@ -1,11 +1,13 @@
 use std::fs;
+use std::iter;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::path::Path;
-use std::time::Instant;
+use std::convert::TryInto;
+use std::path::{Path, PathBuf};
+use std::time::{Instant, SystemTime};
 use std::net::SocketAddr;
 use std::cell::UnsafeCell;
-use std::io::{Error, Result, ErrorKind};
+use std::io::{BufRead, Result, Error, ErrorKind, Cursor};
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use quinn_proto::{crypto, Endpoint, EndpointConfig, ClientConfig, EndpointEvent, DatagramEvent, ConnectionEvent, ConnectionHandle, Transmit, Connection, StreamId};
@@ -14,13 +16,13 @@ use flume::{Sender as AsyncSender, Receiver as AsyncReceiver, bounded};
 use dashmap::DashMap;
 use bytes::{Buf, Bytes, BytesMut};
 use rustls;
-use log::error;
-use pi_async::prelude::SpinLock;
+use log::{debug, error};
 
 use pi_hash::XHashMap;
 use pi_cancel_timer::Timer;
-use pi_async::rt::{AsyncRuntime, serial::AsyncValue,
-                   serial_local_thread::LocalTaskRuntime};
+use pi_async::{lock::spin_lock::SpinLock,
+               rt::{AsyncRuntime, serial::AsyncValue,
+                    serial_local_thread::LocalTaskRuntime}};
 use udp::{Socket, AsyncService, SocketHandle,
           connect::UdpSocket,
           client::UdpClient,
@@ -29,7 +31,7 @@ use udp::{Socket, AsyncService, SocketHandle,
 use crate::{AsyncService as QuicAsyncService, SocketHandle as QuicSocketHandle, SocketEvent,
             connect::QuicSocket,
             connect_pool::QuicSocketPool,
-            utils::{QuicSocketReady, QuicClientTimerEvent}};
+            utils::{QuicSocketReady, QuicClientTimerEvent, load_certs_file, load_cert, load_key_file, load_key}};
 
 
 /// 默认的读取块大小，单位字节
@@ -268,10 +270,10 @@ fn handle_endpoint_events<S>(quic_client: &QuicClient<S>)
 * Quic客户端同步方法
 */
 impl<S: Socket> QuicClient<S> {
-    /// 构建一个Quic客户端
+    /// 构建一个不授信的Quic客户端
     pub fn new(udp_client_runtime: LocalTaskRuntime<()>,
                runtimes: Vec<LocalTaskRuntime<()>>,
-               root_cert: Vec<u8>,
+               verify_level: ServerCertVerifyLevel,
                config: EndpointConfig,
                readed_read_size_limit: usize,
                readed_write_size_limit: usize,
@@ -280,6 +282,33 @@ impl<S: Socket> QuicClient<S> {
                connect_timeout: usize,
                udp_timeout: Option<usize>,
                quic_timeout: Option<usize>) -> Result<Self> {
+        Self::with_cert_and_key(udp_client_runtime,
+                                runtimes,
+                                ClientCreditLevel::UnCredit,
+                                verify_level,
+                                config,
+                                readed_read_size_limit,
+                                readed_write_size_limit,
+                                udp_read_packet_size,
+                                udp_write_packet_size,
+                                connect_timeout,
+                                udp_timeout,
+                                quic_timeout)
+    }
+
+    /// 构建一个指定授信级别的Quic客户端
+    pub fn with_cert_and_key(udp_client_runtime: LocalTaskRuntime<()>,
+                             runtimes: Vec<LocalTaskRuntime<()>>,
+                             credit_level: ClientCreditLevel,
+                             verify_level: ServerCertVerifyLevel,
+                             config: EndpointConfig,
+                             readed_read_size_limit: usize,
+                             readed_write_size_limit: usize,
+                             udp_read_packet_size: usize,
+                             udp_write_packet_size: usize,
+                             connect_timeout: usize,
+                             udp_timeout: Option<usize>,
+                             quic_timeout: Option<usize>) -> Result<Self> {
         if runtimes.is_empty() {
             //连接运行时为空，则立即返回错误原因
             return Err(Error::new(ErrorKind::Other,
@@ -308,20 +337,133 @@ impl<S: Socket> QuicClient<S> {
                                         udp_write_packet_size,
                                         udp_timeout)?;
 
-        //加载客户端使用的根证书
-        let mut roots = rustls::RootCertStore::empty();
-        if let Err(e) = roots.add(&rustls::Certificate(root_cert)) {
-            //增加根证书失败，则立即返回错误原因
-            return Err(Error::new(ErrorKind::Other,
-                                  format!("Create quic client failed, reason: {:?}",
-                                          e)));
-        }
+        let client_auth = match credit_level {
+            ClientCreditLevel::UnCredit => {
+                //不需要授信
+                None
+            },
+            credit => {
+                //需要授信
+                match credit {
+                    ClientCreditLevel::CreditFile(client_cert_path, client_key_path) => {
+                        //使用指定的客户端证书路径和客户端密钥路径
+                        Some((load_certs_file(client_cert_path)?,
+                              load_key_file(client_key_path)?))
+                    },
+                    ClientCreditLevel::CreditBytes(client_cert_bytes, client_key_bytes) => {
+                        //使用指定的客户端证书数据和客户端密钥数据
+                        Some((vec![load_cert(client_cert_bytes)],
+                              load_key(client_key_bytes)))
+                    },
+                    _ => unimplemented!(),
+                }
+            },
+        };
 
-        //配置默认客户端安全参数，并构建默认客户端配置
-        let mut client_crypto = rustls::ClientConfig::builder()
-            .with_safe_defaults()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+        //构建客户端配置
+        let builder = rustls::ClientConfig::builder()
+            .with_safe_defaults();
+        let client_crypto = match verify_level {
+            ServerCertVerifyLevel::Ignore => {
+                //不需要严格验证服务端证书
+                match client_auth {
+                    None => {
+                        //不需要授信客户端
+                        builder
+                            .with_custom_certificate_verifier(Arc::new(InsecureServerCertVerifier))
+                            .with_no_client_auth()
+                    },
+                    Some((client_certs, client_key)) => {
+                        //需要授信客户端
+                        match builder
+                            .with_custom_certificate_verifier(Arc::new(InsecureServerCertVerifier))
+                            .with_single_cert(client_certs, client_key) {
+                            Err(e) => {
+                                return Err(Error::new(ErrorKind::Other,
+                                                      format!("Create quic client failed, reason: {:?}",
+                                                              e)));
+                            },
+                            Ok(crypto) => {
+                                crypto
+                            },
+                        }
+                    },
+                }
+            },
+            ServerCertVerifyLevel::Custom(verifier) => {
+                //需要验证服务端证书，使用指定的自定义验证器
+                match client_auth {
+                    None => {
+                        //不需要授信客户端
+                        builder
+                            .with_custom_certificate_verifier(verifier)
+                            .with_no_client_auth()
+                    },
+                    Some((client_certs, client_key)) => {
+                        //需要授信客户端
+                        match builder
+                            .with_custom_certificate_verifier(verifier)
+                            .with_single_cert(client_certs, client_key) {
+                            Err(e) => {
+                                return Err(Error::new(ErrorKind::Other,
+                                                      format!("Create quic client failed, reason: {:?}",
+                                                              e)));
+                            },
+                            Ok(crypto) => {
+                                crypto
+                            },
+                        }
+                    },
+                }
+            },
+            ca_cert => {
+                //需要严格验证服务端证书
+                let bytes = match ca_cert {
+                    ServerCertVerifyLevel::CaCertFile(path) => {
+                        //使用指定的CA证书文件
+                        fs::read(path)?
+                    },
+                    ServerCertVerifyLevel::CaCertBytes(bin) => {
+                        //使用指定的CA证书数据
+                        bin
+                    },
+                    _ => unimplemented!(),
+                };
+
+                let mut roots = rustls::RootCertStore::empty();
+                if let Err(e) = roots.add(&rustls::Certificate(bytes)) {
+                    //增加根证书失败，则立即返回错误原因
+                    return Err(Error::new(ErrorKind::Other,
+                                          format!("Create quic client failed, reason: {:?}",
+                                                  e)));
+                }
+
+                //配置默认客户端安全参数，并构建默认客户端配置
+                match client_auth {
+                    None => {
+                        //不需要授信客户端
+                        builder
+                            .with_root_certificates(roots)
+                            .with_no_client_auth()
+                    },
+                    Some((client_certs, client_key)) => {
+                        //需要授信客户端
+                        match builder
+                            .with_root_certificates(roots)
+                            .with_single_cert(client_certs, client_key) {
+                            Err(e) => {
+                                return Err(Error::new(ErrorKind::Other,
+                                                      format!("Create quic client failed, reason: {:?}",
+                                                              e)));
+                            },
+                            Ok(crypto) => {
+                                crypto
+                            },
+                        }
+                    },
+                }
+            },
+        };
         let default_config = ClientConfig::new(Arc::new(client_crypto));
 
         //构建客户端连接池
@@ -395,32 +537,6 @@ impl<S: Socket> QuicClient<S> {
         udp_client_runtime.spawn(poll_timer(client_copy));
 
         Ok(client)
-    }
-
-    /// 用指定路径的证书文件，构建一个Quic客户端
-    pub fn with_cert_file<P: AsRef<Path>>(udp_client_runtime: LocalTaskRuntime<()>,
-                                          runtimes: Vec<LocalTaskRuntime<()>>,
-                                          root_cert_path: P,
-                                          config: EndpointConfig,
-                                          readed_read_size_limit: usize,
-                                          readed_write_size_limit: usize,
-                                          udp_read_packet_size: usize,
-                                          udp_write_packet_size: usize,
-                                          connect_timeout: usize,
-                                          udp_timeout: Option<usize>,
-                                          quic_timeout: Option<usize>) -> Result<Self> {
-        let root_cert = fs::read(root_cert_path)?;
-        Self::new(udp_client_runtime,
-                  runtimes,
-                  root_cert,
-                  config,
-                  readed_read_size_limit,
-                  readed_write_size_limit,
-                  udp_read_packet_size,
-                  udp_write_packet_size,
-                  connect_timeout,
-                  udp_timeout,
-                  quic_timeout)
     }
 
     /// 判断指定令牌的连接是否已关闭
@@ -838,6 +954,7 @@ impl<S: Socket> QuicClientConnection<S> {
                 return None;
             }
         } else {
+            //当前连接的读缓冲中有数据
             readed_len = remaining;
         }
 
@@ -873,6 +990,40 @@ impl<S: Socket> QuicClientConnection<S> {
 struct InnerQuicClientConnection<S: Socket> {
     client:             QuicClient<S>,             //客户端
     handle:             QuicSocketHandle<S>,       //连接句柄
+}
+
+///
+/// 客户端授信级别
+///
+pub enum ClientCreditLevel {
+    UnCredit,                       //不授信
+    CreditFile(PathBuf, PathBuf),   //授信文件路径
+    CreditBytes(Vec<u8>, Vec<u8>),  //授信文件数据
+}
+
+///
+/// 服务器证书验证级别
+///
+pub enum ServerCertVerifyLevel {
+    Ignore,                                                 //忽略验证
+    Custom(Arc<dyn rustls::client::ServerCertVerifier>),    //自定义验证
+    CaCertFile(PathBuf),                                    //CA证书文件验证
+    CaCertBytes(Vec<u8>),                                   //CA证书数据验证
+}
+
+// 非可靠服务端证书验证器
+struct InsecureServerCertVerifier;
+
+impl rustls::client::ServerCertVerifier for InsecureServerCertVerifier {
+    fn verify_server_cert(&self,
+                          _end_entity: &rustls::Certificate,
+                          _intermediates: &[rustls::Certificate],
+                          _server_name: &rustls::ServerName,
+                          _scts: &mut dyn Iterator<Item=&[u8]>,
+                          _ocsp_response: &[u8],
+                          _now: SystemTime) -> std::result::Result<rustls::client::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::ServerCertVerified::assertion())
+    }
 }
 
 

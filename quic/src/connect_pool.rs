@@ -12,13 +12,14 @@ use quinn_proto::{EndpointEvent, ConnectionEvent, Event, ConnectionHandle, Dir, 
 use dashmap::DashMap;
 use slotmap::{Key, KeyData};
 use bytes::{Buf, BufMut};
+use spin_sleep::LoopHelper;
 use log::{debug, warn, error};
 
 use pi_cancel_timer::Timer;
 use pi_async::rt::{serial::AsyncRuntime,
                    serial_local_thread::LocalTaskRuntime};
 use quinn_proto::Event::{Connected, ConnectionLost, DatagramReceived, HandshakeDataReady, Stream};
-
+use rustls::Connection;
 use udp::{Socket,
           connect::UdpSocket};
 
@@ -43,9 +44,9 @@ pub struct QuicSocketPool<S: Socket = UdpSocket> {
     sender_recv:            Receiver<(ConnectionHandle, Option<StreamId>, Vec<u8>)>,    //连接写事件接收器
     service:                Arc<dyn AsyncService<S>>,                                   //连接服务
     clock:                  Instant,                                                    //内部时钟
-    timer:                  Timer<usize, 100, 60, 3>,                                   //定时器
-    timer_sent:             Sender<(ConnectionHandle, Option<(u64, SocketEvent)>)>,     //定时器设置事件的发送器
-    timer_recv:             Receiver<(ConnectionHandle, Option<(u64, SocketEvent)>)>,   //定时器设置事件的接收器
+    timer:                  Timer<(usize, SocketEvent), 100, 60, 3>,                    //定时器
+    timer_sent:             Sender<(ConnectionHandle, Option<(usize, SocketEvent)>)>,   //定时器设置事件的发送器
+    timer_recv:             Receiver<(ConnectionHandle, Option<(usize, SocketEvent)>)>, //定时器设置事件的接收器
     expired:                HashMap<usize, u64>,                                        //已到期连接唯一id缓冲
     close_sent:             Sender<QuicCloseEvent>,                                     //关闭事件的发送器
     close_recv:             Receiver<QuicCloseEvent>,                                   //关闭事件的接收器
@@ -100,21 +101,33 @@ impl<S: Socket> QuicSocketPool<S> {
                rt: LocalTaskRuntime<()>) {
         let mut pool = self;
         let rt_copy = rt.clone();
-        rt.spawn(event_loop(rt_copy, pool));
+        let helper = if let Some(loop_timeout) = pool.timeout {
+            LoopHelper::builder()
+                .native_accuracy_ns(100_000)
+                .build_with_target_rate(1000u32
+                    .checked_div(loop_timeout as u32)
+                    .unwrap_or(1000))
+        } else {
+            LoopHelper::builder()
+                .native_accuracy_ns(100_000)
+                .build_with_target_rate(10000)
+        };
+        rt.spawn(event_loop(rt_copy, pool, helper));
     }
 }
 
 // Quic连接事件循环
 #[inline]
 fn event_loop<S>(rt: LocalTaskRuntime<()>,
-                 mut pool: QuicSocketPool<S>) -> LocalBoxFuture<'static, ()>
+                 mut pool: QuicSocketPool<S>,
+                 mut helper: LoopHelper) -> LocalBoxFuture<'static, ()>
     where S: Socket {
     async move {
-        let now = Instant::now();
+        helper.loop_start(); //开始处理事件
 
         handle_udp_accepted(&rt, &mut pool);
 
-        poll_timer(&mut pool);
+        poll_timer(&rt, &mut pool);
 
         handle_connection_readed(&rt, &mut pool);
 
@@ -126,15 +139,10 @@ fn event_loop<S>(rt: LocalTaskRuntime<()>,
 
         handle_close(&rt, &mut pool);
 
-        if let Some(timeout) = pool.timeout {
-            //如果事件循环执行过快，则强制休眠指定时长
-            let sleep_timeout = timeout
-                .checked_sub(now.elapsed().as_millis() as usize)
-                .unwrap_or(0);
-            thread::sleep(Duration::from_millis(sleep_timeout as u64));
-        }
+        handle_timeout_timer(&mut pool);
 
-        rt.spawn(event_loop(rt.clone(), pool));
+        helper.loop_sleep_no_spin(); //开始休眠
+        rt.spawn(event_loop(rt.clone(), pool, helper));
     }.boxed_local()
 }
 
@@ -158,16 +166,36 @@ fn handle_udp_accepted<S>(rt: &LocalTaskRuntime<()>,
 }
 
 // 轮询连接池定时器
-fn poll_timer<S>(pool: &mut QuicSocketPool<S>)
+fn poll_timer<S>(rt: &LocalTaskRuntime<()>,
+                 pool: &mut QuicSocketPool<S>)
     where S: Socket {
     //推动连接池定时器
     let now = pool.clock.elapsed().as_millis() as u64;
     while pool.timer.is_ok(now) {
-        if let Some(connection_handle_number) = pool.timer.pop(now) {
-            //指定连接已超时，则写入连接超时表
-            if pool.sockets.contains_key(&connection_handle_number) {
-                //超时的连接存在，则记录已到期的连接唯一id
-                pool.expired.insert(connection_handle_number, now);
+        if let Some((connection_handle_number, timer_event)) = pool.timer.pop(now) {
+            if timer_event.is_empty() {
+                //指定连接已内部超时，则写入连接超时表
+                if pool.sockets.contains_key(&connection_handle_number) {
+                    //超时的连接存在，则记录已到期的连接唯一id
+                    pool.expired.insert(connection_handle_number, now);
+                }
+            } else {
+                //指定连接已外部超时
+                if let Some(item) = pool.sockets.get(&connection_handle_number) {
+                    let socket = item.value();
+                    if unsafe { (&*socket.get()).is_closed() } {
+                        //连接已关闭，则忽略
+                        continue;
+                    }
+
+                    //移除连接上的定时器句柄
+                    unsafe { (&mut *socket.get()).unset_timer_handle(); }
+
+                    //连接已超时，则执行超时回调
+                    let service = pool.service.clone();
+                    let handle = unsafe { (&*socket.get()).get_socket_handle() };
+                    rt.spawn(service.handle_timeouted(handle, Ok(timer_event)));
+                }
             }
         }
     }
@@ -248,18 +276,18 @@ fn handle_connection_readed<S>(rt: &LocalTaskRuntime<()>,
                         if (expired != &time) {
                             //当前连接的下次到期时间不匹配，则重置当前连接的定时器到下次到期时间
                             let _ = pool.timer.cancel(KeyData::from_ffi(timer_ref).into());
-                            let key = pool.timer.push(next_expire_time, connection_handle_number);
+                            let key = pool.timer.push(next_expire_time, (connection_handle_number, SocketEvent::empty()));
                             (&mut *socket.get()).set_timer_ref(Some(key.data().as_ffi()));
                         }
                     } else {
                         //当前连接未设置下次到期时间，则重置当前连接的定时器到下次到期时间
                         let _ = pool.timer.cancel(KeyData::from_ffi(timer_ref).into());
-                        let key = pool.timer.push(next_expire_time, connection_handle_number);
+                        let key = pool.timer.push(next_expire_time, (connection_handle_number, SocketEvent::empty()));
                         (&mut *socket.get()).set_timer_ref(Some(key.data().as_ffi()));
                     }
                 } else {
                     //当前连接未设置定时器，则设置当前连接的定时器到下次到期时间
-                    let key = pool.timer.push(next_expire_time, connection_handle_number);
+                    let key = pool.timer.push(next_expire_time, (connection_handle_number, SocketEvent::empty()));
                     (&mut *socket.get()).set_timer_ref(Some(key.data().as_ffi()));
                 }
 
@@ -644,6 +672,48 @@ fn handle_close<S>(rt: &LocalTaskRuntime<()>,
                     }
                 }
             },
+        }
+    }
+}
+
+// 处理Quic连接的外部定时器
+#[inline]
+async fn handle_timeout_timer<S>(pool: &mut QuicSocketPool<S>)
+    where S: Socket {
+    //设置或取消指定Tcp连接的定时器
+    for (connection_handle, opt) in pool.timer_recv.try_iter().collect::<Vec<(ConnectionHandle, Option<(usize, SocketEvent)>)>>() {
+        if let Some((timeout, event)) = opt {
+            //为指定令牌的连接设置指定的定时器
+            if let Some(item) = pool.sockets.get(&connection_handle.0) {
+                let socket = item.value();
+                if unsafe { (&*socket.get()).is_closed() } {
+                    //连接已关闭，则忽略
+                    continue;
+                }
+
+                if let Some(timer) = unsafe { (&mut *socket.get()).unset_timer_handle() } {
+                    //连接已设置定时器，则先移除指定句柄的定时器
+                    let _ = pool.timer.cancel(KeyData::from_ffi(timer).into());
+                }
+
+                //设置指定事件的定时器，并在连接上设置定时器句柄
+                let timer = pool.timer.push(timeout, (connection_handle.0, event));
+                unsafe { (&mut *socket.get()).set_timer_handle(timer.data().as_ffi()); }
+            }
+        } else {
+            //为指定令牌的连接取消指定的定时器
+            if let Some(item) = pool.sockets.get(&connection_handle.0) {
+                let socket = item.value();
+                if unsafe { (&*socket.get()).is_closed() } {
+                    //连接已关闭，则忽略
+                    continue;
+                }
+
+                //移除连接上的定时器句柄，并移除指定句柄的定时器
+                if let Some(timer) = unsafe { (&mut *socket.get()).unset_timer_handle() } {
+                    let _ = pool.timer.cancel(KeyData::from_ffi(timer).into());
+                }
+            }
         }
     }
 }

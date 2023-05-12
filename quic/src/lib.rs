@@ -1,24 +1,24 @@
 use std::ptr;
+use std::rc::Rc;
 use std::any::Any;
 use std::sync::Arc;
-use std::io::Result;
 use std::task::Waker;
 use std::net::SocketAddr;
 use std::cell::UnsafeCell;
-use std::rc::Rc;
 use std::result::Result as GenResult;
+use std::io::{Error, Result, ErrorKind};
 use std::sync::atomic::{AtomicU8, Ordering};
-use bytes::BytesMut;
 
 use futures::future::LocalBoxFuture;
 use quinn_proto::{ConnectionHandle, StreamId};
 use crossbeam_channel::Sender;
+use bytes::BytesMut;
 use pi_async::prelude::SpinLock;
 use pi_async::rt::serial::AsyncValue;
 
 use udp::{Socket,
           connect::UdpSocket};
-pub use quinn_proto::EndpointConfig;
+
 pub mod acceptor;
 pub mod connect;
 pub mod connect_pool;
@@ -27,7 +27,7 @@ pub mod client;
 pub mod utils;
 
 use crate::connect::QuicSocket;
-use crate::utils::{QuicSocketStatus, QuicSocketReady, QuicCloseEvent, Hibernate};
+use crate::utils::{QuicSocketStatus, QuicSocketReady, QuicCloseEvent, Hibernate, ContextHandle};
 
 ///
 /// Quic连接异步服务
@@ -82,7 +82,7 @@ impl<S: Socket> SocketHandle<S> {
                socket: Arc<UnsafeCell<QuicSocket<S>>>,
                local: SocketAddr,
                remote: SocketAddr,
-               timer_listener: Sender<(ConnectionHandle, Option<(u64, SocketEvent)>)>,
+               timer_listener: Sender<(ConnectionHandle, Option<(usize, SocketEvent)>)>,
                close_listener: Sender<QuicCloseEvent>) -> Self {
         let inner = InnerSocketHandle {
             uid,
@@ -95,6 +95,21 @@ impl<S: Socket> SocketHandle<S> {
         };
 
         SocketHandle(Arc::new(inner))
+    }
+
+    /// 线程安全的异步广播指定负载
+    pub fn broadcast(handles: &[SocketHandle<S>],
+                     payload: Vec<u8>) -> Result<()> {
+        if handles.len() == 0 {
+            //连接为空，则忽略
+            return Ok(());
+        }
+
+        for handle in handles {
+            handle.write_ready(payload.clone())?;
+        }
+
+        Ok(())
     }
 
     /// 获取连接唯一id
@@ -132,6 +147,30 @@ impl<S: Socket> SocketHandle<S> {
     pub fn get_connection_handle(&self) -> &ConnectionHandle {
         unsafe {
             (&*self.0.inner.get()).get_connection_handle()
+        }
+    }
+
+    /// 获取Quic连接会话的句柄
+    pub fn get_session<T>(&self) -> Option<ContextHandle<T>> {
+        unsafe {
+            (&*(&*self.0.inner.get()).get_context().get()).get::<T>()
+        }
+    }
+
+    /// 设置Quic连接会话的句柄
+    pub fn set_session<T>(&self, context: T) {
+        unsafe {
+            (&mut *(&*self.0.inner.get()).get_context().get()).set::<T>(context);
+        }
+    }
+
+    /// 移除Quic连接会话的句柄
+    pub fn remove_session<T>(&self) -> Result<Option<T>> {
+        unsafe {
+            match (&mut *(&*self.0.inner.get()).get_context().get()).remove::<T>() {
+                Err(e) => Err(Error::new(ErrorKind::Other, e)),
+                Ok(r) => Ok(r)
+            }
         }
     }
 
@@ -199,10 +238,32 @@ impl<S: Socket> SocketHandle<S> {
         }
     }
 
+    /// 设置连接的超时定时器，同时只允许设置一个定时器，新的定时器会覆盖未超时的旧定时器
+    pub fn set_timeout(&self, timeout: usize, event: SocketEvent) {
+        unsafe {
+            (&*self.0.inner.get()).set_timeout(timeout, event);
+        }
+    }
+
+    /// 取消连接的未超时超时定时器
+    pub fn unset_timeout(&self) {
+        unsafe {
+            (&*self.0.inner.get()).unset_timeout();
+        }
+    }
+
     /// 开始执行连接休眠时加入的任务，当前任务执行完成后自动执行下一个任务，直到任务队列为空
     pub fn run_hibernated_tasks(&self) {
         unsafe {
             (&*self.0.inner.get()).run_hibernated_tasks();
+        }
+    }
+
+    /// 获取当前连接的休眠对象，返回空表示连接已关闭
+    pub fn hibernate(&self,
+                     ready: QuicSocketReady) -> Option<Hibernate<S>> {
+        unsafe {
+            (&*self.0.inner.get()).hibernate(self.clone(), ready)
         }
     }
 
@@ -217,6 +278,15 @@ impl<S: Socket> SocketHandle<S> {
     pub fn set_hibernate_wakers(&self, waker: Waker) {
         unsafe {
             (&*self.0.inner.get()).set_hibernate_wakers(waker);
+        }
+    }
+
+    /// 非阻塞的唤醒被休眠的当前连接，如果当前连接未被休眠，则忽略
+    /// 还会唤醒当前连接正在休眠时，当前连接的所有其它休眠对象的唤醒器
+    /// 唤醒过程可能会被阻塞，这不会导致线程阻塞而是返回假，调用者可以继续尝试唤醒，直到返回真
+    pub fn wakeup(&self, result: Result<()>) -> bool {
+        unsafe {
+            (&mut *self.0.inner.get()).wakeup(result)
         }
     }
 
@@ -237,13 +307,13 @@ impl<S: Socket> SocketHandle<S> {
 
 // 内部Quic连接句柄
 struct InnerSocketHandle<S: Socket> {
-    uid:            usize,                                                  //Quic连接唯一id
-    status:         Arc<AtomicU8>,                                          //Quic连接状态
-    inner:          Arc<UnsafeCell<QuicSocket<S>>>,                         //Quic连接指针
-    local:          SocketAddr,                                             //Quic连接本地地址
-    remote:         SocketAddr,                                             //Quic连接远端地址
-    timer_listener: Sender<(ConnectionHandle, Option<(u64, SocketEvent)>)>, //定时事件监听器
-    close_listener: Sender<QuicCloseEvent>,                                 //关闭事件监听器
+    uid:            usize,                                                      //Quic连接唯一id
+    status:         Arc<AtomicU8>,                                              //Quic连接状态
+    inner:          Arc<UnsafeCell<QuicSocket<S>>>,                             //Quic连接指针
+    local:          SocketAddr,                                                 //Quic连接本地地址
+    remote:         SocketAddr,                                                 //Quic连接远端地址
+    timer_listener: Sender<(ConnectionHandle, Option<(usize, SocketEvent)>)>,   //定时事件监听器
+    close_listener: Sender<QuicCloseEvent>,                                     //关闭事件监听器
 }
 
 ///

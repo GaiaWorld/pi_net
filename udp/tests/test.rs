@@ -112,7 +112,7 @@ fn test_udp_connect() {
                                1024,
                                0xffff,
                                0xffff,
-                               Some(10)) {
+                               Some(1)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 Address Error, reason: {:?}", e);
         },
@@ -251,7 +251,7 @@ fn test_udp_client() {
                                1024,
                                0xffff,
                                0xffff,
-                               Some(10)) {
+                               Some(1)) {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 Address Error, reason: {:?}", e);
         },
@@ -266,7 +266,7 @@ fn test_udp_client() {
                                              1024,
                                              0xffff,
                                              0xffff,
-                                             Some(10))
+                                             Some(1))
         .unwrap();
     let client_copy = client.clone();
     thread::spawn(move || {

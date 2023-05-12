@@ -333,8 +333,8 @@ impl<S, F> SocketListener<S, F>
         for addr in addrs {
             match UdpSocket::bind(addr.clone()) {
                 Err(e) => {
-                    //绑定指定地址失败，则继续绑定其它地址
-                    warn!("Udp bind address failed, addr: {:?}, reason: {:?}",
+                    //绑定指定地址失败，则立即抛出异常
+                    panic!("Udp bind address failed, addr: {:?}, reason: {:?}",
                         addr,
                         e);
                 },
