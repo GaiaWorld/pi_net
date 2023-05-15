@@ -16,7 +16,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::future::{FutureExt, LocalBoxFuture};
 
 use pi_async::{lock::spin_lock::SpinLock,
-               rt::{AsyncValueNonBlocking,
+               rt::{serial::AsyncValueNonBlocking,
                     serial_local_thread::LocalTaskRuntime}};
 
 use udp::SocketHandle;
@@ -81,6 +81,8 @@ pub struct QuicSocket {
     event_send:         Option<Sender<QuicEvent>>,                                          //Quic事件发送器
     close_reason:       Option<(u32, Result<()>)>,                                          //连接关闭的原因
 }
+
+unsafe impl Send for QuicSocket {}
 
 impl Debug for QuicSocket {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

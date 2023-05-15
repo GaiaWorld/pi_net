@@ -16,7 +16,7 @@ use crossbeam_channel::Sender;
 use crossbeam_utils::atomic::AtomicCell;
 use bytes::BytesMut;
 use pi_async::prelude::SpinLock;
-use pi_async::rt::AsyncValueNonBlocking;
+use pi_async::rt::serial::AsyncValueNonBlocking;
 
 use udp::SocketHandle as UdpSocketHandle;
 
