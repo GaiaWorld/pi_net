@@ -16,7 +16,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::future::{FutureExt, LocalBoxFuture};
 
 use pi_async::{lock::spin_lock::SpinLock,
-               rt::{serial::AsyncValueNonBlocking,
+               rt::{AsyncValueNonBlocking,
                     serial_local_thread::LocalTaskRuntime}};
 
 use udp::SocketHandle;
