@@ -82,8 +82,6 @@ pub struct QuicSocket {
     close_reason:       Option<(u32, Result<()>)>,                                          //连接关闭的原因
 }
 
-unsafe impl Send for QuicSocket {}
-
 impl Debug for QuicSocket {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f,
