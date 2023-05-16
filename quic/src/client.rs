@@ -572,53 +572,59 @@ impl QuicClient {
 
         //异步建立指定地址的Quic连接，为了防止外部使用有Send约束的运行时导致编译失败
         let now = Instant::now();
-        let local_rt = self.0.runtimes[0].clone();
         let client = self.clone();
         let hostname = hostname.to_string();
         let connect_value = AsyncValueNonBlocking::new();
         let connect_value_copy = connect_value.clone();
-        local_rt.spawn(async move {
-            match unsafe { (&mut *client.0.end_point.get()).connect(config,
-                                             remote,
-                                             hostname.as_str()) } {
-                Err(e) => {
-                    //建立Quic连接失败，则立即返回连接错误原因
-                    connect_value_copy.set(Err(Error::new(ErrorKind::Other,
-                                                          format!("Create quic connection failed, hostname: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
-                                                                  hostname,
-                                                                  udp_handle.get_remote(),
-                                                                  udp_handle.get_local(),
-                                                                  e))));
-                },
-                Ok((connection_handle, connection)) => {
-                    //建立Quic连接成功
-                    let quic_connect_timeout = connect_timeout
-                        .checked_sub(now.elapsed().as_millis() as usize)
-                        .unwrap_or(0);
-                    if quic_connect_timeout == 0 {
-                        //没有剩余连接时长，则立即关闭当前Udp连接，并立即返回连接错误原因
-                        connect_value_copy.set(Err(Error::new(ErrorKind::TimedOut, "Connect quic timeout")));
-                    } else {
-                        //还有剩余连接时长，则设置Quic连接的超时时长
-                        client.0.timer.lock().push(quic_connect_timeout, QuicClientTimerEvent::QuicConnect(connection_handle.0));
+        self
+            .0
+            .udp_terminal
+            .read()
+            .as_ref()
+            .unwrap()
+            .spawn(async move {
+                match unsafe { (&mut *client.0.end_point.get()).connect(config,
+                                                 remote,
+                                                 hostname.as_str()) } {
+                    Err(e) => {
+                        //建立Quic连接失败，则立即返回连接错误原因
+                        connect_value_copy.set(Err(Error::new(ErrorKind::Other,
+                                                              format!("Create quic connection failed, hostname: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                                                      hostname,
+                                                                      udp_handle.get_remote(),
+                                                                      udp_handle.get_local(),
+                                                                      e))));
+                    },
+                    Ok((connection_handle, connection)) => {
+                        //建立Quic连接成功
+                        let quic_connect_timeout = connect_timeout
+                            .checked_sub(now.elapsed().as_millis() as usize)
+                            .unwrap_or(0);
+                        if quic_connect_timeout == 0 {
+                            //没有剩余连接时长，则立即关闭当前Udp连接，并立即返回连接错误原因
+                            connect_value_copy.set(Err(Error::new(ErrorKind::TimedOut, "Connect quic timeout")));
+                        } else {
+                            //还有剩余连接时长，则设置Quic连接的超时时长
+                            client.0.timer.lock().push(quic_connect_timeout, QuicClientTimerEvent::QuicConnect(connection_handle.0));
 
-                        //注册Quic连接事件表
-                        client.0.connect_events.insert(connection_handle.0, (udp_connect_uid, connect_value_copy));
+                            //注册Quic连接事件表
+                            client.0.connect_events.insert(connection_handle.0, (udp_connect_uid, connect_value_copy));
 
-                        //将Quic Socket路由到连接池
-                        let quic_socket = QuicSocket::new(udp_handle,
-                                                          connection_handle,
-                                                          connection,
-                                                          client.0.readed_read_size_limit,
-                                                          client.0.readed_write_size_limit,
-                                                          client.0.clock);
-                        quic_socket.enable_client(); //设置为客户端
-                        let sender = &client.0.router[connection_handle.0 % client.0.router.len()];
-                        sender.send(QuicEvent::Accepted(quic_socket));
-                    }
-                },
-            }
-        });
+                            //将Quic Socket路由到连接池
+                            let quic_socket = QuicSocket::new(udp_handle,
+                                                              connection_handle,
+                                                              connection,
+                                                              client.0.readed_read_size_limit,
+                                                              client.0.readed_write_size_limit,
+                                                              client.0.clock);
+                            quic_socket.enable_client(); //设置为客户端
+                            let sender = &client.0.router[connection_handle.0 % client.0.router.len()];
+                            sender.send(QuicEvent::Accepted(quic_socket));
+                        }
+                    },
+                }
+                TaskResult::Continue
+        }.boxed_local());
 
         match connect_value.await {
             Err(e) => {

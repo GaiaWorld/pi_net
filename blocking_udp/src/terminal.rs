@@ -260,6 +260,11 @@ impl UdpTerminal {
         }
     }
 
+    /// 向连接所在运行时派发指定的异步任务
+    pub fn spawn(&self, task: LocalBoxFuture<'static, TaskResult>) {
+        self.1.spawn(task)
+    }
+
     /// 关闭Udp连接
     pub fn close_connection(&self, reason: Result<()>) -> Result<()> {
         self.1.close(reason)
