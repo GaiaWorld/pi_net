@@ -1,6 +1,7 @@
 #![allow(unused)]
 
 use std::io::Result;
+use std::fmt::Debug;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
@@ -24,7 +25,7 @@ use crate::{connect::BlockingUdpSocket,
 ///
 /// Udp连接
 ///
-pub trait Socket: Send + Sync + 'static {
+pub trait Socket: Debug + Send + Sync + 'static {
     /// 线程安全的判断是否已关闭Udp连接
     fn is_closed(&self) -> bool;
 

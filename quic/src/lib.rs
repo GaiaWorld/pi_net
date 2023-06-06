@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::any::Any;
 use std::sync::Arc;
 use std::task::Waker;
+use std::time::Duration;
 use std::net::SocketAddr;
 use std::cell::UnsafeCell;
 use std::result::Result as GenResult;
@@ -12,9 +13,12 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use futures::future::LocalBoxFuture;
 use quinn_proto::{ConnectionHandle, ConnectionEvent, StreamId, Transmit};
 use crossbeam_channel::Sender;
+use crossbeam_utils::atomic::AtomicCell;
 use bytes::BytesMut;
 use pi_async::prelude::SpinLock;
 use pi_async::rt::serial::AsyncValueNonBlocking;
+
+use udp::SocketHandle as UdpSocketHandle;
 
 pub mod acceptor;
 pub mod connect;
@@ -84,7 +88,7 @@ impl SocketHandle {
             uid,
             status,
             inner: socket,
-            local,
+            local: AtomicCell::new(local),
             remote,
             sender,
         };
@@ -123,7 +127,18 @@ impl SocketHandle {
 
     /// 获取本地连接地址
     pub fn get_local(&self) -> SocketAddr {
-        self.0.local
+        self
+            .0
+            .local
+            .load()
+    }
+
+    /// 设置本地连接地址
+    pub fn set_local(&self, local: SocketAddr) {
+        self
+            .0
+            .local
+            .store(local);
     }
 
     /// 获取远端连接地址
@@ -180,6 +195,13 @@ impl SocketHandle {
     pub fn is_closed(&self) -> bool {
         unsafe {
             (&*self.0.inner.get()).is_closed()
+        }
+    }
+
+    /// 获取当前连接的延迟估计
+    pub fn get_latency(&self) -> Duration {
+        unsafe {
+            (&*self.0.inner.get()).get_latency()
         }
     }
 
@@ -305,7 +327,7 @@ struct InnerSocketHandle {
     uid:            usize,                                                      //Quic连接唯一id
     status:         Arc<AtomicU8>,                                              //Quic连接状态
     inner:          Arc<UnsafeCell<QuicSocket>>,                                //Quic连接指针
-    local:          SocketAddr,                                                 //Quic连接本地地址
+    local:          AtomicCell<SocketAddr>,                                     //Quic连接本地地址
     remote:         SocketAddr,                                                 //Quic连接远端地址
     sender:         Sender<QuicEvent>,                                          //Quic事件发送器
 }
@@ -374,6 +396,7 @@ pub enum QuicEvent {
     ConnectionSend(ConnectionHandle, Transmit),                 //Quic连接发送数据
     StreamReady(ConnectionHandle, QuicSocketReady),             //Quic流就绪
     StreamWrite(ConnectionHandle, Option<StreamId>, Vec<u8>),   //Quic流写数据
+    RebindUdp(UdpSocketHandle),                                 //Quic重绑定Udp连接句柄
     Timeout(ConnectionHandle, Option<(usize, SocketEvent)>),    //Quic连接超时
     StreamClose(ConnectionHandle, Option<StreamId>, u32),       //Quic流关闭
     ConnectionClose(ConnectionHandle),                          //Quic连接关闭

@@ -11,6 +11,7 @@ use std::io::{Error, Result, ErrorKind};
 use futures::future::{FutureExt, BoxFuture, LocalBoxFuture};
 use quinn_proto::{EndpointConfig, ServerConfig, Endpoint, EndpointEvent, ConnectionEvent, ConnectionHandle, Transmit};
 use crossbeam_channel::{Receiver, Sender, unbounded};
+use futures::task::SpawnExt;
 use rustls;
 
 use pi_async::rt::serial_local_thread::LocalTaskRuntime;
@@ -21,6 +22,7 @@ use crate::{AsyncService as QuicAsyncService, QuicEvent,
             acceptor::QuicAcceptor,
             connect_pool::{EndPointPoller, QuicSocketPool},
             utils::{load_certs_file, load_key_file}};
+use crate::connect::QuicSocket;
 
 ///
 /// Quic连接监听器
@@ -108,11 +110,12 @@ impl AsyncService for QuicListener {
 
 impl EndPointPoller for QuicListener {
     fn poll(&self,
-            socket: &SocketHandle,
+            socket: &QuicSocket,
             handle: ConnectionHandle,
             events: VecDeque<EndpointEvent>) {
         let listener = self.clone();
         socket
+            .get_udp_handle()
             .spawn(async move {
                 handle_endpoint_events(listener,
                                        handle,

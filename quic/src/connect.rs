@@ -1,6 +1,6 @@
 use std::rc::Rc;
 use std::task::Waker;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::future::Future;
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
@@ -21,7 +21,8 @@ use pi_async::{lock::spin_lock::SpinLock,
 
 use udp::SocketHandle;
 
-use crate::{SocketHandle as QuicSocketHandle, SocketEvent, utils::{QuicSocketStatus, QuicSocketReady, QuicCloseEvent, Hibernate, SocketContext}, QuicEvent};
+use crate::{SocketHandle as QuicSocketHandle, SocketEvent,
+            utils::{QuicSocketStatus, QuicSocketReady, QuicCloseEvent, Hibernate, SocketContext}, QuicEvent};
 
 /// 默认的读取块大小，单位字节
 const DEFAULT_READ_BLOCK_LEN: usize = 4096;
@@ -224,6 +225,11 @@ impl QuicSocket {
         self.connect.is_handshaking()
     }
 
+    /// 获取当前连接的延迟估计
+    pub fn get_latency(&self) -> Duration {
+        self.connect.rtt()
+    }
+
     /// 获取连接的主流唯一id
     pub fn get_main_stream_id(&self) -> Option<&StreamId> {
         self.main_stream_id.as_ref()
@@ -258,6 +264,12 @@ impl QuicSocket {
     /// 获取Udp连接句柄的只读引用
     pub fn get_udp_handle(&self) -> &SocketHandle {
         &self.udp_handle
+    }
+
+    /// 设置Udp连接句柄
+    pub fn set_udp_handle(&mut self,
+                          udp_handle: SocketHandle) {
+        self.udp_handle = udp_handle;
     }
 
     /// 判断当前连接是否是客户端连接
