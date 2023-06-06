@@ -182,7 +182,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                                                 let url = if handle.is_security() {
                                                     "https://".to_string() + host_name + path
                                                 } else {
-                                                    "https://".to_string() + host_name + path
+                                                    "http://".to_string() + host_name + path
                                                 };
 
                                                 if let Some(request) = HttpRequest::new(handle.clone(),
