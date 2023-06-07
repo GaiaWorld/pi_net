@@ -77,8 +77,8 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
 
                         if mime.type_() == APPLICATION && mime.subtype() == WWW_FORM_URLENCODED {
                             //当前请求体使用了经过Url编码的表单结构，则分析，并写入参数表
-                            if let Some(body) = request.body().await {
-                                for (key, value) in form_urlencoded::parse(body) {
+                            if let Some(body) = request.take_body().await {
+                                for (key, value) in form_urlencoded::parse(body.as_ref()) {
                                     context
                                         .as_params()
                                         .borrow_mut()
@@ -88,8 +88,8 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
                             }
                         } else if mime.type_() == APPLICATION && mime.subtype() == JSON {
                             //当前请求体使用了Json，则分析，并写入参数表
-                            if let Some(body) = request.body().await {
-                                let opt: JsonResult<Value> = serde_json::from_slice(body);
+                            if let Some(body) = request.take_body().await {
+                                let opt: JsonResult<Value> = serde_json::from_slice(body.as_ref());
                                 if let Ok(json) = opt {
                                     //Json对象，则直接写入关键字为空串，值为Json字符串的参数
                                     context
@@ -101,21 +101,21 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
                             }
                         } else if mime.type_() == APPLICATION && mime.subtype() == OCTET_STREAM {
                             //当前请求体使用了二进制类型，则直接写入关键字为空串，值为二进制的参数
-                            if let Some(body) = request.body().await {
+                            if let Some(body) = request.take_body().await {
                                 context
                                     .as_params()
                                     .borrow_mut()
                                     .insert("".to_string(),
-                                            SGenType::Bin(Vec::from(body)));
+                                            SGenType::Bin(Vec::from(body.as_ref())));
                             }
                         } else if mime.type_() == TEXT {
                             //当前请求体使用了文本类型，则直接写入关键字为空串，值为文本的参数
-                            if let Some(body) = request.body().await {
+                            if let Some(body) = request.take_body().await {
                                 context
                                     .as_params()
                                     .borrow_mut()
                                     .insert("".to_string(),
-                                            SGenType::Str(String::from_utf8_lossy(body).to_string()));
+                                            SGenType::Str(String::from_utf8_lossy(body.as_ref()).to_string()));
                             }
                         }
                     }
