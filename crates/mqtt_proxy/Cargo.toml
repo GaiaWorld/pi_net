@@ -3,6 +3,10 @@ name = "pi_mqtt_proxy"
 version = "0.1.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
+description = "pi_mqtt_proxy"
+repository = "https://github.com/GaiaWorld/pi_net"
+license = "MIT OR Apache-2.0"
+keywords = ["pi", "mqtt_proxy"]
 
 [dependencies]
 futures = "0.3"

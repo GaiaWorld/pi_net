@@ -2,6 +2,10 @@
 name = "pi_blocking_udp"
 version = "0.1.0"
 edition = "2021"
+description = "pi_blocking_udp"
+repository = "https://github.com/GaiaWorld/pi_net"
+license = "MIT OR Apache-2.0"
+keywords = ["pi", "blocking_udp"]
 
 [dependencies]
 futures = "0.3"

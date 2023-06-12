@@ -3,6 +3,10 @@ name = "pi_mqtt"
 version = "0.1.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
+description = "pi_mqtt"
+repository = "https://github.com/GaiaWorld/pi_net"
+license = "MIT OR Apache-2.0"
+keywords = ["pi", "mqtt"]
 
 [dependencies]
 fnv = "1.0"

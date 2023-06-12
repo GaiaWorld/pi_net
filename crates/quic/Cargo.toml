@@ -2,11 +2,12 @@
 name = "pi_quic"
 version = "0.1.0"
 authors = ["vmos <vmosone007@gmail.com>"]
-edition = "2018"
+edition = "2021"
 description = "Quic client/server"
-repository = "https://github.com/pi-revolution/pi-quic"
+repository = "https://github.com/GaiaWorld/pi_net"
 license = "MIT OR Apache-2.0"
 keywords = ["pi", "quic"]
+
 
 [dependencies]
 futures = "0.3"

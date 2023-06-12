@@ -3,6 +3,10 @@ name = "pi_http"
 version = "0.1.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
+description = "pi_http"
+repository = "https://github.com/GaiaWorld/pi_net"
+license = "MIT OR Apache-2.0"
+keywords = ["pi", "http"]
 
 [dependencies]
 mio = "0.8"

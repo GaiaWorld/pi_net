@@ -1,7 +1,11 @@
 [package]
 name = "pi_tcp"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
+description = "pi_tcp"
+repository = "https://github.com/GaiaWorld/pi_net"
+license = "MIT OR Apache-2.0"
+keywords = ["pi",  "tcp"]
 
 [dependencies]
 futures = "0.3"
