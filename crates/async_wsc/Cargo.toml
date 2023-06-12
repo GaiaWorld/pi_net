@@ -3,6 +3,10 @@ name = "pi_async_wsc"
 version = "0.1.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
+description = "pi_async_wsc"
+repository = "https://github.com/GaiaWorld/pi_net"
+license = "MIT OR Apache-2.0"
+keywords = ["pi", "async_wsc"]
 
 [dependencies]
 futures = "0.3"
