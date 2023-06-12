@@ -26,7 +26,7 @@ pi_cancel_timer = "0.2"
 slotmap = "1.0"
 flume = "0.10"
 tracing = "0.1"
-udp = { path = "../blocking_udp", package = "pi_blocking_udp" }
+udp = {version = "0.1", path = "../blocking_udp", package = "pi_blocking_udp" }
 
 [dev-dependencies]
 rcgen = "0.10"

@@ -10,9 +10,9 @@ keywords = ["pi", "mqtt_proxy"]
 
 [dependencies]
 futures = "0.3"
-tcp = { path = "../tcp", package = "pi_tcp" }
-quic = { path = "../quic", package = "pi_quic" }
-mqtt = { path = "../mqtt", package = "pi_mqtt" }
+tcp = {version = "0.1", path = "../tcp", package = "pi_tcp" }
+quic = {version = "0.1", path = "../quic", package = "pi_quic" }
+mqtt = {version = "0.1", path = "../mqtt", package = "pi_mqtt" }
 pi_async = "0.5"
 pi_handler = "0.1"
 pi_gray = "0.1"
@@ -20,6 +20,6 @@ pi_atom = "0.1"
 log = "0.4"
 
 [dev-dependencies]
-ws = { path = "../ws", package = "pi_ws" }
+ws = {version = "0.1", path = "../ws", package = "pi_ws" }
 env_logger = "0.9"
-udp = { path = "../blocking_udp", package = "pi_blocking_udp" }
+udp = {version = "0.1", path = "../blocking_udp", package = "pi_blocking_udp" }

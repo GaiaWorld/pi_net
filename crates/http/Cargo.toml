@@ -36,7 +36,7 @@ pi_handler = "0.1"
 pi_hash = { version = "0.1", features = ["xxhash"] }
 pi_gray = "0.1"
 pi_adler32 = "0.1"
-tcp = { package="pi_tcp", path = "../tcp" }
+tcp = {version = "0.1", package="pi_tcp", path = "../tcp" }
 
 [dev-dependencies]
 route-recognizer = "0.3"

@@ -21,7 +21,7 @@ pi_slotmap = "0.1"
 pi_hash = "0.1"
 pi_async = "0.5"
 async-channel = "1.8"
-udp = { path = "../udp", package = "pi_udp" }
+udp = {version = "0.1", path = "../udp", package = "pi_udp" }
 
 [dev-dependencies]
 env_logger = "0.9"
