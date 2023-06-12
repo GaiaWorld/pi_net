@@ -1,0 +1,29 @@
+[package]
+name = "pi_tcp"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+futures = "0.3"
+mio = { version = "0.8", features = ["net", "os-poll"] }
+dashmap = "4.0"
+lazy_static = "1.4"
+bytes = "1.2"
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+fnv = "1.0"
+num_cpus = "1.13"
+rustls = "0.20"
+rustls-pemfile = "1.0"
+slotmap = "1.0"
+spin_sleep = "1.1"
+log = "0.4"
+pi_async = "0.5"
+pi_async_buffer = "0.6"
+pi_hash = { version = "0.1", features = ["xxhash"] }
+pi_atom = "0.1"
+pi_cancel_timer = "0.2"
+pi_slotmap = "0.1"
+
+[dev-dependencies]
+env_logger = "0.9"

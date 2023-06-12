@@ -1,0 +1,21 @@
+[package]
+name = "pi_mqtt_proxy"
+version = "0.1.0"
+authors = ["vmos <vmos@fairblock.io>"]
+edition = "2021"
+
+[dependencies]
+futures = "0.3"
+tcp = { path = "../tcp", package = "pi_tcp" }
+quic = { path = "../quic", package = "pi_quic" }
+mqtt = { path = "../mqtt", package = "pi_mqtt" }
+pi_async = "0.5"
+pi_handler = "0.1"
+pi_gray = "0.1"
+pi_atom = "0.1"
+log = "0.4"
+
+[dev-dependencies]
+ws = { path = "../ws", package = "pi_ws" }
+env_logger = "0.9"
+udp = { path = "../blocking_udp", package = "pi_blocking_udp" }

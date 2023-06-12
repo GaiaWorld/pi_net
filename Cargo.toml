@@ -1,20 +1,2 @@
 [workspace]
-members = [
-  "http",
-  #"httpc",
-  #"net",
-  #"mqtt_tmp",
-  #"rpc_tmp",
-  #"nodec",
-  "tcp",
-  "new_tcp",
-  "ws",
-  "mqtt",
-  "mqtt_proxy",
-  "rpc",
-  "udp",
-  "blocking_udp",
-  "quic",
-  "async_httpc",
-  "async_wsc",
-]
+members = ["crates/*"]

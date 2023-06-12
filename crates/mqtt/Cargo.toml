@@ -1,0 +1,29 @@
+[package]
+name = "pi_mqtt"
+version = "0.1.0"
+authors = ["vmos <vmos@fairblock.io>"]
+edition = "2021"
+
+[dependencies]
+fnv = "1.0"
+futures = "0.3"
+mio = "0.8"
+mqtt311 = "0.2"
+parking_lot = "0.11"
+lazy_static = "1.4"
+pi_hash = { version = "0.1", features = ["xxhash"] }
+pi_async = "0.5"
+tcp = { path = "../tcp", package = "pi_tcp" }
+ws = { path = "../ws", package = "pi_ws" }
+udp = { path = "../blocking_udp", package = "pi_blocking_udp"}
+quic = { path = "../quic", package = "pi_quic" }
+quinn-proto = "0.8"
+bytes = "1.3"
+log = "0.4"
+pi_atom = "0.1"
+
+[dev-dependencies]
+twox-hash = "1.5"
+env_logger = "0.9"
+evmap = "10.0"
+dashmap = "5.4"

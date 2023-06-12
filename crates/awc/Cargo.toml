@@ -1,0 +1,117 @@
+[package]
+name = "pi_awc"
+version = "0.1.0"
+authors = [
+    "Nikolay Kim <fafhrd91@gmail.com>",
+    "fakeshadow <24548779@qq.com>",
+]
+description = "Async HTTP and WebSocket client library"
+keywords = ["actix", "http", "framework", "async", "web"]
+categories = [
+    "network-programming",
+    "asynchronous",
+    "web-programming::http-client",
+    "web-programming::websocket",
+]
+homepage = "https://actix.rs"
+repository = "https://github.com/GaiaWorld/pi_net.git"
+license = "MIT OR Apache-2.0"
+edition = "2018"
+
+[lib]
+name = "awc"
+path = "src/lib.rs"
+
+[package.metadata.docs.rs]
+# features that docs.rs will build with
+features = ["rustls", "compress-brotli", "compress-gzip", "compress-zstd", "cookies"]
+
+[features]
+default = ["compress-brotli", "compress-gzip", "compress-zstd", "cookies"]
+
+# openssl
+# openssl = ["tls-openssl", "actix-tls/openssl"]
+
+# rustls
+rustls = ["tls-rustls", "actix-tls/rustls"]
+
+# Brotli algorithm content-encoding support
+compress-brotli = ["actix-http/compress-brotli", "__compress"]
+# Gzip and deflate algorithms content-encoding support
+compress-gzip = ["actix-http/compress-gzip", "__compress"]
+# Zstd algorithm content-encoding support
+compress-zstd = ["actix-http/compress-zstd", "__compress"]
+
+# cookie parsing and cookie jar
+cookies = ["cookie"]
+
+# trust-dns as dns resolver
+trust-dns = ["trust-dns-resolver"]
+
+# Internal (PRIVATE!) features used to aid testing and cheking feature status.
+# Don't rely on these whatsoever. They may disappear at anytime.
+__compress = []
+
+# Enable dangerous feature for testing and local network usage:
+# - HTTP/2 over TCP(No Tls).
+# DO NOT enable this over any internet use case.
+dangerous-h2c = []
+
+[dependencies]
+actix-codec = "0.5"
+actix-service = "2"
+actix-http = { version = "3", features = ["http2", "ws"] }
+actix-rt = { version = "2.1", default-features = false }
+actix-tls = { version = "3", features = ["connect", "uri"] }
+actix-utils = "3"
+
+ahash = "0.7"
+base64 = "0.13"
+bytes = "1"
+cfg-if = "1"
+derive_more = "0.99.5"
+futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
+futures-util = { version = "0.3", default-features = false, features = ["alloc", "sink"] }
+h2 = "0.3.9"
+http = "0.2.5"
+itoa = "1"
+log =" 0.4"
+mime = "0.3"
+percent-encoding = "2.1"
+pin-project-lite = "0.2"
+rand = "0.8"
+serde = "1.0"
+serde_json = "1.0"
+serde_urlencoded = "0.7"
+tokio = { version = "1.8.4", features = ["sync"] }
+
+cookie = { version = "0.16", features = ["percent-encode"], optional = true }
+
+# tls-openssl = { package = "openssl", version = "0.10.9", optional = true }
+tls-rustls = { package = "rustls", version = "0.20.0", optional = true, features = ["dangerous_configuration"] }
+
+trust-dns-resolver = { version = "0.20.0", optional = true }
+
+[dev-dependencies]
+actix-http = { version = "3"}
+actix-http-test = { version = "3.0.0-beta.13"  }
+actix-server = "2"
+actix-test = { version = "0.1.0-beta.13" }
+actix-tls = { version = "3" }
+actix-utils = "3"
+actix-web = { version = "4" }
+
+brotli = "3.3.3"
+const-str = "0.3"
+env_logger = "0.9"
+flate2 = "1.0.13"
+futures-util = { version = "0.3.7", default-features = false }
+static_assertions = "1.1"
+rcgen = "0.8"
+rustls-pemfile = "0.2"
+tokio = { version = "1.13.1", features = ["rt-multi-thread", "macros"] }
+zstd = "0.10"
+
+[[example]]
+name = "client"
+required-features = ["rustls"]
