@@ -1,6 +1,6 @@
 [package]
 name = "pi_ws"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_ws"
@@ -18,7 +18,7 @@ fnv = "1.0"
 mio = "0.8"
 log = "0.4"
 pi_async_buffer = "0.6"
-pi_atom = "0.1"
+pi_atom = "0.2"
 tcp = {version="0.1", path = "../tcp", package = "pi_tcp"}
 pi_crypto = "0.1"
 

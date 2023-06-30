@@ -1,6 +1,6 @@
 [package]
 name = "pi_mqtt"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_mqtt"
@@ -24,7 +24,7 @@ quic = {version = "0.1", path = "../quic", package = "pi_quic" }
 quinn-proto = "0.8"
 bytes = "1.3"
 log = "0.4"
-pi_atom = "0.1"
+pi_atom = "0.2"
 
 [dev-dependencies]
 twox-hash = "1.5"

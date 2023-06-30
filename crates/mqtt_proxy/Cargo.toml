@@ -1,6 +1,6 @@
 [package]
 name = "pi_mqtt_proxy"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_mqtt_proxy"
@@ -16,7 +16,7 @@ mqtt = {version = "0.1", path = "../mqtt", package = "pi_mqtt" }
 pi_async = "0.5"
 pi_handler = "0.1"
 pi_gray = "0.1"
-pi_atom = "0.1"
+pi_atom = "0.2"
 log = "0.4"
 
 [dev-dependencies]
