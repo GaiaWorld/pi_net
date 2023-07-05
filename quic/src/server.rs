@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 use std::io::{Error, Result, ErrorKind};
 
 use futures::future::{FutureExt, BoxFuture, LocalBoxFuture};
-use quinn_proto::{EndpointConfig, ServerConfig, Endpoint, EndpointEvent, ConnectionEvent, ConnectionHandle, Transmit};
+use quinn_proto::{EndpointConfig, ServerConfig, Endpoint, EndpointEvent, ConnectionEvent, ConnectionHandle, Transmit, TransportConfig};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use futures::task::SpawnExt;
 use rustls;
@@ -135,6 +135,8 @@ impl QuicListener {
                                config: EndpointConfig,
                                readed_read_size_limit: usize,
                                readed_write_size_limit: usize,
+                               concurrent_connections: u32,
+                               transport_config: Option<Arc<TransportConfig>>,
                                service: Arc<dyn QuicAsyncService>,
                                timeout: u64) -> Result<Self> {
         match load_certs_file(server_certs_path) {
@@ -151,7 +153,7 @@ impl QuicListener {
                     },
                     Ok(key) => {
                         //加载指定的私钥成功
-                        let server_config = match verify_level {
+                        let mut server_config = match verify_level {
                             ClientCertVerifyLevel::Ignore => {
                                 //不需要严格验证客户端证书
                                 match ServerConfig::with_single_cert(certs, key) {
@@ -189,6 +191,11 @@ impl QuicListener {
                         };
 
                         //创建Quic状态机
+                        server_config.concurrent_connections(concurrent_connections); //设置最大并发连接数
+                        if let Some(transport) = transport_config {
+                            //使用外部自定义传输配置
+                            server_config.transport = transport;
+                        }
                         let end_point = Rc::new(UnsafeCell::new(Endpoint::new(Arc::new(config), Some(Arc::new(server_config)))));
 
                         //创建Quic连接接受器

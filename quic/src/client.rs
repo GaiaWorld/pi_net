@@ -12,7 +12,7 @@ use std::io::{BufRead, Result, Error, ErrorKind, Cursor};
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use parking_lot::RwLock;
-use quinn_proto::{crypto, Endpoint, EndpointConfig, ClientConfig, EndpointEvent, DatagramEvent, ConnectionEvent, ConnectionHandle, Transmit, Connection, StreamId};
+use quinn_proto::{crypto, Endpoint, EndpointConfig, ClientConfig, TransportConfig, EndpointEvent, DatagramEvent, ConnectionEvent, ConnectionHandle, Transmit, Connection, StreamId, Dir};
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use flume::{Sender as AsyncSender, Receiver as AsyncReceiver, bounded};
 use dashmap::DashMap;
@@ -217,6 +217,8 @@ impl QuicClient {
                udp_send_buffer_size: usize,
                udp_read_packet_size: usize,
                udp_write_packet_size: usize,
+               transport_config: Option<Arc<TransportConfig>>,
+               listener: Option<Arc<dyn QuicAsyncService>>,
                connect_timeout: usize,
                timeout: u64) -> Result<Self> {
         Self::with_cert_and_key(client_address,
@@ -231,6 +233,8 @@ impl QuicClient {
                                 udp_send_buffer_size,
                                 udp_read_packet_size,
                                 udp_write_packet_size,
+                                transport_config,
+                                listener,
                                 connect_timeout,
                                 timeout)
     }
@@ -248,6 +252,8 @@ impl QuicClient {
                              udp_send_buffer_size: usize,
                              udp_read_packet_size: usize,
                              udp_write_packet_size: usize,
+                             transport_config: Option<Arc<TransportConfig>>,
+                             listener: Option<Arc<dyn QuicAsyncService>>,
                              connect_timeout: usize,
                              timeout: u64) -> Result<Self> {
         if runtimes.is_empty() {
@@ -405,7 +411,11 @@ impl QuicClient {
                 }
             },
         };
-        let default_config = ClientConfig::new(Arc::new(client_crypto));
+        let mut default_config = ClientConfig::new(Arc::new(client_crypto));
+        if let Some(transport) = transport_config {
+            //使用外部自定义传输配置
+            default_config.transport = transport;
+        }
 
         //创建Quic状态机
         let end_point = Rc::new(UnsafeCell::new(Endpoint::new(Arc::new(config), None)));
@@ -444,6 +454,7 @@ impl QuicClient {
             router,
             connect_events,
             close_events,
+            listener,
             timer,
             connect_timeout,
         };
@@ -570,7 +581,7 @@ impl QuicClient {
             self.0.default_config.clone()
         };
 
-        //异步建立指定地址的Quic连接，为了防止外部使用有Send约束的运行时导致编译失败
+        //异步建立指定地址的Quic连接，避免外部使用非serial运行时，出现Send约束错误
         let now = Instant::now();
         let client = self.clone();
         let hostname = hostname.to_string();
@@ -584,8 +595,8 @@ impl QuicClient {
             .unwrap()
             .spawn(async move {
                 match unsafe { (&mut *client.0.end_point.get()).connect(config,
-                                                 remote,
-                                                 hostname.as_str()) } {
+                                                                        remote,
+                                                                        hostname.as_str()) } {
                     Err(e) => {
                         //建立Quic连接失败，则立即返回连接错误原因
                         connect_value_copy.set(Err(Error::new(ErrorKind::Other,
@@ -623,8 +634,9 @@ impl QuicClient {
                         }
                     },
                 }
+
                 TaskResult::Continue
-        }.boxed_local());
+            }.boxed_local());
 
         match connect_value.await {
             Err(e) => {
@@ -740,6 +752,8 @@ struct InnerQuicClient {
     connect_events:             DashMap<usize, (usize, AsyncValueNonBlocking<Result<QuicSocketHandle>>)>,
     //Quic关闭事件表
     close_events:               DashMap<usize, AsyncValueNonBlocking<Result<()>>>,
+    //Quic客户端事件监听器
+    listener:                   Option<Arc<dyn QuicAsyncService>>,
     //定时器
     timer:                      SpinLock<Timer<QuicClientTimerEvent, 100, 60, 3>>,
     //默认的连接超时时长
@@ -777,7 +791,9 @@ impl QuicAsyncService for QuicClientService {
                             value.set(Err(e));
                         } else {
                             //打开连接的主流成功
-                            handle.set_ready(QuicSocketReady::Readable); //开始首次读
+                            handle
+                                .set_ready(handle.get_main_stream_id().unwrap().clone(),
+                                           QuicSocketReady::Readable); //开始首次读
                             value.set(Ok(handle));
                         }
                     }
@@ -790,18 +806,66 @@ impl QuicAsyncService for QuicClientService {
         }.boxed_local()
     }
 
-    /// 异步处理已读
-    fn handle_readed(&self,
-                     _handle: QuicSocketHandle,
-                     _result: Result<usize>) -> LocalBoxFuture<'static, ()> {
+    /// 异步处理已打开扩展流
+    fn handle_opened_expanding_stream(&self,
+                                      handle: QuicSocketHandle,
+                                      stream_id: StreamId,
+                                      stream_type: Dir,
+                                      result: Result<()>) -> LocalBoxFuture<'static, ()> {
+        unsafe {
+            if let Err(e) = result {
+                //打开连接的扩展流失败
+                error!("Open expanding stream failed, uid: {:?}, remote: {:?}, local: {:?}, stream_id: {:?}, stream_type: {:?}, reason: {:?}",
+                    handle.get_uid(),
+                    handle.get_remote(),
+                    handle.get_local(),
+                    stream_id,
+                    stream_type,
+                    e);
+            } else {
+                //打开连接的扩展流成功
+                match stream_type {
+                    Dir::Uni => {
+                        //TODO
+                    },
+                    Dir::Bi => {
+                        handle
+                            .set_ready(stream_id,
+                                       QuicSocketReady::Readable); //开始首次读
+                    },
+                }
+            }
+        }
+
         async move {
 
+        }.boxed_local()
+    }
+
+    /// 异步处理已读
+    fn handle_readed(&self,
+                     handle: QuicSocketHandle,
+                     stream_id: StreamId,
+                     result: Result<usize>) -> LocalBoxFuture<'static, ()> {
+        let client = self.client.clone();
+        async move {
+            unsafe {
+                if let Some(client) = (&*client.get()).as_ref() {
+                    if let Some(listener) = &client.0.listener {
+                        //客户端注册了事件监听器
+                        listener
+                            .handle_readed(handle, stream_id, result)
+                            .await;
+                    }
+                }
+            }
         }.boxed_local()
     }
 
     /// 异步处理已写
     fn handle_writed(&self,
                      _handle: QuicSocketHandle,
+                     _stream_id: StreamId,
                      _result: Result<()>) -> LocalBoxFuture<'static, ()> {
         async move {
 
@@ -811,8 +875,8 @@ impl QuicAsyncService for QuicClientService {
     /// 异步处理已关闭
     fn handle_closed(&self,
                      handle: QuicSocketHandle,
-                     _stream_id: Option<StreamId>,
-                     _code: u32,
+                     stream_id: Option<StreamId>,
+                     code: u32,
                      result: Result<()>) -> LocalBoxFuture<'static, ()> {
         let client = self.client.clone();
         async move {
@@ -821,7 +885,21 @@ impl QuicAsyncService for QuicClientService {
                 if let Some(client) = &*client.get() {
                     if let Some((_uid, value)) = client.0.close_events.remove(&handle.get_connection_handle().0) {
                         //正在等待Quic关闭连接的结果，则立即返回关闭结果
-                        value.set(result);
+                        let r = if let Err(e) = &result {
+                            Err(Error::new(ErrorKind::Other, format!("{:?}", e)))
+                        } else {
+                            Ok(())
+                        };
+                        value.set(r);
+                    }
+                }
+
+                if let Some(client) = (&*client.get()).as_ref() {
+                    if let Some(listener) = &client.0.listener {
+                        //客户端注册了事件监听器
+                        listener
+                            .handle_closed(handle, stream_id, code, result)
+                            .await;
                     }
                 }
             }
@@ -888,6 +966,11 @@ impl QuicClientConnection {
             .get_remote()
     }
 
+    /// 获取Quic连接句柄
+    pub fn get_handle(&self) -> &QuicSocketHandle {
+        &self.0.handle
+    }
+
     /// 获取内部连接句柄
     pub fn get_connection_handle(&self) -> &ConnectionHandle {
         self
@@ -904,30 +987,37 @@ impl QuicClientConnection {
             .get_latency()
     }
 
-    /// 尝试同步非阻塞得读取当前接收到的所有数据
-    pub fn try_read(&self) -> Option<Bytes> {
-        self.try_read_with_len(0)
+    /// 尝试同步非阻塞得读取指定流当前接收到的所有数据
+    pub fn try_read(&self, stream_id: &StreamId) -> Option<Bytes> {
+        self.try_read_with_len(stream_id, 0)
     }
 
-    /// 尝试同步非阻塞得读取指定长度的数据，如果len为0，则表示读取任意长度的数据，如果确实读取到数据，则保证读取到的数据长度>0
+    /// 尝试同步非阻塞得读取指定流的指定长度的数据，如果len为0，则表示读取任意长度的数据，如果确实读取到数据，则保证读取到的数据长度>0
     /// 如果len>0，则表示最多只读取指定数量的数据，如果确实读取到数据，则保证读取到的数据长度==len
-    pub fn try_read_with_len(&self, len: usize) -> Option<Bytes> {
-        if let Some(buf) = self.0.handle.get_read_buffer().lock().as_mut() {
-            //当前连接有读缓冲
-            let remaining = buf.remaining();
-            if (len > 0) && (remaining < len) {
-                //当前读缓冲中没有足够的数据
-                return None;
-            }
+    pub fn try_read_with_len(&self,
+                             stream_id: &StreamId,
+                             len: usize) -> Option<Bytes> {
+        if let Some(buffer) = self.0.handle.get_read_buffer(stream_id) {
+            if let Some(buf) = buffer.lock().as_mut() {
+                //当前连接有读缓冲
+                let remaining = buf.remaining();
+                if (len > 0) && (remaining < len) {
+                    //当前读缓冲中没有足够的数据
+                    return None;
+                }
 
-            if (len == 0) && (remaining > 0) {
-                //用户需要读取任意长度的数据，且当前读缓冲区有足够的数据
-                Some(buf.copy_to_bytes(remaining))
-            } else if (len > 0) && (remaining >= len) {
-                //用户需要读取指定长度的数据，且当前读缓冲区有足够的数据
-                Some(buf.copy_to_bytes(len))
+                if (len == 0) && (remaining > 0) {
+                    //用户需要读取任意长度的数据，且当前读缓冲区有足够的数据
+                    Some(buf.copy_to_bytes(remaining))
+                } else if (len > 0) && (remaining >= len) {
+                    //用户需要读取指定长度的数据，且当前读缓冲区有足够的数据
+                    Some(buf.copy_to_bytes(len))
+                } else {
+                    //用户需要读取任意长度的数据，且当前缓冲区没有足够的数据
+                    None
+                }
             } else {
-                //用户需要读取任意长度的数据，且当前缓冲区没有足够的数据
+                //当前连接没有读缓冲
                 None
             }
         } else {
@@ -938,12 +1028,13 @@ impl QuicClientConnection {
 
     /// 线程安全的写
     pub fn write<B>(&self,
+                    stream_id: StreamId,
                     buf: B) -> Result<()>
         where B: AsRef<[u8]> + 'static {
         self
             .0
             .handle
-            .write_ready(buf)
+            .write_ready(stream_id, buf)
     }
 }
 
@@ -951,15 +1042,17 @@ impl QuicClientConnection {
 * Quic客户端连接异步方法
 */
 impl QuicClientConnection {
-    /// 线程安全的异步读取当前接收到的所有数据
-    pub async fn read(&self) -> Option<Bytes> {
-        self.read_with_len(0).await
+    /// 线程安全的异步读取指定流当前接收到的所有数据
+    pub async fn read(&self, stream_id: &StreamId) -> Option<Bytes> {
+        self.read_with_len(stream_id, 0).await
     }
 
-    /// 线程安全的异步读取指定长度的数据，如果len为0，则表示读取任意长度的数据，如果确实读取到数据，则保证读取到的数据长度>0
+    /// 线程安全的异步读取指定流的指定长度的数据，如果len为0，则表示读取任意长度的数据，如果确实读取到数据，则保证读取到的数据长度>0
     /// 如果len>0，则表示最多只读取指定数量的数据，如果确实读取到数据，则保证读取到的数据长度==len
-    pub async fn read_with_len(&self, mut len: usize) -> Option<Bytes> {
-        let remaining = if let Some(len) = self.0.handle.read_buffer_remaining() {
+    pub async fn read_with_len(&self,
+                               stream_id: &StreamId,
+                               mut len: usize) -> Option<Bytes> {
+        let remaining = if let Some(len) = self.0.handle.read_buffer_remaining(stream_id) {
             //当前连接有读缓冲
             len
         } else {
@@ -970,7 +1063,7 @@ impl QuicClientConnection {
         let mut readed_len = 0;
         if remaining == 0 {
             //当前连接的读缓冲中没有数据，则异步准备读取数据
-            readed_len = match self.0.handle.read_ready(len) {
+            readed_len = match self.0.handle.read_ready(stream_id, len) {
                 Err(r) => r,
                 Ok(value) => {
                     value.await
@@ -986,14 +1079,19 @@ impl QuicClientConnection {
             readed_len = remaining;
         }
 
-        if let Some(buf) = self.0.handle.get_read_buffer().lock().as_mut() {
-            //当前连接有读缓冲
-            if len == 0 {
-                //用户需要读取任意长度的数据
-                Some(buf.copy_to_bytes(readed_len))
+        if let Some(buffer) =  self.0.handle.get_read_buffer(stream_id) {
+            if let Some(buf) = buffer.lock().as_mut() {
+                //当前连接有读缓冲
+                if len == 0 {
+                    //用户需要读取任意长度的数据
+                    Some(buf.copy_to_bytes(readed_len))
+                } else {
+                    //用户需要读取指定长度的数据
+                    Some(buf.copy_to_bytes(len))
+                }
             } else {
-                //用户需要读取指定长度的数据
-                Some(buf.copy_to_bytes(len))
+                //当前连接没有读缓冲
+                None
             }
         } else {
             //当前连接没有读缓冲

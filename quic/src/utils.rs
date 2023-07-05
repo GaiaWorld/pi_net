@@ -247,7 +247,8 @@ impl Future for Hibernate {
             self
                 .0
                 .handle
-                .set_ready(self.0.ready); //在唤醒后重置当前流感兴趣的事件
+                .set_ready(self.0.stream_id,
+                           self.0.ready); //在唤醒后重置当前流感兴趣的事件
             self.0.handle.run_hibernated_tasks(); //立即异步运行连接休眠时的所有任务
 
             Poll::Ready(result)
@@ -256,7 +257,8 @@ impl Future for Hibernate {
             self
                 .0
                 .handle
-                .set_ready(self.0.ready); //在休眠时重置当前流感兴趣的事件为只写
+                .set_ready(self.0.stream_id,
+                           self.0.ready); //在休眠时重置当前流感兴趣的事件为只写
 
             if self.0.handle.set_hibernate(self.clone()) {
                 //设置当前连接的休眠对象成功，则设置当前休眠的唤醒器
@@ -278,9 +280,11 @@ impl Future for Hibernate {
 impl Hibernate {
     /// 构建一个异步休眠对象
     pub fn new(handle: SocketHandle,
+               stream_id: StreamId,
                ready: QuicSocketReady) -> Self {
         let inner = InnerHibernate {
             handle,
+            stream_id,
             ready,
             waker: SpinLock::new(None),
             waker_status: AtomicU8::new(0),
@@ -327,7 +331,8 @@ impl Hibernate {
 
 // 内部线程安全的异步休眠对象
 struct InnerHibernate {
-    handle:         SocketHandle,            //当前Quic连接的句柄
+    handle:         SocketHandle,               //当前Quic连接的句柄
+    stream_id:      StreamId,                   //当前Quicl连接的指定流
     ready:          QuicSocketReady,            //唤醒后感兴趣的事件
     waker:          SpinLock<Option<Waker>>,    //休眠唤醒器
     waker_status:   AtomicU8,                   //唤醒状态
