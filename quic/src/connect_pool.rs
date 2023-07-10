@@ -379,7 +379,7 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                         //TODO 当前连接打开一个或多个单向流事件...
                     }
                     Stream(StreamEvent::Opened { dir: Dir::Bi }) => {
-                        //当前连接打开一个或多个双向流事件
+                        //当前连接打开一个或多个双向流事件，并且可能可读
                         debug!("Quic bi stream opened , uid: {:?}, remtoe: {:?}, local: {:?}",
                                  (&*socket.get()).get_uid(),
                                  (&*socket.get()).get_remote(),
@@ -411,6 +411,10 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                                                                         Ok(()))); //异步调用连接回调
                             }
 
+                            //尝试读取新打开的流
+                            (&mut *socket.get())
+                                .set_ready(stream_id, QuicSocketReady::Readable);
+
                             debug!("Open bi stream accepted, uid: {:?}, remtoe: {:?}, local: {:?}, stream_id: {:?}",
                                 (&*socket.get()).get_uid(),
                                 (&*socket.get()).get_remote(),
@@ -429,7 +433,8 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                     }
                     Stream(StreamEvent::Readable { id }) => {
                         //当前连接的指定流的可读事件
-                        (&mut *socket.get()).set_ready(id, QuicSocketReady::Readable);
+                        (&mut *socket.get())
+                            .set_ready(id, QuicSocketReady::Readable);
 
                         debug!("Quic stream readable, uid: {:?}, remtoe: {:?}, local: {:?}, stream_id: {:?}",
                             (&*socket.get()).get_uid(),

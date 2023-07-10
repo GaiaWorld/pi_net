@@ -80,10 +80,11 @@ pub struct QuicSocket {
 impl Debug for QuicSocket {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f,
-               "QuicSocket[uid = {:?}, local = {:?}, remote = {:?}]",
+               "QuicSocket[uid = {:?}, local = {:?}, remote = {:?}, client: {:?}]",
                self.get_uid(),
                self.get_local(),
-               self.get_remote())
+               self.get_remote(),
+               self.is_client())
     }
 }
 
@@ -237,6 +238,7 @@ impl QuicSocket {
     }
 
     /// 打开连接的主流，主流一定是双向流
+    /// 打开扩展流的端必须发起通讯后，对端才会知道打开的流
     pub(crate) fn open_main_streams(&mut self) -> Result<()> {
         if let Some(stream_id) = self.connect.streams().open(Dir::Bi) {
             //创建主流成功，则为当前连接设置主流的唯一id
@@ -277,6 +279,7 @@ impl QuicSocket {
     }
 
     /// 打开连接的扩展流，可以指定流的类型
+    /// 打开扩展流的端必须发起通讯后，对端才会知道打开的流
     pub async fn open_expanding_stream(&self,
                                        stream_type: Dir) -> Result<StreamId> {
         if let Some(sender) = &self.event_send {
