@@ -342,10 +342,10 @@ unsafe impl<R: AsyncRuntime> Sync for TestHttpGatewayHandler<R> {}
 
 impl<R: AsyncRuntime> Handler for TestHttpGatewayHandler<R> {
     type A = SocketAddr;
-    type B = Arc<HeaderMap>;
-    type C = Arc<RefCell<XHashMap<String, SGenType>>>;
-    type D = ResponseHandler;
-    type E = ();
+    type B = String;
+    type C = Arc<HeaderMap>;
+    type D = Arc<RefCell<XHashMap<String, SGenType>>>;
+    type E = ResponseHandler;
     type F = ();
     type G = ();
     type H = ();
@@ -355,8 +355,8 @@ impl<R: AsyncRuntime> Handler for TestHttpGatewayHandler<R> {
     fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> LocalBoxFuture<'static, Self::HandleResult> {
         let rt = self.0.clone();
         async move {
-            if let Args::FourArgs(addr, headers, msg, handler) = args {
-                handle(rt, env, topic, addr, headers, msg, handler);
+            if let Args::FiveArgs(addr, method, headers, msg, handler) = args {
+                handle(rt, env, topic, addr, method, headers, msg, handler);
             }
         }.boxed_local()
     }
@@ -366,6 +366,7 @@ fn handle<R: AsyncRuntime>(rt: R,
                            env: Arc<dyn GrayVersion>,
                            topic: Atom,
                            addr: SocketAddr,
+                           method: String,
                            headers: Arc<HeaderMap>,
                            msg: Arc<RefCell<XHashMap<String, SGenType>>>,
                            handler: ResponseHandler) {
