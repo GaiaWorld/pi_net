@@ -246,7 +246,9 @@ impl Socket for InnerBlockingUdpSocket {
         if self.remote.is_some() {
             //已绑定对端地址
             match self.socket.recv(buf.as_mut_slice()) {
-                Err(e) => Err(e),
+                Err(e) => {
+                    Err(Error::new(ErrorKind::Other, format!("Received udp failed, socket: {:?}, reason: {:?}", self, e)))
+                },
                 Ok(len) => {
                     buf.truncate(len); //只保留填充了数据的部分
                     Ok((buf, None))
@@ -255,7 +257,9 @@ impl Socket for InnerBlockingUdpSocket {
         } else {
             //未绑定对端地址
             match self.socket.recv_from(buf.as_mut_slice()) {
-                Err(e) => Err(e),
+                Err(e) => {
+                    Err(Error::new(ErrorKind::Other, format!("Received udp failed, socket: {:?}, reason: {:?}", self, e)))
+                },
                 Ok((len, peer)) => {
                     buf.truncate(len); //只保留填充了数据的部分
                     Ok((buf, Some(peer)))

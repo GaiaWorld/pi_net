@@ -8,7 +8,7 @@ use futures::future::{FutureExt, LocalBoxFuture};
 use crossbeam_channel::{Sender, Receiver, bounded, unbounded};
 use async_channel::unbounded as async_unbounded;
 use socket2::{Domain, Type, Protocol, Socket as SocketDef};
-use log::{warn, error};
+use log::{debug, warn, error};
 
 use pi_async::rt::serial_local_thread::LocalTaskRuntime;
 
@@ -101,8 +101,7 @@ impl UdpTerminal {
                 while running_copy.load(Ordering::Relaxed) {
                     if let Err(e) = recv_loop(socket_handle_ref,
                                               &event_sender_copy) {
-                        error!("{:?}", e);
-                        break;
+                        debug!("{:?}", e);
                     }
                 }
             });
@@ -173,8 +172,7 @@ impl UdpTerminal {
                 while running_copy.load(Ordering::Relaxed) {
                     if let Err(e) = recv_loop(socket_handle_ref,
                                               &event_sender_copy) {
-                        error!("{:?}", e);
-                        break;
+                        debug!("{:?}", e);
                     }
                 }
             });
