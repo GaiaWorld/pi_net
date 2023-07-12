@@ -7,7 +7,7 @@ use futures::future::{FutureExt, LocalBoxFuture};
 use mqtt311::{MqttWrite, MqttRead, Protocol, Header, ConnectReturnCode, Packet, Connect,
               Connack, QoS, Publish, PacketIdentifier, SubscribeTopic, SubscribeReturnCodes,
               Subscribe, Suback, Unsubscribe, TopicPath, Error as MqttError};
-use quinn_proto::StreamId;
+use quinn_proto::{StreamId, Dir};
 use bytes::Buf;
 use fnv::FnvBuildHasher;
 use log::{warn, error};
@@ -51,27 +51,40 @@ impl AsyncService for QuicMqtt311 {
                 return;
             }
 
-            handle.set_ready(QuicSocketReady::Readable); //开始首次读
+            handle.set_ready(handle.get_main_stream_id().unwrap().clone(),
+                             QuicSocketReady::Readable); //开始首次读
+        }.boxed_local()
+    }
+
+    fn handle_opened_expanding_stream(&self,
+                                      _handle: SocketHandle,
+                                      _stream_id: StreamId,
+                                      _stream_type: Dir,
+                                      _result: Result<()>) -> LocalBoxFuture<'static, ()> {
+        async move {
+
         }.boxed_local()
     }
 
     fn handle_readed(&self,
                      handle: SocketHandle,
+                     stream_id: StreamId,
                      result: Result<usize>) -> LocalBoxFuture<'static, ()> {
         let quic_mqtt = self.clone();
         async move {
             if let Err(e) = result {
-                error!("Read failed for mqtt by quic, uid: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                error!("Read failed for mqtt by quic, uid: {:?}, remote: {:?}, local: {:?}, stream_id: {:?}, reason: {:?}",
                     handle.get_uid(),
                     handle.get_remote(),
                     handle.get_local(),
+                    stream_id,
                     e);
                 return;
             }
 
             loop {
                 let mut ready_len = 0;
-                let remaining = if let Some(len) = handle.read_buffer_remaining() {
+                let remaining = if let Some(len) = handle.read_buffer_remaining(handle.get_main_stream_id().unwrap()) {
                     len
                 } else {
                     return;
@@ -79,7 +92,7 @@ impl AsyncService for QuicMqtt311 {
 
                 if remaining == 0 {
                     //当前读缓冲中没有数据，则异步准备读取数据
-                    ready_len = match handle.read_ready(0) {
+                    ready_len = match handle.read_ready(handle.get_main_stream_id().unwrap(), 0) {
                         Err(len) => len,
                         Ok(value) => {
                             value.await
@@ -92,7 +105,7 @@ impl AsyncService for QuicMqtt311 {
                     }
                 }
 
-                let packet = if let Some(buf) = handle.get_read_buffer().lock().as_mut() {
+                let packet = if let Some(buf) = handle.get_read_buffer(handle.get_main_stream_id().unwrap()).as_ref().unwrap().lock().as_mut() {
                     let mut bin: &[u8] = buf.chunk();
                     match bin.read_packet_with_len() {
                         Err(MqttError::PayloadSizeIncorrect) | Err(MqttError::PayloadRequired) | Err(MqttError::MalformedRemainingLength) => {
@@ -101,10 +114,11 @@ impl AsyncService for QuicMqtt311 {
                         },
                         Err(e) => {
                             //解析Mqtt请求包失败，且无法继续解析，则立即关闭当前Quic连接
-                            error!("Parse packet failed for mqtt by quic, uid: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                            error!("Parse packet failed for mqtt by quic, uid: {:?}, remote: {:?}, local: {:?}, stream_id: {:?}, reason: {:?}",
                                 handle.get_uid(),
                                 handle.get_remote(),
                                 handle.get_local(),
+                                stream_id,
                                 e);
 
                             handle.close(1000, Err(Error::new(ErrorKind::InvalidInput, format!("{:?}", e))));
@@ -148,10 +162,11 @@ impl AsyncService for QuicMqtt311 {
 
                 if let Err(e) = result {
                     //处理Mqtt数据包错误
-                    error!("Handle packet failed for mqtt by quic, uid: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                    error!("Handle packet failed for mqtt by quic, uid: {:?}, remote: {:?}, local: {:?}, stream_id: {:?}, reason: {:?}",
                                 handle.get_uid(),
                                 handle.get_remote(),
                                 handle.get_local(),
+                                stream_id,
                                 e);
 
                     handle.close(1000, Err(Error::new(ErrorKind::InvalidData, format!("{:?}", e))));
@@ -163,6 +178,7 @@ impl AsyncService for QuicMqtt311 {
 
     fn handle_writed(&self,
                      _handle: SocketHandle,
+                     _stream_id: StreamId,
                      _result: Result<()>) -> LocalBoxFuture<'static, ()> {
         async move {
 
@@ -262,7 +278,8 @@ fn send_packet(connect: &SocketHandle,
     }
 
     //通过Ws连接发送指定报文
-    connect.write_ready(buf.into_inner())
+    connect.write_ready(connect.get_main_stream_id().unwrap().clone(),
+                        buf.into_inner())
 }
 
 /// 广播指定的Mqtt报文，用于发布消息的发送
@@ -474,7 +491,9 @@ async fn publish(protocol: QuicMqtt311,
                          packet.payload).await;
             if is_passive_receive {
                 //需要被动接收，则立即挂起连接，并等待服务回应
-                if let Some(hibernate) = connect.hibernate(QuicSocketReady::Writable) {
+                if let Some(hibernate) = connect
+                    .hibernate(connect.get_main_stream_id().unwrap().clone(),
+                               QuicSocketReady::Writable) {
                     return hibernate.await;
                 } else {
                     //连接已关闭，则立即退出
