@@ -596,11 +596,15 @@ impl QuicSocket {
 
     /// 获取连接的所有流唯一id，主流是第一个流
     pub fn get_stream_ids(&self) -> Vec<StreamId> {
-        vec![self.main_stream_id.unwrap().clone()]
+        let mut ids: Vec<StreamId> = vec![self.main_stream_id.unwrap().clone()]
             .iter()
             .chain(self.expanding_streams.keys())
             .map(|x| x.clone())
-            .collect()
+            .collect();
+        ids.sort();
+        ids.dedup();
+
+        ids
     }
 
     /// 获取指定唯一id的流的只读引用
@@ -1328,6 +1332,11 @@ impl QuicSocket {
                                               stream_id,
                                               e)));
             }
+
+            //移出关闭的扩展流
+            let _ = self
+                .expanding_streams
+                .remove(&stream_id);
         }
 
         Ok(())
@@ -1335,6 +1344,10 @@ impl QuicSocket {
 
     /// 强制关闭当前连接
     pub fn force_close(&mut self, code: u32, reason: String) {
+        self
+            .expanding_streams
+            .clear();
+
         self
             .connect
             .close(self.clock,
