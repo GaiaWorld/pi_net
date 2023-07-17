@@ -2,10 +2,8 @@ use std::sync::Arc;
 use std::str::FromStr;
 use std::cell::RefCell;
 use std::net::SocketAddr;
-use std::collections::hash_map::Entry;
-use std::io::{Error, Result, ErrorKind};
 
-use https::{StatusCode, header::CONTENT_LENGTH, HeaderMap};
+use https::HeaderMap;
 use futures::future::{FutureExt, LocalBoxFuture};
 
 use pi_gray::GrayVersion;
@@ -131,7 +129,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for HttpPort {
     }
 
     fn response<'a>(&'a self,
-                    context: &'a mut GatewayContext,
+                    _context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
                     -> LocalBoxFuture<'a, MiddlewareResult<S>> {

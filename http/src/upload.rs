@@ -10,7 +10,7 @@ use path_absolutize::Absolutize;
 use pi_async_file::file::{remove_file, AsyncFile, AsyncFileOptions, WriteOptions};
 use pi_handler::SGenType;
 use log::warn;
-use pi_async::rt::{AsyncRuntime, multi_thread::MultiTaskRuntime};
+use pi_async_rt::rt::{AsyncRuntime, multi_thread::MultiTaskRuntime};
 use tcp::Socket;
 
 use crate::{
@@ -170,7 +170,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
 
     fn response<'a>(
         &'a self,
-        context: &'a mut GatewayContext,
+        _context: &'a mut GatewayContext,
         req: HttpRequest<S>,
         resp: HttpResponse,
     ) -> LocalBoxFuture<'a, MiddlewareResult<S>> {
@@ -254,8 +254,7 @@ async fn async_remove_file(files_async_runtime: MultiTaskRuntime<()>,
     let files_async_runtime_copy = files_async_runtime.clone();
     if let Some(resp_handler) = resp.get_response_handler() {
         let path_copy = path.clone();
-        if let Err(e) = files_async_runtime.spawn(files_async_runtime.alloc(),
-                                                  async move {
+        if let Err(e) = files_async_runtime.spawn(async move {
             // 调用底层open接口
             let r = remove_file(files_async_runtime_copy,
                                 path_copy.clone()).await;
@@ -318,8 +317,7 @@ async fn async_save_file(files_async_runtime: MultiTaskRuntime<()>,
     if let Some(resp_handler) = resp.get_response_handler() {
         let path_copy = path.clone();
         let files_async_runtime_copy = files_async_runtime.clone();
-        if let Err(e) = files_async_runtime.spawn(files_async_runtime.alloc(),
-                                                  async move {
+        if let Err(e) = files_async_runtime.spawn(async move {
             // 调用底层open接口
             let file = AsyncFile::open(
                 files_async_runtime_copy,

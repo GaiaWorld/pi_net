@@ -1,19 +1,16 @@
-use std::io::{Write, Result, Error, ErrorKind};
+use std::io::{Write, Result, Error};
 
 use https::{status::StatusCode,
-            header::{CONTENT_LENGTH, HeaderValue}};
-use flate2::{Compression, FlushCompress, Compress, Status, write::GzEncoder};
+            header::{CONTENT_LENGTH}};
+use flate2::{Compression, write::GzEncoder};
 use bytes::BufMut;
-use log::error;
 
 use tcp::{Socket, SocketHandle, SocketEvent,
           utils::{SocketContext, Ready}};
 
-use crate::{service::{ServiceFactory, HttpService},
-            middleware::MiddlewareResult,
+use crate::{service::HttpService,
             request::HttpRequest,
             response::HttpResponse,
-            packet::DEFAULT_READ_READY_HTTP_REQUEST_BYTE_LEN,
             utils::{HttpRecvResult, ContentEncode}};
 
 /*
@@ -103,7 +100,7 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
             Err(e) => {
                 //服务调用异常
                 let resp = HttpResponse::empty();
-                self.throw(resp, StatusCode::INTERNAL_SERVER_ERROR, e.into());
+                let _ = self.throw(resp, StatusCode::INTERNAL_SERVER_ERROR, e.into());
             },
             Ok(resp) => {
                 //服务调用完成，则序列化响应，并回应本次Http请求
@@ -116,7 +113,7 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
                     if let Err(e) = self.reply(header_buf) {
                         //发送响应头错误，则立即抛出回应异常
                         let resp = HttpResponse::empty();
-                        self.throw(resp, StatusCode::INTERNAL_SERVER_ERROR, e);
+                        let _ = self.throw(resp, StatusCode::INTERNAL_SERVER_ERROR, e);
                     } else {
                         //发送响应头成功
                         if let Some(body) = body {
@@ -127,7 +124,7 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
                                         //获取Http响应体错误，则立即发送回应异常
                                         let error_info = format!("{:?}", e);
                                         let error_info_len = error_info.as_bytes().len();
-                                        self.reply(error_info_len.to_string() + "\r\n" + error_info.as_str() + "\r\n");
+                                        let _ = self.reply(error_info_len.to_string() + "\r\n" + error_info.as_str() + "\r\n");
                                     },
                                     HttpRecvResult::Ok(Some((_index, part))) => {
                                         //获取到的是Http响应体块的后继，则立即向对端发送
@@ -136,7 +133,7 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
                                                 //编码响应体块的后续失败，则立即发送回应异常
                                                 let error_info = format!("{:?}", e);
                                                 let error_info_len = error_info.as_bytes().len();
-                                                self.reply(format!("{:x}", error_info_len) + "\r\n" + error_info.as_str() + "\r\n");
+                                                let _ = self.reply(format!("{:x}", error_info_len) + "\r\n" + error_info.as_str() + "\r\n");
                                             },
                                             Ok(encoded) => {
                                                 //编码响应体块的后续成功
@@ -145,25 +142,25 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
                                                 buf.put(encoded.as_slice());
                                                 buf.put("\r\n".as_bytes());
 
-                                                self.reply(buf);
+                                                let _ = self.reply(buf);
                                             },
                                         }
                                     },
                                     HttpRecvResult::Ok(None) => {
                                         //获取到的是Http响应体块的尾部，则发送流响应结束帧，并退出循环
-                                        self.reply("0\r\n\r\n");
+                                        let _ = self.reply("0\r\n\r\n");
                                         break;
                                     },
                                     HttpRecvResult::Fin(_) => {
                                         //获取到的是Http响应体块的尾部，则发送流响应结束帧，并退出循环
-                                        self.reply("0\r\n\r\n");
+                                        let _ = self.reply("0\r\n\r\n");
                                         break;
                                     },
                                 }
                             }
                         } else {
                             //响应体不存在，则立即发送流响应结束帧
-                            self.reply("0\r\n\r\n");
+                            let _ = self.reply("0\r\n\r\n");
                         }
                     }
                 } else {
@@ -172,7 +169,7 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
                     if let Err(e) = self.reply(buf) {
                         //回应错误，则立即抛出回应异常
                         let resp = HttpResponse::empty();
-                        self.throw(resp, StatusCode::INTERNAL_SERVER_ERROR, e);
+                        let _ = self.throw(resp, StatusCode::INTERNAL_SERVER_ERROR, e);
                     }
                 }
             },

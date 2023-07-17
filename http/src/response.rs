@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::str::FromStr;
 use std::io::{Error, Result, ErrorKind};
-use std::sync::atomic::{AtomicU16, AtomicIsize, Ordering, AtomicBool};
+use std::sync::atomic::{AtomicU16, Ordering, AtomicBool};
 
 use bytes::BufMut;
 use https::{status::StatusCode,

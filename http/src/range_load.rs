@@ -1,19 +1,12 @@
-use std::sync::Arc;
-use std::io::{Error, Result, ErrorKind};
-
 use https::{header::{RANGE, ACCEPT_RANGES, CONTENT_RANGE, CONTENT_LENGTH}, StatusCode};
 use futures::future::{FutureExt, LocalBoxFuture};
-use log::warn;
-
-use pi_handler::SGenType;
 
 use tcp::Socket;
 
 use crate::{gateway::GatewayContext,
             middleware::{MiddlewareResult, Middleware},
             request::HttpRequest,
-            response::HttpResponse,
-            utils::HttpRecvResult};
+            response::HttpResponse};
 
 ///
 /// Http静态资源范围加载器
@@ -25,7 +18,7 @@ unsafe impl Sync for RangeLoad {}
 
 impl<S: Socket> Middleware<S, GatewayContext> for RangeLoad {
     fn request<'a>(&'a self,
-                   context: &'a mut GatewayContext,
+                   _context: &'a mut GatewayContext,
                    req: HttpRequest<S>)
                    -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
@@ -36,7 +29,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for RangeLoad {
     }
 
     fn response<'a>(&'a self,
-                    context: &'a mut GatewayContext,
+                    _context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
                     -> LocalBoxFuture<'a, MiddlewareResult<S>> {

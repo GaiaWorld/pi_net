@@ -1,14 +1,10 @@
 use std::sync::Arc;
 use std::str::FromStr;
-use std::future::Future;
-use std::io::{Error, Result, ErrorKind};
 
 use url::Url;
 use log::warn;
 use bytes::{Buf, BufMut, Bytes};
-use crossbeam_channel::internal::SelectHandle;
-use https::{StatusCode,
-            method::Method,
+use https::{method::Method,
             version::Version,
             header::{CONTENT_LENGTH, HeaderMap}};
 

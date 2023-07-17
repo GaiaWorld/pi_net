@@ -1,13 +1,5 @@
-use std::rc::Rc;
-use std::pin::Pin;
 use std::io::Error;
-use std::cell::RefCell;
-use std::future::Future;
-use std::marker::PhantomData;
-use std::error::Error as StdError;
-use std::task::{Context, Poll, Waker};
 
-use mio::Token;
 use futures::future::{FutureExt, LocalBoxFuture};
 
 use tcp::Socket;

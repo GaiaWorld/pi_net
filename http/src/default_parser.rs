@@ -1,14 +1,13 @@
 use std::str::FromStr;
-use std::result::Result as GenResult;
 use std::io::{Error, Result, ErrorKind, Write};
 
 use url::form_urlencoded;
 use mime::{APPLICATION, WWW_FORM_URLENCODED, JSON, OCTET_STREAM, PDF, TEXT, CHARSET, UTF_8, IMAGE, AUDIO, VIDEO, Mime};
 use https::{Method, header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, CONTENT_LENGTH}, StatusCode};
 use flate2::{Compression, FlushCompress, Compress, Status, write::GzEncoder};
-use serde_json::{Result as JsonResult, Map, Value};
+use serde_json::{Result as JsonResult, Value};
 use futures::future::{FutureExt, LocalBoxFuture};
-use crossbeam_channel::{Sender, Receiver, unbounded, TryRecvError};
+use crossbeam_channel::{Sender, Receiver, unbounded};
 
 use pi_handler::SGenType;
 use tcp::Socket;
@@ -16,9 +15,7 @@ use tcp::Socket;
 use crate::{gateway::GatewayContext,
             middleware::{MiddlewareResult, Middleware},
             request::HttpRequest,
-            response::HttpResponse,
-            utils::HttpRecvResult};
-use pi_hash::XHashMap;
+            response::HttpResponse};
 
 /*
 * 默认支持的压缩算法
@@ -129,7 +126,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
     }
 
     fn response<'a>(&'a self,
-                    context: &'a mut GatewayContext,
+                    _context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
                     -> LocalBoxFuture<'a, MiddlewareResult<S>> {
@@ -215,14 +212,14 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
                                                             .header(CONTENT_LENGTH.as_str(),
                                                                     deflate.total_out().to_string().as_str());
                                                         deflate.reset();
-                                                        produce_deflate(self.deflate_producor.clone(),
-                                                                        deflate);
+                                                        let _ = produce_deflate(self.deflate_producor.clone(),
+                                                                                deflate);
                                                     }
                                                 },
                                                 Ok(mut deflate) => {
                                                     //有空闲编码器，则开始编码
                                                     if let Some(input) = body.as_slice() {
-                                                        let cap = (input.len() as f64 * 0.75) as usize;
+                                                        let _cap = (input.len() as f64 * 0.75) as usize;
                                                         let mut output = Vec::with_capacity(input.len());
                                                         unsafe { output.set_len(output.capacity()); }
                                                         if let Err(e) = encode_deflate(&mut deflate,
@@ -250,8 +247,8 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
                                                             .header(CONTENT_LENGTH.as_str(),
                                                                     deflate.total_out().to_string().as_str());
                                                         deflate.reset();
-                                                        produce_deflate(self.deflate_producor.clone(),
-                                                                        deflate);
+                                                        let _ = produce_deflate(self.deflate_producor.clone(),
+                                                                                deflate);
                                                     }
                                                 },
                                             }
@@ -359,7 +356,7 @@ impl DefaultParser {
             //默认快速压缩
             Compression::fast()
         };
-        produce_deflate(deflate_producor.clone(), new_deflate(level));
+        let _ = produce_deflate(deflate_producor.clone(), new_deflate(level));
 
         DefaultParser {
             min_plain_limit,

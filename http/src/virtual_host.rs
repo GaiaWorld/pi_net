@@ -3,7 +3,6 @@ use std::io::{Error, Result, ErrorKind};
 
 use pi_hash::XHashMap;
 use pi_atom::Atom;
-use pi_handler::{Args, Handler, SGenType};
 
 use tcp::Socket;
 

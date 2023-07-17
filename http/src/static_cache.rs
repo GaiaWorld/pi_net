@@ -19,7 +19,6 @@ use pi_adler32::adler32 as encode_adler32;
 use tcp::Socket;
 
 use crate::{request::HttpRequest, response::HttpResponse};
-use crate::static_cache::CacheRes::Cache;
 
 ///
 /// 支持的Http请求缓存指令

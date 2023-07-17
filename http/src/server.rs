@@ -1,17 +1,10 @@
-use std::mem;
-use std::sync::Arc;
-use std::cell::RefCell;
-use std::net::Shutdown;
-use std::str::from_utf8;
 use std::marker::PhantomData;
-use std::collections::HashMap;
-use std::result::Result as GenResult;
-use std::io::{ErrorKind, Result, Error};
+use std::io::{ErrorKind, Error};
 
-use https::{Version, Response, HeaderMap, header::HOST};
+use https::{Version, HeaderMap, header::HOST};
 use httparse::{EMPTY_HEADER, Request};
 use futures::future::{FutureExt, LocalBoxFuture};
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::Buf;
 use log::warn;
 
 use tcp::{Socket, AsyncService, SocketStatus, SocketHandle, SocketEvent,

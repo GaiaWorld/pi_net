@@ -1,10 +1,9 @@
-use std::sync::Arc;
 use std::str::FromStr;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 use std::io::{Error, Result, ErrorKind};
 
 use url::{Host, Origin};
-use https::{Uri, StatusCode, Method,
+use https::{Uri, Method,
             header::{HeaderName, HeaderValue,
                      HOST,
                      ORIGIN,
@@ -20,7 +19,6 @@ use futures::future::{FutureExt, LocalBoxFuture};
 use parking_lot::RwLock;
 use log::error;
 
-use pi_atom::Atom;
 use pi_hash::XHashMap;
 use tcp::Socket;
 
@@ -28,8 +26,7 @@ use crate::{gateway::GatewayContext,
             middleware::{MiddlewareResult, Middleware},
             request::HttpRequest,
             response::HttpResponse,
-            utils::{DEFAULT_HTTP_SCHEME, DEFAULT_HTTPS_SCHEME, DEFAULT_HTTP_PORT, DEFAULT_HTTPS_PORT, HttpRecvResult}};
-use std::cmp::max;
+            utils::{DEFAULT_HTTP_SCHEME, DEFAULT_HTTPS_SCHEME, DEFAULT_HTTP_PORT, DEFAULT_HTTPS_PORT}};
 
 ///
 /// 允许任意源的跨域访问的请求头的值
@@ -51,7 +48,7 @@ unsafe impl Sync for CORSHandler {}
 
 impl<S: Socket> Middleware<S, GatewayContext> for CORSHandler {
     fn request<'a>(&'a self,
-                   context: &'a mut GatewayContext,
+                   _context: &'a mut GatewayContext,
                    req: HttpRequest<S>)
                    -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
@@ -68,7 +65,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for CORSHandler {
     }
 
     fn response<'a>(&'a self,
-                    context: &'a mut GatewayContext,
+                    _context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
                     -> LocalBoxFuture<'a, MiddlewareResult<S>> {

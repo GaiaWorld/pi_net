@@ -3,7 +3,6 @@ use std::io::Error;
 use std::collections::VecDeque;
 
 use futures::future::{FutureExt, LocalBoxFuture};
-use https::{StatusCode, header::CONTENT_LENGTH};
 
 use tcp::Socket;
 

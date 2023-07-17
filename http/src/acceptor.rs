@@ -1,14 +1,10 @@
-use std::sync::Arc;
 use std::marker::PhantomData;
 use std::io::{Error, ErrorKind};
 
 use httparse::{EMPTY_HEADER, Request};
-use https::{Result as HttpResult,
-            Response,
-            Version,
-            status::StatusCode,
-            header::{HOST, CONTENT_LENGTH, HeaderMap}};
-use bytes::{Buf, BufMut, BytesMut};
+use https::{Version,
+            header::{HOST, HeaderMap}};
+use bytes::Buf;
 
 use tcp::{Socket, SocketHandle};
 
@@ -56,7 +52,7 @@ impl<S: Socket> Default for HttpAcceptor<S> {
 impl<S: Socket> HttpAcceptor<S> {
     /// 异步接受连接请求
     pub async fn accept<P>(handle: SocketHandle<S>,
-                           acceptor: HttpAcceptor<S>,
+                           _acceptor: HttpAcceptor<S>,
                            hosts: P,
                            keep_alive: usize)
         where P: VirtualHostPool<S> {

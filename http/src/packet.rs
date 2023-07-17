@@ -1,22 +1,9 @@
-use std::pin::Pin;
-use std::sync::Arc;
-use std::cell::RefCell;
-use std::future::Future;
 use std::convert::TryFrom;
-use std::marker::PhantomData;
-use std::task::{Context, Poll, Waker};
 use std::io::{Error, Result, ErrorKind};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::future::{FutureExt, LocalBoxFuture};
-use crossbeam_channel::{Sender, Receiver, unbounded, TryRecvError};
-use bytes::{Buf, BufMut, BytesMut};
-use url::Url;
-use httparse::{EMPTY_HEADER, Status, Header, Request};
-use https::{Result as HttpResult, Response, Version,
-            header::{HeaderName, HeaderValue, HeaderMap},
-            status::StatusCode};
-use log::warn;
+use bytes::Buf;
+use httparse::{Status, Request};
+use https::header::{HeaderName, HeaderValue, HeaderMap};
 
 use tcp::{Socket, SocketHandle};
 

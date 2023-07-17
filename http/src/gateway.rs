@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::cell::RefCell;
 use std::time::SystemTime;
 use std::result::Result as GenResult;
-use std::io::{Error, Result, ErrorKind};
+use std::io::{Error, ErrorKind};
 
 use mime::Mime;
 use bytes::BufMut;
@@ -12,8 +12,8 @@ use pi_hash::XHashMap;
 use pi_handler::SGenType;
 use tcp::Socket;
 
-use crate::{service::{HttpService, ServiceFactory},
-            route::{RouterTab, HttpRoute},
+use crate::{service::HttpService,
+            route::RouterTab,
             middleware::{MiddlewareResult, Middleware},
             request::HttpRequest,
             response::HttpResponse};

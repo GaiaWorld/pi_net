@@ -1,30 +1,23 @@
 extern crate route_recognizer;
 
 use std::thread;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::cell::RefCell;
 use std::time::Instant;
 use std::time::Duration;
-use std::future::Future;
 use std::net::SocketAddr;
-use std::marker::PhantomData;
-use std::io::{Error, ErrorKind};
-use std::error::Error as StdError;
-use std::task::{Context, Poll, Waker};
 
 use https::HeaderMap;
-use regex::{RegexSetBuilder, RegexSet, RegexBuilder, Regex};
+use regex::{RegexSetBuilder, RegexSet, RegexBuilder};
 use route_recognizer::Router;
 use futures::future::{FutureExt, LocalBoxFuture};
-use flate2::{Compression, FlushCompress, Compress, Status, write::GzEncoder};
+use flate2::{Compression, FlushCompress, Compress, Status};
 use twoway::{find_bytes, rfind_bytes};
-use parking_lot::RwLock;
 use env_logger;
 
-use pi_async::rt::{AsyncRuntime, AsyncValue,
-                   multi_thread::MultiTaskRuntimeBuilder,
-                   serial::AsyncRuntimeBuilder};
+use pi_async_rt::rt::{AsyncRuntime,
+                      multi_thread::MultiTaskRuntimeBuilder,
+                      serial::AsyncRuntimeBuilder};
 use pi_hash::XHashMap;
 use pi_atom::Atom;
 use pi_gray::GrayVersion;
@@ -52,8 +45,7 @@ use http::{server::HttpListenerFactory,
            port::HttpPort,
            static_cache::StaticCache,
            request::HttpRequest,
-           response::{ResponseHandler, HttpResponse},
-           utils::HttpRecvResult};
+           response::{ResponseHandler, HttpResponse}};
 
 #[test]
 fn test_regex() {
@@ -373,7 +365,7 @@ fn handle<R: AsyncRuntime>(rt: R,
     let msg = WrapMsg(msg);
     let resp_handler = Arc::new(handler);
 
-    rt.spawn(rt.alloc(), async move {
+    rt.spawn(async move {
         // println!("!!!!!!http gateway handle, topic: {:?}", topic);
         // println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
         // println!("!!!!!!http gateway handle, headers: {:?}", headers);

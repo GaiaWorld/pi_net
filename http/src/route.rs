@@ -8,15 +8,11 @@ use regex::{RegexSetBuilder, RegexSet, RegexBuilder, Regex};
 
 use pi_hash::XHashMap;
 use pi_atom::Atom;
-use pi_gray::GrayVersion;
-use pi_handler::{Args, Handler, SGenType};
 
 use tcp::Socket;
 
 use crate::{service::HttpService,
-            middleware::Middleware,
-            request::HttpRequest,
-            response::HttpResponse};
+            middleware::Middleware};
 
 ///
 /// 需要被替换的字符

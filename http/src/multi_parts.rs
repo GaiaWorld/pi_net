@@ -1,12 +1,8 @@
-use std::sync::Arc;
 use std::str::FromStr;
 use std::convert::TryFrom;
-use std::marker::PhantomData;
-use std::result::Result as GenResult;
-use std::io::{Error, Result, ErrorKind, Write};
+use std::io::{Error, Result, ErrorKind};
 
 use bytes::BufMut;
-use url::form_urlencoded;
 use mime::{MULTIPART,
            FORM_DATA,
            BOUNDARY,
@@ -17,11 +13,10 @@ use mime::{MULTIPART,
            APPLICATION,
            OCTET_STREAM,
            PDF,
-           Mime,
-           Name};
+           Mime};
 use twoway::{find_bytes, rfind_bytes};
-use httparse::{EMPTY_HEADER, Result as ParseResult, Status, parse_headers};
-use https::{header::{CONTENT_TYPE, CONTENT_DISPOSITION, HeaderName, HeaderValue}, StatusCode};
+use httparse::{EMPTY_HEADER, parse_headers};
+use https::{header::{CONTENT_TYPE, CONTENT_DISPOSITION, HeaderName, HeaderValue}};
 use futures::future::{FutureExt, LocalBoxFuture};
 
 use tcp::Socket;
@@ -30,8 +25,7 @@ use pi_handler::SGenType;
 use crate::{gateway::GatewayContext,
             middleware::{MiddlewareResult, Middleware},
             request::HttpRequest,
-            response::HttpResponse,
-            utils::HttpRecvResult};
+            response::HttpResponse};
 
 ///
 /// 多部分请求分隔符通用前后缀
@@ -147,7 +141,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for MutilParts {
     }
 
     fn response<'a>(&'a self,
-                    context: &'a mut GatewayContext,
+                    _context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
                     -> LocalBoxFuture<'a, MiddlewareResult<S>> {
