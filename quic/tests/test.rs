@@ -2,9 +2,7 @@ extern crate core;
 
 use std::thread;
 use std::fs::read;
-use std::any::Any;
 use std::sync::Arc;
-use std::path::Path;
 use std::str::FromStr;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant, SystemTime};
@@ -13,26 +11,22 @@ use std::io::{Error, Result, ErrorKind};
 use futures::{TryFutureExt,
               future::{FutureExt, BoxFuture, LocalBoxFuture},
               stream::StreamExt, AsyncWriteExt};
-use pi_async::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder, AsyncValue}};
+use pi_async_rt::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder}};
 use quinn_proto::{Dir, EndpointConfig, TransportConfig, StreamId, VarInt};
 use tokio::runtime::Builder;
 use rustls;
 use quinn;
 use bytes::Buf;
-use ed25519_dalek::PublicKey;
 use x509_parser::pem::Pem;
 use pem::parse;
 use der_parser::parse_ber;
 use env_logger;
-use tracing::Instrument;
-use tracing_chrome::ChromeLayerBuilder;
-use tracing_subscriber::{registry::Registry, prelude::*};
+use tracing_subscriber::prelude::*;
 
 use udp::{AsyncService,
           terminal::UdpTerminal};
 
 use quic::{AsyncService as QuicAsyncService, SocketHandle, SocketEvent,
-           connect::QuicSocket,
            server::{QuicListener, ClientCertVerifyLevel},
            client::{QuicClient, ServerCertVerifyLevel},
            utils::{QuicSocketReady, load_certs_file, load_key_file}};

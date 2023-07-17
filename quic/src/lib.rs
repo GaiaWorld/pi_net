@@ -1,11 +1,10 @@
 use std::ptr;
-use std::rc::Rc;
 use std::any::Any;
 use std::sync::Arc;
+use std::task::Waker;
 use std::time::Duration;
 use std::net::SocketAddr;
 use std::cell::UnsafeCell;
-use std::task::{ready, Waker};
 use std::result::Result as GenResult;
 use std::io::{Error, Result, ErrorKind};
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -15,9 +14,9 @@ use quinn_proto::{ConnectionHandle, ConnectionEvent, Dir, StreamId, Transmit};
 use crossbeam_channel::Sender;
 use crossbeam_utils::atomic::AtomicCell;
 use bytes::BytesMut;
-use pi_async::prelude::SpinLock;
-use pi_async::rt::AsyncValueNonBlocking;
-use pi_async::rt::serial_local_thread::LocalTaskRuntime;
+use pi_async_rt::{lock::spin_lock::SpinLock,
+                  rt::{AsyncValueNonBlocking,
+                       serial_local_thread::LocalTaskRuntime}};
 
 use udp::SocketHandle as UdpSocketHandle;
 
@@ -29,7 +28,7 @@ pub mod client;
 pub mod utils;
 
 use crate::connect::QuicSocket;
-use crate::utils::{QuicSocketStatus, QuicSocketReady, QuicCloseEvent, Hibernate, ContextHandle};
+use crate::utils::{QuicSocketStatus, QuicSocketReady, Hibernate, ContextHandle};
 
 ///
 /// Quic连接异步服务
@@ -452,7 +451,7 @@ impl SocketEvent {
             return false;
         }
 
-        self.inner = Box::into_raw(Box::new(event)) as *mut T as *mut ();
+        self.inner = Box::into_raw(Box::new(event)) as *mut ();
         true
     }
 

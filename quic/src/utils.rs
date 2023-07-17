@@ -10,17 +10,12 @@ use std::task::{Context, Poll, Waker};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::io::{BufReader, Result, Error, ErrorKind};
 
-use pi_async::{lock::spin_lock::SpinLock,
+use pi_async_rt::{lock::spin_lock::SpinLock,
                rt::serial::AsyncWaitResult};
-use crossbeam_channel::Sender;
-use flume::Sender as AsyncSender;
-use futures::future::{FutureExt, LocalBoxFuture};
-use quinn_proto::{Connection, ConnectionEvent, ConnectionHandle, StreamId};
+use quinn_proto::{ConnectionHandle, StreamId};
 use rustls::{Certificate, PrivateKey};
 
-use crate::{SocketHandle,
-            connect::QuicSocket,
-            client::QuicClient};
+use crate::SocketHandle;
 
 ///
 /// 连接令牌
@@ -359,7 +354,7 @@ impl<T: 'static> Drop for ContextHandle<T> {
     fn drop(&mut self) {
         if let Some(shared) = self.0.take() {
             //当前上下文指针存在，则释放
-            Arc::into_raw(shared);
+            let _ = Arc::into_raw(shared);
         }
     }
 }
@@ -418,7 +413,7 @@ impl SocketContext {
             return false;
         }
 
-        self.inner = Arc::into_raw(Arc::new(context)) as *const T as *const ();
+        self.inner = Arc::into_raw(Arc::new(context)) as *const ();
         true
     }
 
@@ -430,12 +425,12 @@ impl SocketContext {
 
         let inner = unsafe { Arc::from_raw(self.inner as *const T) };
         if Arc::strong_count(&inner) > 1 {
-            Arc::into_raw(inner); //释放临时共享指针
+            let _= Arc::into_raw(inner); //释放临时共享指针
             Err("Remove context failed, reason: context shared exist")
         } else {
             match Arc::try_unwrap(inner) {
                 Err(inner) => {
-                    Arc::into_raw(inner); //释放临时共享指针
+                    let _ = Arc::into_raw(inner); //释放临时共享指针
                     Err("Remove context failed, reason: invalid shared")
                 },
                 Ok(context) => {

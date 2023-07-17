@@ -1,32 +1,29 @@
-use std::rc::Rc;
 use std::sync::Arc;
 use std::cell::UnsafeCell;
-use std::cmp::max;
 use std::time::{Instant, Duration};
 use std::io::{Error, Result, ErrorKind};
 use std::collections::{VecDeque, HashMap};
 
 use futures::future::{FutureExt, LocalBoxFuture};
-use crossbeam_channel::{Sender, Receiver, unbounded};
-use quinn_proto::{EndpointEvent, ConnectionEvent, Event, ConnectionHandle, Dir, Transmit, StreamEvent, StreamId, Endpoint,
+use crossbeam_channel::{Sender, Receiver};
+use quinn_proto::{EndpointEvent, ConnectionEvent, ConnectionHandle, Dir, Transmit, StreamEvent, StreamId,
                   Event::{Connected, ConnectionLost, DatagramReceived, HandshakeDataReady, Stream}};
 use dashmap::DashMap;
 use slotmap::{Key, KeyData};
-use bytes::{Buf, BufMut};
-use log::{debug, warn, error};
+use bytes::BufMut;
+use log::{debug, error};
 
-use pi_async::rt::{AsyncValueNonBlocking,
+use pi_async_rt::rt::{AsyncValueNonBlocking,
                    serial::AsyncRuntime,
                    serial_local_thread::LocalTaskRuntime};
 use pi_cancel_timer::Timer;
 use udp::{Socket, SocketHandle as UdpSocketHandle};
 
-use tracing::{self, Instrument};
+use tracing;
 
-use crate::{AsyncService, SocketHandle, SocketEvent, QuicEvent,
+use crate::{AsyncService, SocketEvent, QuicEvent,
             connect::QuicSocket,
-            server::QuicListener,
-            utils::{Token, QuicSocketStatus, QuicSocketReady, QuicCloseEvent}};
+            utils::{QuicSocketStatus, QuicSocketReady}};
 
 ///
 /// Quic端点轮询器
@@ -359,13 +356,13 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                     }
                     ConnectionLost { reason } => {
                         //当前连接已丢失，则立即关闭当前连接
-                        (&mut *socket.get()).close(0,
-                                                   Err(Error::new(ErrorKind::ConnectionAborted,
-                                                                  format!("Quic connect closed, uid: {:?}, remtoe: {:?}, local: {:?}, code: 0, reason: {:?}",
-                                                                          (&*socket.get()).get_uid(),
-                                                                          (&*socket.get()).get_remote(),
-                                                                          (&*socket.get()).get_local(),
-                                                                          reason))));
+                        let _ = (&mut *socket.get()).close(0,
+                                                           Err(Error::new(ErrorKind::ConnectionAborted,
+                                                                          format!("Quic connect closed, uid: {:?}, remtoe: {:?}, local: {:?}, code: 0, reason: {:?}",
+                                                                                  (&*socket.get()).get_uid(),
+                                                                                  (&*socket.get()).get_remote(),
+                                                                                  (&*socket.get()).get_local(),
+                                                                                  reason))));
 
                         debug!("Quic connect closed, uid: {:?}, remtoe: {:?}, local: {:?}",
                             (&*socket.get()).get_uid(),
@@ -449,7 +446,7 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                         //当前连接的指定流已完成
                         if (&mut *socket.get()).is_send_finished() {
                             //当前连接的所有流都已完成，则继续关闭当前连接
-                            pool
+                            let _ = pool
                                 .event_send
                                 .send(QuicEvent::ConnectionClose(ConnectionHandle(connection_handle_number)));
                         }
@@ -466,14 +463,14 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 
                         if (&mut *socket.get()).is_send_finished() {
                             //当前连接的所有流都已完成，则继续关闭当前连接
-                            (&mut *socket.get()).close(code,
-                                                       Err(Error::new(ErrorKind::ConnectionAborted,
-                                                                      format!("Quic stream closed, uid: {:?}, remtoe: {:?}, local: {:?}, stream_id: {:?}, code: {:?}, reason: peer already closed",
-                                                                              (&*socket.get()).get_uid(),
-                                                                              (&*socket.get()).get_remote(),
-                                                                              (&*socket.get()).get_local(),
-                                                                              code,
-                                                                              id))));
+                            let _ = (&mut *socket.get()).close(code,
+                                                               Err(Error::new(ErrorKind::ConnectionAborted,
+                                                                              format!("Quic stream closed, uid: {:?}, remtoe: {:?}, local: {:?}, stream_id: {:?}, code: {:?}, reason: peer already closed",
+                                                                                      (&*socket.get()).get_uid(),
+                                                                                      (&*socket.get()).get_remote(),
+                                                                                      (&*socket.get()).get_local(),
+                                                                                      code,
+                                                                                      id))));
                         }
 
                         debug!("Quic stream closed, uid: {:?}, remtoe: {:?}, local: {:?}, stream_id: {:?}, code: {:?}",
@@ -491,7 +488,7 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 
 // 处理所有Quic连接接收和超时
 #[inline]
-fn handle_connection_received<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
+fn handle_connection_received<P: EndPointPoller>(_rt: &LocalTaskRuntime<()>,
                                                  pool: &mut QuicSocketPool<P>,
                                                  connection_handle: ConnectionHandle,
                                                  event: ConnectionEvent) {
@@ -514,7 +511,7 @@ fn handle_connection_received<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 
 // 处理所有准备写数据报文的Quic连接
 #[inline]
-fn handle_connection_sended<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
+fn handle_connection_sended<P: EndPointPoller>(_rt: &LocalTaskRuntime<()>,
                                                pool: &mut QuicSocketPool<P>,
                                                connection_handle: ConnectionHandle,
                                                transmit: Transmit) {
@@ -704,7 +701,7 @@ fn handle_stream_close<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                 //关闭当前连接的流成功
                 if code == 0 {
                     //当前连接的对端已关闭，则继续关闭当前连接
-                    pool
+                    let _ = pool
                         .event_send
                         .send(QuicEvent::ConnectionClose(connection_handle));
                 }

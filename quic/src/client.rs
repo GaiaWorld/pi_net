@@ -1,30 +1,28 @@
 use std::fs;
-use std::iter;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::path::PathBuf;
 use std::net::SocketAddr;
 use std::cell::UnsafeCell;
 use std::convert::TryInto;
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::io::{Result, Error, ErrorKind};
 use std::time::{Duration, Instant, SystemTime};
-use std::io::{BufRead, Result, Error, ErrorKind, Cursor};
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use parking_lot::RwLock;
-use quinn_proto::{crypto, Endpoint, EndpointConfig, ClientConfig, TransportConfig, EndpointEvent, DatagramEvent, ConnectionEvent, ConnectionHandle, Transmit, Connection, StreamId, Dir};
-use crossbeam_channel::{Sender, Receiver, unbounded};
-use flume::{Sender as AsyncSender, Receiver as AsyncReceiver, bounded};
+use quinn_proto::{Endpoint, EndpointConfig, ClientConfig, TransportConfig, EndpointEvent, DatagramEvent, ConnectionHandle, StreamId, Dir};
+use crossbeam_channel::{Sender, unbounded};
 use dashmap::DashMap;
 use bytes::{Buf, Bytes, BytesMut};
 use futures::AsyncReadExt;
 use futures::task::SpawnExt;
 use rustls;
-use log::{debug, error};
+use log::error;
 
 use pi_hash::XHashMap;
 use pi_cancel_timer::Timer;
-use pi_async::{lock::spin_lock::SpinLock,
+use pi_async_rt::{lock::spin_lock::SpinLock,
                rt::{AsyncRuntime, serial::AsyncValueNonBlocking,
                     serial_local_thread::LocalTaskRuntime}};
 use udp::{Socket, AsyncService, SocketHandle, TaskResult,
@@ -111,7 +109,7 @@ impl AsyncService for QuicClient {
                                 .0
                                 .event_sents.get(&(connection_handle.0 % quic_client.0.event_sents.len())) {
                                 //向连接所在连接池发送Socket事件
-                                event_sent
+                                let _ = event_sent
                                     .send(QuicEvent::ConnectionReceived(connection_handle, event));
                             }
                         }
@@ -159,7 +157,7 @@ impl EndPointPoller for QuicClient {
             handle: ConnectionHandle,
             events: VecDeque<EndpointEvent>) {
         let client = self.clone();
-        socket
+        let _ = socket
             .get_udp_handle()
             .spawn(async move {
                 handle_endpoint_events(client,
@@ -187,12 +185,12 @@ fn handle_endpoint_events(quic_client: QuicClient,
             if let Some(event) = end_point.handle_event(connection_handle, endpoint_event) {
                 if let Some(sender) = quic_client.0.event_sents.get(&index) {
                     //向连接所在连接池发送Socket事件
-                    sender
+                    let _ = sender
                         .send(QuicEvent::ConnectionReceived(connection_handle, event));
 
                     while let Some(transmit) = end_point.poll_transmit() {
                         //向连接所在连接池发送Socket发送事件
-                        sender
+                        let _ = sender
                             .send(QuicEvent::ConnectionSend(connection_handle, transmit));
                     }
                 }
@@ -519,7 +517,7 @@ impl QuicClient {
             old_udp_terminal.close(reason)?;
 
             for (_index, event_send) in self.0.event_sents.iter() {
-                event_send.send(QuicEvent::RebindUdp(udp_handle.clone()));
+                let _ = event_send.send(QuicEvent::RebindUdp(udp_handle.clone()));
             }
         }
 
@@ -587,7 +585,7 @@ impl QuicClient {
         let hostname = hostname.to_string();
         let connect_value = AsyncValueNonBlocking::new();
         let connect_value_copy = connect_value.clone();
-        self
+        let _ = self
             .0
             .udp_terminal
             .read()
@@ -630,7 +628,7 @@ impl QuicClient {
                                                               client.0.clock);
                             quic_socket.enable_client(); //设置为客户端
                             let sender = &client.0.router[connection_handle.0 % client.0.router.len()];
-                            sender.send(QuicEvent::Accepted(quic_socket));
+                            let _ = sender.send(QuicEvent::Accepted(quic_socket));
                         }
                     },
                 }

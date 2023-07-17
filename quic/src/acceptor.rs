@@ -58,7 +58,7 @@ impl QuicAcceptor {
                 Some((connection_handle, DatagramEvent::NewConnection(connection))) => {
                     //处理新连接请求
                     let sender = &self.router[connection_handle.0 % self.router.len()];
-                    sender.send(QuicEvent::Accepted(QuicSocket::new(udp_handle,
+                    let _ = sender.send(QuicEvent::Accepted(QuicSocket::new(udp_handle,
                                                                     connection_handle,
                                                                     connection,
                                                                     readed_read_size_limit,
