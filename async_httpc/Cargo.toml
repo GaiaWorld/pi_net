@@ -1,6 +1,6 @@
 [package]
 name = "async_httpc"
-version = "0.3.0"
+version = "0.5.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2018"
 
@@ -17,10 +17,10 @@ reqwest = { version = "0.11", optional = true }
 bytes = { version = "1.0", features = ["serde"]}
 flume = "0.10"
 lazy_static = "1.4"
-pi_async = "0.5.11"
 pi_hash = "0.1"
 
 [dev-dependencies]
+pi-async-rt = "0.1"
 env_logger = "0.7"
 futures = "0.3"
 new_tcp = { path = "../../pi_net/new_tcp" }
@@ -29,4 +29,4 @@ https = { package = "http", version = "0.2" }
 pi_handler = "0.1"
 pi_hash = "0.1"
 pi_gray = "0.1"
-pi_atom = "0.1"
+pi_atom = "0.2"

@@ -15,7 +15,7 @@ use reqwest::{ClientBuilder, Client, Proxy, Certificate, Identity, Method, Reque
               header::{HeaderMap, HeaderName, HeaderValue},
               redirect::Policy,
               multipart::{Part, Form}};
-use bytes::{Buf, BufMut, Bytes};
+use bytes::{Buf, BufMut};
 use flume::bounded;
 
 use pi_hash::XHashMap;
