@@ -1,6 +1,6 @@
 [package]
 name = "mqtt"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2018"
 
@@ -9,19 +9,19 @@ fnv = "1.0"
 futures = "0.3"
 mio = "0.8"
 mqtt311 = "0.2"
-parking_lot = "0.11"
+parking_lot = "0.12"
 lazy_static = "1.4"
 pi_hash = { version = "0.1", features = ["xxhash"] }
-pi_async = "0.5"
 tcp = { package = "new_tcp", path = "../new_tcp" }
 ws = { path = "../ws" }
 udp = { path = "../blocking_udp", package = "blocking_udp" }
 quic = { path = "../quic" }
 quinn-proto = "0.8"
-bytes = "1.3"
+bytes = "1.4"
 log = "0.4"
-pi_atom = "0.1"
+pi_atom = "0.2"
 
 [dev-dependencies]
+pi-async-rt = "0.1"
 twox-hash = "1.5"
 env_logger = "0.9"

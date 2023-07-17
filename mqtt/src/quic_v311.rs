@@ -1,19 +1,13 @@
 use std::sync::Arc;
-use std::marker::PhantomData;
-use std::collections::HashMap;
 use std::io::{Cursor, Result, ErrorKind, Error};
 
 use futures::future::{FutureExt, LocalBoxFuture};
-use mqtt311::{MqttWrite, MqttRead, Protocol, Header, ConnectReturnCode, Packet, Connect,
-              Connack, QoS, Publish, PacketIdentifier, SubscribeTopic, SubscribeReturnCodes,
+use mqtt311::{MqttWrite, MqttRead, ConnectReturnCode, Packet, Connect,
+              Connack, QoS, Publish, SubscribeReturnCodes,
               Subscribe, Suback, Unsubscribe, TopicPath, Error as MqttError};
 use quinn_proto::{StreamId, Dir};
 use bytes::Buf;
-use fnv::FnvBuildHasher;
-use log::{warn, error};
-
-use pi_atom::Atom;
-use pi_hash::XHashMap;
+use log::error;
 
 use quic::{AsyncService, SocketHandle, SocketEvent,
            connect::QuicSocket,
@@ -377,7 +371,7 @@ async fn accept(protocol: QuicMqtt311,
                                      packet);
     if let Some(listener) = protocol.broker.get_listener() {
         //指定的监听器存在，则执行已连接处理
-        if let Err(e) = listener
+        if let Err(_e) = listener
             .0
                 .connected(MqttBrokerProtocol::QuicMqtt311(Arc::new(protocol)),
                        mqtt_connect).await {
@@ -611,11 +605,11 @@ async fn subscribe(protocol: QuicMqtt311,
         //已订阅主题有最新发布的消息，则发布订阅主题的最新消息
         match r {
             Retain::Single(p) => {
-                send_packet(&connect, &Packet::Publish(p));
+                let _ = send_packet(&connect, &Packet::Publish(p));
             },
             Retain::Mutil(ps) => {
                 for p in ps {
-                    send_packet(&connect, &Packet::Publish(p));
+                    let _ = send_packet(&connect, &Packet::Publish(p));
                 }
             },
         }

@@ -8,7 +8,7 @@ use mqtt311::{TopicPath, Publish};
 use pi_hash::XHashMap;
 
 use crate::{server::MqttBrokerProtocol,
-            quic_session::{MqttSession, MqttConnect, QosZeroSession},
+            quic_session::{MqttConnect, QosZeroSession},
             utils::{PathTree, QuicBrokerSession}};
 
 ///
@@ -403,7 +403,7 @@ impl MqttBroker {
             }
 
             //将会话加入主题模式表
-            self.patterns.write().insert(path, session);
+            let _ = self.patterns.write().insert(path, session);
 
             if vec.len() == 0 {
                 None
@@ -498,7 +498,7 @@ impl MqttBroker {
             }
 
             //移除注册了指定主题模式的会话
-            self.patterns.write().remove(path, session.clone());
+            let _ = self.patterns.write().remove(path, session.clone());
         } else {
             //退订的是主题
             if self.sub_tab.read().get(&topic).is_some() {

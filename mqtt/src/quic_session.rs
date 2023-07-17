@@ -11,8 +11,7 @@ use mqtt311::{MqttWrite, QoS, LastWill, Packet, Publish};
 use quic::{SocketHandle,
            utils::{ContextHandle, Hibernate, QuicSocketReady}};
 
-use crate::{quic_v311::QuicMqtt311,
-            utils::{ValueEq, QuicBrokerSession}};
+use crate::utils::{ValueEq, QuicBrokerSession};
 
 ///
 /// Mqtt会话
