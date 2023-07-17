@@ -1,14 +1,14 @@
 use std::thread;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use std::io::{ErrorKind, Result, Error};
+use std::io::Result;
+use std::time::Duration;
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use httparse::{EMPTY_HEADER, Request};
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{BufMut, BytesMut};
 use env_logger;
 
-use pi_async::rt::{serial::{AsyncRuntimeBuilder, AsyncValue}};
+use pi_async_rt::rt::serial::AsyncRuntimeBuilder;
 
 use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
           connect::TcpSocket,
@@ -17,7 +17,6 @@ use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, Socket
           utils::{TlsConfig, Ready}};
 use ws::{server::WebsocketListener,
          connect::WsSocket,
-         frame::WsHead,
          utils::{ChildProtocol, WsSession}};
 
 #[test]

@@ -1,12 +1,9 @@
-use std::sync::Arc;
-use std::future::Future;
+use std::collections::VecDeque;
 use std::io::{Error, Result, ErrorKind};
-use std::collections::{VecDeque, HashMap};
 
 use bytes::BufMut;
 use httparse::Request;
-use fnv::FnvBuildHasher;
-use futures::future::{FutureExt, LocalBoxFuture};
+use futures::future::LocalBoxFuture;
 
 use tcp::{Socket, SocketHandle, SocketEvent,
           utils::SocketContext};
@@ -23,15 +20,15 @@ pub trait ChildProtocol<S: Socket>: Send + Sync + 'static {
 
     /// 处理非标准握手请求子协议
     fn non_standard_handshake_protocol(&self,
-                                       request: &Request) -> Result<(String, Vec<u8>)> {
+                                       _request: &Request) -> Result<(String, Vec<u8>)> {
         Err(Error::new(ErrorKind::Other,
                        "Handle non-standard handshake protocol failed, reason: empty protocol"))
     }
 
     /// 处理握手子协议
     fn handshake_protocol(&self,
-                          handle: SocketHandle<S>,
-                          request: &Request) -> Result<()> {
+                          _handle: SocketHandle<S>,
+                          _request: &Request) -> Result<()> {
         Ok(())
     }
 
