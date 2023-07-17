@@ -1,6 +1,6 @@
 [package]
 name = "mqtt_proxy"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2018"
 
@@ -9,13 +9,14 @@ futures = "0.3"
 tcp = { package = "new_tcp", path = "../new_tcp" }
 quic = { path = "../quic" }
 mqtt = { path = "../mqtt" }
-pi_async = "0.5"
+pi-async-rt = "0.1"
 pi_handler = "0.1"
 pi_gray = "0.1"
-pi_atom = "0.1"
+pi_atom = "0.2"
 log = "0.4"
 
 [dev-dependencies]
 ws = { path = "../ws" }
 env_logger = "0.9"
 udp = { path = "../blocking_udp", package = "blocking_udp" }
+quinn-proto = "0.8"

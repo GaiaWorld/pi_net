@@ -1,11 +1,9 @@
 use std::sync::Arc;
 use std::net::SocketAddr;
-use std::result::Result as GenResult;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use futures::future::{FutureExt, LocalBoxFuture};
-use futures::StreamExt;
 use log::warn;
 
 use pi_atom::Atom;
@@ -225,7 +223,7 @@ impl MqttConnectHandle {
 
     /// 发送指定主题的数据
     pub fn send(&self, topic: &String, bin: Vec<u8>) {
-        self.connect.send(topic, Arc::new(bin));
+        let _ = self.connect.send(topic, Arc::new(bin));
     }
 
     /// 回应指定请求

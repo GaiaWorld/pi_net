@@ -1,16 +1,15 @@
 use std::thread;
-use std::any::Any;
 use std::sync::Arc;
 use std::str::FromStr;
-use std::mem::transmute;
 use std::net::{IpAddr, SocketAddr};
 use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
 use futures::future::{FutureExt, LocalBoxFuture};
+use quinn_proto::{TransportConfig, VarInt};
 use env_logger;
 
-use pi_async::rt::{serial::{AsyncRuntimeBuilder, AsyncValue}};
+use pi_async_rt::rt::{serial::AsyncRuntimeBuilder};
 use pi_atom::Atom;
 use pi_gray::GrayVersion;
 use pi_handler::{Args, Handler};
@@ -20,10 +19,7 @@ use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, Socket
           tls_connect::TlsSocket,
           server::{PortsAdapterFactory, SocketListener},
           utils::{TlsConfig, Ready}};
-use ws::{server::WebsocketListener,
-         connect::WsSocket,
-         frame::WsHead,
-         utils::{ChildProtocol, WsSession}};
+use ws::server::WebsocketListener;
 use udp::terminal::UdpTerminal;
 use quic::{server::{QuicListener, ClientCertVerifyLevel},
            utils::QuicSocketReady};
@@ -419,6 +415,8 @@ fn test_mqtt_proxy_service_by_quic() {
     register_quic_mqtt_listener(broker_name, listener);
     register_quic_mqtt_service(broker_name, service);
 
+    let mut transport_config = TransportConfig::default();
+    transport_config.max_concurrent_bidi_streams(VarInt::from_u32(1024));
     let listener = QuicListener::new(vec![quic_rt],
                                      "./tests/quic.com.crt",
                                      "./tests/quic.com.key",
@@ -426,8 +424,10 @@ fn test_mqtt_proxy_service_by_quic() {
                                      Default::default(),
                                      65535,
                                      65535,
+                                     100000,
+                                     Some(Arc::new(transport_config)),
                                      broker_factory.new_quic_service(),
-                                     10)
+                                     1)
         .expect("Create quic listener failed");
     let addrs = SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), port);
 
