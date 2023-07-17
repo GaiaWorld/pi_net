@@ -9,7 +9,7 @@ use parking_lot::RwLock;
 use dashmap::DashMap;
 use bytes::{Buf, Bytes};
 
-use pi_async::rt::serial_local_thread::LocalTaskRuntime;
+use pi_async_rt::rt::serial_local_thread::LocalTaskRuntime;
 use crate::{Socket, UdpEvent, TaskResult,
             terminal::alloc_terminal_socket_uid,
             utils::{UdpMultiInterface, UdpSocketStatus, SocketContext}};

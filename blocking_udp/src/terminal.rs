@@ -10,7 +10,7 @@ use async_channel::unbounded as async_unbounded;
 use socket2::{Domain, Type, Protocol, Socket as SocketDef};
 use log::{debug, warn, error};
 
-use pi_async::rt::serial_local_thread::LocalTaskRuntime;
+use pi_async_rt::rt::serial_local_thread::LocalTaskRuntime;
 
 use crate::{Socket, AsyncService, SocketHandle, SocketHandleRef, UdpEvent, TaskResult,
             connect::{BlockingUdpSocket, new_blocking_udp_socket}};
