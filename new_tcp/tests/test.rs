@@ -1,16 +1,14 @@
 extern crate core;
 
-use std::mem;
 use core::time;
 use std::thread;
 use time::Duration;
-use std::collections::VecDeque;
 use bytes::Buf;
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use env_logger;
 
-use pi_async::rt::{serial::AsyncRuntimeBuilder};
+use pi_async_rt::rt::{serial::AsyncRuntimeBuilder};
 
 use new_tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus,
               connect::TcpSocket,
@@ -22,7 +20,7 @@ use new_tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus,
 fn test_accept_connect() {
     use std::net::SocketAddr;
     use mio::{Events, Poll, Interest, Token};
-    use mio::net::{TcpListener, TcpStream};
+    use mio::net::TcpListener;
 
     let addr: SocketAddr = "127.0.0.1:38880".parse().unwrap();
     let mut server = TcpListener::bind(addr).unwrap();

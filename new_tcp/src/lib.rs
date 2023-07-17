@@ -13,16 +13,15 @@ use std::io::{Error, Result, ErrorKind};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::net::{SocketAddr, IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::AtomicUsize;
-use bytes::BytesMut;
 
 use futures::future::LocalBoxFuture;
 use crossbeam_channel::Sender;
 use mio::{Token, Interest, Poll,
           net::TcpStream};
+use bytes::BytesMut;
 
-use pi_async::{lock::spin_lock::SpinLock,
-               rt::{serial::AsyncValue, serial_local_thread::LocalTaskRuntime}};
-use pi_async_buffer::ByteBuffer;
+use pi_async_rt::rt::{serial::AsyncValue,
+                      serial_local_thread::LocalTaskRuntime};
 use pi_hash::XHashMap;
 
 #[macro_use]
@@ -398,7 +397,7 @@ impl SocketEvent {
             return false;
         }
 
-        self.inner = Box::into_raw(Box::new(event)) as *mut T as *mut ();
+        self.inner = Box::into_raw(Box::new(event)) as *mut ();
         true
     }
 
@@ -757,7 +756,7 @@ impl<S: Socket> SocketHandle<S> {
 
     /// 线程安全的设置超时定时器
     pub fn set_timeout(&self, timeout: usize, event: SocketEvent) {
-        self
+        let _ = self
             .0
             .timer_listener
             .send((self.0.token, Some((timeout, event))));
@@ -765,7 +764,7 @@ impl<S: Socket> SocketHandle<S> {
 
     /// 线程安全的取消超时定时器
     pub fn unset_timeout(&self) {
-        self
+        let _ = self
             .0
             .timer_listener
             .send((self.0.token, None));

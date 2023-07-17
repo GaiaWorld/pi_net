@@ -1,9 +1,7 @@
 use std::thread;
-use std::str::FromStr;
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use std::io::{ErrorKind, Result, Error};
-use std::net::{SocketAddr, IpAddr, Ipv6Addr};
+use std::net::SocketAddr;
 
 use mio::{
     Events, Poll, Token, Interest,
@@ -13,12 +11,12 @@ use crossbeam_channel::{Sender, Receiver, unbounded};
 use spin_sleep::LoopHelper;
 use log::{info, warn};
 
-use pi_async::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder},
-                   serial_worker_thread::WorkerRuntime};
+use pi_async_rt::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder},
+                      serial_worker_thread::WorkerRuntime};
 use pi_hash::XHashMap;
 use pi_slotmap::{Key, DefaultKey, KeyData, SlotMap};
 
-use crate::{DEFAULT_TCP_IP_V6, SocketAdapter, Socket, Stream, AcceptorCmd, SocketDriver};
+use crate::{SocketAdapter, Socket, Stream, AcceptorCmd, SocketDriver};
 use crate::utils::TlsConfig;
 
 /*
@@ -142,7 +140,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
 
         let acceptor = self;
         let rt_copy = rt.clone();
-        rt.spawn(rt.alloc(), async move {
+        rt.spawn(async move {
             listen_loop(rt_copy,
                         acceptor,
                         event_size,
@@ -263,7 +261,7 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
                             }
 
                             //连接成功后，重置当前端口的监听器感兴趣的事件
-                            acceptor
+                            let _ = acceptor
                                 .poll
                                 .registry()
                                 .reregister(&mut context.listener,
