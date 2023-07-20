@@ -1,12 +1,9 @@
-use std::thread;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::str::FromStr;
-use std::collections::HashMap;
+use std::cell::UnsafeCell;
 use std::time::{Duration, Instant};
-use std::cell::{RefCell, UnsafeCell};
+use std::net::{Shutdown, SocketAddr};
 use std::io::{ErrorKind, Result, Error};
-use std::net::{Shutdown, SocketAddr, IpAddr, Ipv6Addr};
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use mio::{Events, Poll, Token, Interest};
@@ -16,15 +13,15 @@ use slotmap::{Key as SlotMapKey, KeyData as SlotMapKeyData};
 use spin_sleep::LoopHelper;
 use log::{warn, error};
 
-use pi_async::{lock::spin_lock::SpinLock,
-               rt::{serial::AsyncValue,
-                    serial_local_thread::LocalTaskRuntime}};
+use pi_async_rt::{lock::spin_lock::SpinLock,
+                  rt::{serial::AsyncValue,
+                       serial_local_thread::LocalTaskRuntime}};
 use pi_hash::XHashMap;
 use pi_cancel_timer::Timer;
 use pi_slotmap::{Key, DefaultKey, KeyData, SlotMap};
 
-use crate::{DEFAULT_TCP_IP_V6, Socket, Stream, SocketAdapter, SocketOption, SocketConfig, SocketEvent, SocketDriver,
-            utils::{SharedStream, register_close_sender}};
+use crate::{Socket, Stream, SocketAdapter, SocketConfig, SocketEvent, SocketDriver,
+            utils::register_close_sender};
 
 ///
 /// Tcp连接池

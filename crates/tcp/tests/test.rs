@@ -8,9 +8,9 @@ use bytes::Buf;
 use futures::future::{FutureExt, LocalBoxFuture};
 use env_logger;
 
-use pi_async::rt::{serial::AsyncRuntimeBuilder};
+use pi_async_rt::rt::{serial::AsyncRuntimeBuilder};
 
-use pi_tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus,
+use new_tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus,
               connect::TcpSocket,
               tls_connect::TlsSocket,
               server::{PortsAdapterFactory, SocketListener},
@@ -20,7 +20,7 @@ use pi_tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus,
 fn test_accept_connect() {
     use std::net::SocketAddr;
     use mio::{Events, Poll, Interest, Token};
-    use mio::net::{TcpListener};
+    use mio::net::TcpListener;
 
     let addr: SocketAddr = "127.0.0.1:38880".parse().unwrap();
     let mut server = TcpListener::bind(addr).unwrap();
@@ -75,7 +75,7 @@ impl<S: Socket> AsyncService<S> for TestService {
                     println!("===> Socket Receive Ok, token: {:?}, remote: {:?}, local: {:?}", token, handle.get_remote(), handle.get_local());
 
                     let mut ready_len = 0;
-                    if let Some(buf) = unsafe { &mut *handle.get_read_buffer().get() } {
+                    if let Some(buf) = unsafe { (&mut *handle.get_read_buffer().get()) } {
                         if buf.remaining() == 0 {
                             //当前读缓冲中没有数据，则异步准备读取数据
                             println!("!!!!!!readed, read ready start, len: 0");
@@ -97,7 +97,7 @@ impl<S: Socket> AsyncService<S> for TestService {
                         println!("===> Socket Read Ok, token: {:?}, data: {:?}", token, String::from_utf8_lossy(buf.as_ref()));
 
                         //读成功，开始写
-                        let bin = b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n";
+                        let mut bin = b"HTTP/1.0 200 OK\r\nContent-Length: 35\r\nConnection: close\r\n\r\nHello world from rust web server!\r\n";
                         if let Ok(_) = handle.write_ready(bin) {
                             println!("===> Socket Write Ok, token: {:?}", token);
                         }
@@ -222,7 +222,7 @@ fn test_tls_connect() {
         Err(e) => {
             println!("!!!> Socket Listener Bind Ipv4 & Ipv6 Address Error, reason: {:?}", e);
         },
-        Ok(_driver) => {
+        Ok(driver) => {
             println!("===> Socket Listener Bind Ipv4 & Ipv6 Address Ok");
         }
     }

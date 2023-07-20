@@ -1,11 +1,11 @@
-use std::borrow::{Borrow, BorrowMut};
 use std::rc::Rc;
 use std::task::Waker;
 use std::future::Future;
+use std::borrow::Borrow;
+use std::net::SocketAddr;
+use std::cell::UnsafeCell;
 use std::collections::VecDeque;
-use std::net::{IpAddr, SocketAddr};
 use std::result::Result as GenResult;
-use std::cell::{Ref, RefCell, UnsafeCell};
 use std::io::{Error, Result, ErrorKind, Read, Write};
 use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
 
@@ -15,16 +15,14 @@ use crossbeam_channel::Sender;
 use futures::{sink::SinkExt,
               future::{FutureExt, LocalBoxFuture}};
 use bytes::{Buf, BufMut, BytesMut};
-use log::warn;
 
-use pi_async::{lock::spin_lock::SpinLock,
-               rt::{serial::AsyncValue,
-                    serial_local_thread::LocalTaskRuntime,
-                    async_pipeline::{AsyncReceiverExt, AsyncPipeLineExt, PipeSender, channel}}};
-use pi_async_buffer::ByteBuffer;
+use pi_async_rt::{lock::spin_lock::SpinLock,
+                  rt::{serial::AsyncValue,
+                       serial_local_thread::LocalTaskRuntime}};
+use pi_async_buffer::async_pipeline::{AsyncReceiverExt, AsyncPipeLineExt, PipeSender, channel};
 
 use crate::{Stream, Socket, SocketEvent, SocketHandle, SocketImage, SocketContext,
-            utils::{TlsConfig, SharedStream, Hibernate, Ready}};
+            utils::{TlsConfig, Hibernate, Ready}};
 
 /// 默认的读取块大小，单位字节
 const DEFAULT_READ_BLOCK_LEN: usize = 4096;
