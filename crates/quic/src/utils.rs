@@ -10,7 +10,7 @@ use std::task::{Context, Poll, Waker};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::io::{BufReader, Result, Error, ErrorKind};
 
-use pi_async::{lock::spin_lock::SpinLock,
+use pi_async_rt::{lock::spin_lock::SpinLock,
                rt::serial::AsyncWaitResult};
 use quinn_proto::{ConnectionHandle, StreamId};
 use rustls::{Certificate, PrivateKey};
@@ -226,7 +226,7 @@ impl Clone for Hibernate {
 impl Future for Hibernate {
     type Output = Result<()>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut locked = self.0.waker.lock(); //由锁保护异步休眠对象的唤醒
 
         //获取唤醒的结果值
@@ -242,7 +242,8 @@ impl Future for Hibernate {
             self
                 .0
                 .handle
-                .set_ready(self.0.ready); //在唤醒后重置当前流感兴趣的事件
+                .set_ready(self.0.stream_id,
+                           self.0.ready); //在唤醒后重置当前流感兴趣的事件
             self.0.handle.run_hibernated_tasks(); //立即异步运行连接休眠时的所有任务
 
             Poll::Ready(result)
@@ -251,7 +252,8 @@ impl Future for Hibernate {
             self
                 .0
                 .handle
-                .set_ready(self.0.ready); //在休眠时重置当前流感兴趣的事件为只写
+                .set_ready(self.0.stream_id,
+                           self.0.ready); //在休眠时重置当前流感兴趣的事件为只写
 
             if self.0.handle.set_hibernate(self.clone()) {
                 //设置当前连接的休眠对象成功，则设置当前休眠的唤醒器
@@ -273,9 +275,11 @@ impl Future for Hibernate {
 impl Hibernate {
     /// 构建一个异步休眠对象
     pub fn new(handle: SocketHandle,
+               stream_id: StreamId,
                ready: QuicSocketReady) -> Self {
         let inner = InnerHibernate {
             handle,
+            stream_id,
             ready,
             waker: SpinLock::new(None),
             waker_status: AtomicU8::new(0),
@@ -322,7 +326,8 @@ impl Hibernate {
 
 // 内部线程安全的异步休眠对象
 struct InnerHibernate {
-    handle:         SocketHandle,            //当前Quic连接的句柄
+    handle:         SocketHandle,               //当前Quic连接的句柄
+    stream_id:      StreamId,                   //当前Quicl连接的指定流
     ready:          QuicSocketReady,            //唤醒后感兴趣的事件
     waker:          SpinLock<Option<Waker>>,    //休眠唤醒器
     waker_status:   AtomicU8,                   //唤醒状态
@@ -408,7 +413,7 @@ impl SocketContext {
             return false;
         }
 
-        self.inner = Arc::into_raw(Arc::new(context)) as *const T as *const ();
+        self.inner = Arc::into_raw(Arc::new(context)) as *const ();
         true
     }
 
@@ -420,7 +425,7 @@ impl SocketContext {
 
         let inner = unsafe { Arc::from_raw(self.inner as *const T) };
         if Arc::strong_count(&inner) > 1 {
-            let _ = Arc::into_raw(inner); //释放临时共享指针
+            let _= Arc::into_raw(inner); //释放临时共享指针
             Err("Remove context failed, reason: context shared exist")
         } else {
             match Arc::try_unwrap(inner) {

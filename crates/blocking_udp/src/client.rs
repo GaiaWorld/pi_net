@@ -11,7 +11,7 @@ use socket2::{Domain, Type, Protocol, Socket as SocketDef};
 use dashmap::DashMap;
 use log::error;
 
-use pi_async::rt::{AsyncValueNonBlocking,
+use pi_async_rt::rt::{AsyncValueNonBlocking,
                    serial_local_thread::LocalTaskRuntime};
 
 use crate::{Socket, AsyncService, SocketHandle, SocketHandleRef, UdpEvent, TaskResult,

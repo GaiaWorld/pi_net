@@ -13,7 +13,7 @@ use pi_handler::{Args, Handler};
 use quic::utils::{ContextHandle, Hibernate, QuicSocketReady};
 use mqtt::server::MqttBrokerProtocol;
 use mqtt::quic_broker::{MQTT_RESPONSE_SYS_TOPIC, MqttBrokerListener, MqttBrokerService};
-use mqtt::quic_session::MqttConnect;
+use mqtt::quic_session::{MqttSession, MqttConnect};
 use mqtt::utils::QuicBrokerSession;
 
 ///
@@ -314,7 +314,7 @@ impl MqttBrokerListener for MqttProxyListener {
     fn closed(&self,
               protocol: MqttBrokerProtocol,
               connect: Arc<dyn MqttConnect>,
-              context: QuicBrokerSession,
+              mut context: QuicBrokerSession,
               reason: Result<()>) -> LocalBoxFuture<'static, ()> {
         //Mqtt连接已关闭
         if let Err(e) = &reason {

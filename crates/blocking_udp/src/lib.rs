@@ -12,7 +12,7 @@ use futures::future::{FutureExt, LocalBoxFuture};
 use crossbeam_channel::Sender;
 use bytes::Bytes;
 
-use pi_async::rt::serial_local_thread::LocalTaskRuntime;
+use pi_async_rt::rt::serial_local_thread::LocalTaskRuntime;
 
 pub mod connect;
 pub mod terminal;

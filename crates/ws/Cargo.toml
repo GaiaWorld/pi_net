@@ -1,10 +1,10 @@
 [package]
 name = "pi_ws"
-version = "0.1.1"
+version = "0.3.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_ws"
-repository = "https://github.com/GaiaWorld/pi_net"
+repository = "https://github.com/GaiaWorld/pi_net/tree/crateio"
 license = "MIT OR Apache-2.0"
 keywords = ["pi",  "ws"]
 
@@ -13,16 +13,16 @@ http = "0.2"
 httparse = "=1.7.1"
 futures = "0.3"
 base64 = "0.13"
-bytes = "1.2"
+bytes = "1.4"
 fnv = "1.0"
 mio = "0.8"
 log = "0.4"
-pi_async_buffer = "0.6"
+pi_async_buffer = "0.7"
 pi_atom = "0.2"
-tcp = {version="0.1", path = "../tcp", package = "pi_tcp"}
+tcp = {version="0.2", path = "../tcp", package = "pi_tcp"}
 pi_crypto = "0.1"
 
 [dev-dependencies]
-pi_async = "0.5"
+pi-async-rt = "0.1"
 env_logger = "0.9"
 

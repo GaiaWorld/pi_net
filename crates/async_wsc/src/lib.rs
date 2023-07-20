@@ -1,4 +1,4 @@
-
+#[macro_use]
 extern crate lazy_static;
 
 use std::thread;
@@ -7,28 +7,29 @@ use std::sync::Arc;
 use std::str::FromStr;
 use std::future::Future;
 use std::fmt::{self, Debug};
+use std::task::{Context, Poll};
 use std::result::Result as GenResult;
 use std::cell::{UnsafeCell, RefCell};
-use std::task::{Context, Poll};
-use std::io::{Error, Result, ErrorKind};
 use std::time::{Duration, SystemTime};
+use std::io::{Error, Result, ErrorKind};
 
 use parking_lot::RwLock;
-use futures::future::{FutureExt};
+use futures::future::FutureExt;
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use flume::{Sender, Receiver, bounded};
 use url::Url;
+use webpki;
 use rustls::{ClientConfig, RootCertStore, Certificate, ServerName, Error as TLSError,
              client::{ServerCertVerifier, ServerCertVerified}};
 use actix_rt::{self, System};
 use actix_codec::Framed;
 use actix_http::ws::{Codec, Item};
 use awc::{Client, Connector, BoxedSocket, ws::{self, Frame, Message, CloseCode, CloseReason}};
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use bytestring::ByteString;
 use log::{info, warn, error};
 
-use pi_async::rt::{TaskId, AsyncTaskPool, AsyncTaskPoolExt, AsyncRuntime, AsyncWaitResult};
+use pi_async_rt::rt::{TaskId, AsyncTaskPool, AsyncTaskPoolExt, AsyncRuntime, AsyncWaitResult};
 
 /*
 * Websocket连接
@@ -77,8 +78,8 @@ impl<
         let sender_copy = sender.clone();
         let (send, recv) = bounded(1);
         thread::spawn(move || {
-            let runner = System::new();
-            let _ = send.send(());
+            let mut runner = System::new();
+            send.send(());
             info!("Websocket client {:?} running...", name);
             runner.block_on(async move {
                 event_loop(receiver, sender_copy).await;
@@ -109,12 +110,12 @@ impl<
                 Err(Error::new(ErrorKind::Other, format!("Open websocket failed, url: {}, reason: {:?}", url, e)))
             },
             Ok(url) => {
-                let ws = AsyncWebsocket::new(self.rt.clone(),
+                let mut ws = AsyncWebsocket::new(self.rt.clone(),
                                                  self.sender.clone(),
                                                  url,
                                                  protocols,
                                                  handler);
-                ws.set_task_id(self.rt.alloc());
+                ws.set_task_id(self.rt.alloc::<()>());
 
                 Ok(ws)
             },
@@ -125,7 +126,7 @@ impl<
     pub fn close(&self) -> Result<()> {
         let sender = self.sender.clone();
 
-        self.rt.spawn(self.rt.alloc(), async move {
+        self.rt.spawn_by_id(self.rt.alloc::<()>(), async move {
             if let Err(e) = sender.send_async(AsyncWebsocketCmd::Stop(None)).await {
                 error!("Close websocket client failed, reason: {:?}", e);
             }
@@ -147,7 +148,7 @@ async fn event_loop<
                 error!("Websocket client error, reason: {:?}", e);
 
                 if let Some(ws_con) = current_connection.as_mut() {
-                    let _ = ws_con.send(ws::Message::Close(Some(CloseReason::from(CloseCode::Other(500))))).await;
+                    ws_con.send(ws::Message::Close(Some(CloseReason::from(CloseCode::Other(500))))).await;
                 }
 
                 break;
@@ -187,7 +188,7 @@ async fn event_loop<
                                 .rustls(Arc::new(config))
                                 .timeout(Duration::from_millis(timeout))
                         };
-                        let client = Client::builder()
+                        let mut client = Client::builder()
                             .connector(connector)
                             .timeout(Duration::from_millis(timeout))
                             .finish();
@@ -213,20 +214,20 @@ async fn event_loop<
                                 let reason = format!("Open websocket failed, url: {}, protocols: {:?}, reason: {:?}", url, protocols, e);
                                 *ws.0.status.write() = AsyncWebsocketStatus::Error(url, protocols, None, Some(Error::new(ErrorKind::ConnectionAborted, reason.clone()))); //设置连接状态
                                 ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
-                                ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步打开连接的任务
+                                ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步打开连接的任务
                                 error!("{}", reason);
                             },
                             Ok((resp, connection)) => {
                                 //打开Websocket连接成功
                                 if let Some(mut ws_con) = current_connection.take() {
                                     //立即关闭旧连接
-                                    let _ = ws_con.send(ws::Message::Close(None)).await;
+                                    ws_con.send(ws::Message::Close(None)).await;
                                 }
                                 current_connection = Some(connection); //更新当前连接
 
                                 *ws.0.status.write() = AsyncWebsocketStatus::Connected(url.clone(), protocols.clone()); //设置连接状态
                                 ws.0.handler.on_open(); //通知处理器连接成功
-                                ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步打开连接的任务
+                                ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步打开连接的任务
                                 info!("Open websocket ok, url: {}, protocols: {:?}, resp: {:?}", url, protocols, resp);
                             }
                         }
@@ -248,7 +249,7 @@ async fn event_loop<
                                     let error = Error::new(ErrorKind::Other, reason.clone());
                                     *result.0.borrow_mut() = Some(Err(error)); //设置发送消息的结果
                                     ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
-                                    ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步发送消息的任务
+                                    ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步发送消息的任务
                                     is_sended = false; //设置状态为发送失败
                                     break;
                                 }
@@ -261,7 +262,7 @@ async fn event_loop<
                             if is_sended {
                                 //发送消息成功
                                 *result.0.borrow_mut() = Some(Ok(())); //设置发送消息的结果
-                                ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步发送消息的任务
+                                ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步发送消息的任务
                             }
                         }
                     },
@@ -278,7 +279,7 @@ async fn event_loop<
                             if let Some(0) = require_count {
                                 //有本次接收的最大消息数限制，且已接收指定数量的消息，则退出本次消息接收
                                 *result.0.borrow_mut() = Some(Ok(())); //设置接收消息的结果
-                                ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步接收消息的任务
+                                ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步接收消息的任务
                             } else {
                                 //已接收至少一条消息，检查缓冲区是否还有未接收的消息
                                 if received_count > 0 && ws_con.is_read_buf_empty() {
@@ -287,7 +288,7 @@ async fn event_loop<
                                         //有本次接收的最大消息数限制，且当前缓冲区没有可接收的消息帧，但还有未接收的指定数量的消息，则继续异步接收剩余消息，并立即结束当前接收
                                         //通过消息队列投递继续接收的任务，避免接收长时间独占Websocket连接的运行时
                                         let ws_copy = ws.clone();
-                                        let _ = sender.send_async(AsyncWebsocketCmd::Receive(
+                                        sender.send_async(AsyncWebsocketCmd::Receive(
                                             ws_copy,
                                             task_id,
                                             require_count,
@@ -298,7 +299,7 @@ async fn event_loop<
                                     } else {
                                         //无本次接收的最大消息数限制，且当前缓冲区没有可接收的消息帧，则立即退出本次消息接收
                                         *result.0.borrow_mut() = Some(Ok(())); //设置接收消息的结果
-                                        ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步接收消息的任务
+                                        ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步接收消息的任务
                                     }
                                 } else {
                                     //还未接收至少一条消息，或连接的缓冲区不为空
@@ -316,7 +317,7 @@ async fn event_loop<
                                                     let error = Error::new(ErrorKind::Other, reason.clone());
                                                     *result.0.borrow_mut() = Some(Err(error)); //设置接收消息的结果
                                                     ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
-                                                    ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步接收消息的任务
+                                                    ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步接收消息的任务
                                                     error!("{}", reason);
                                                 },
                                                 Ok(frame) => {
@@ -325,7 +326,7 @@ async fn event_loop<
                                                     if let Some(ReceivedMessage::Discomplete(_, _)) = &received_message {
                                                         //接收消息不完整，则通过消息队列投递继续接收的任务，继续接收消息的后续帧，并立即结束当前接收，避免接收长时间独占Websocket连接的运行时
                                                         let ws_copy = ws.clone();
-                                                        let _ = sender.send_async(AsyncWebsocketCmd::Receive(
+                                                        sender.send_async(AsyncWebsocketCmd::Receive(
                                                             ws_copy,
                                                             task_id,
                                                             require_count,
@@ -342,7 +343,7 @@ async fn event_loop<
                                                                 let error = Error::new(ErrorKind::Other, reason.clone());
                                                                 *result.0.borrow_mut() = Some(Err(error)); //设置接收消息的结果
                                                                 ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
-                                                                ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步接收消息的任务
+                                                                ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步接收消息的任务
                                                                 error!("{}", reason);
                                                             },
                                                             Some(ReceivedMessage::Completed(msg)) => {
@@ -374,7 +375,7 @@ async fn event_loop<
                                                                 let ws_copy = ws.clone();
                                                                 if let Some(count) = require_count {
                                                                     //通过消息队列投递继续接收的任务，避免接收长时间独占Websocket连接的运行时
-                                                                    let _ = sender.send_async(AsyncWebsocketCmd::Receive(
+                                                                    sender.send_async(AsyncWebsocketCmd::Receive(
                                                                         ws_copy,
                                                                         task_id,
                                                                         Some(count - 1),
@@ -383,7 +384,7 @@ async fn event_loop<
                                                                         receive_timeout,
                                                                         result)).await;
                                                                 } else {
-                                                                    let _ = sender.send_async(AsyncWebsocketCmd::Receive(
+                                                                    sender.send_async(AsyncWebsocketCmd::Receive(
                                                                         ws_copy,
                                                                         task_id,
                                                                         None,
@@ -400,7 +401,7 @@ async fn event_loop<
                                                                 let error = Error::new(ErrorKind::Other, reason.clone());
                                                                 *result.0.borrow_mut() = Some(Err(error)); //设置接收消息的结果
                                                                 ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
-                                                                ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步接收消息的任务
+                                                                ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步接收消息的任务
                                                                 error!("{}", reason);
                                                             },
                                                         }
@@ -410,12 +411,12 @@ async fn event_loop<
                                         } else {
                                             //有本次接收的最大消息数限制或无本次接收的最大消息限制，当连接流结束时立即退出本次消息接收
                                             *result.0.borrow_mut() = Some(Ok(())); //设置接收消息的结果
-                                            ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步接收消息的任务
+                                            ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步接收消息的任务
                                         }
                                     } else {
                                         //当接收超时，则立即退出本次消息接收
                                         *result.0.borrow_mut() = Some(Ok(())); //设置接收消息的结果
-                                        ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步接收消息的任务
+                                        ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步接收消息的任务
                                     }
                                 }
                             }
@@ -441,7 +442,7 @@ async fn event_loop<
                                 let error = Error::new(ErrorKind::Other, reason.clone());
                                 *result.0.borrow_mut() = Some(Err(error)); //设置关闭连接的结果
                                 ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
-                                ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步关闭连接的任务
+                                ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步关闭连接的任务
                                 error!("{}", reason);
                             } else {
                                 //发送关闭消息成功
@@ -449,14 +450,14 @@ async fn event_loop<
                                 let protocols = ws.0.status.read().get_protocols().to_vec();
                                 *ws.0.status.write() = AsyncWebsocketStatus::Closing(url, protocols, close_code); //设置连接状态
                                 *result.0.borrow_mut() = Some(Ok(())); //设置关闭连接的结果
-                                ws.0.rt.wakeup(&task_id); //唤醒外部运行时的异步关闭连接的任务
+                                ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步关闭连接的任务
                             }
                         }
                     },
                     AsyncWebsocketCmd::Stop(close_reason) => {
                         //停止客户端运行
                         if let Some(ws_con) = current_connection.as_mut() {
-                            let _ = ws_con.send(ws::Message::Close(close_reason)).await;
+                            ws_con.send(ws::Message::Close(close_reason)).await;
                         }
 
                         break;
@@ -548,7 +549,7 @@ impl AsyncWebsocketStatus {
 
     //是否错误
     pub fn is_error(&self) -> bool {
-        if let AsyncWebsocketStatus::Error(_, _, _, _error) = self {
+        if let AsyncWebsocketStatus::Error(_, _, _, error) = self {
             true
         } else {
             false
@@ -743,13 +744,13 @@ impl<
         let ws = self.clone();
 
         let wait_any = rt.clone().wait_any(2);
-        let _ = wait_any.spawn(rt.clone(),
+        wait_any.spawn(rt.clone(),
                        AsyncOpenWebsocket::new(rt.clone(),
                                                task_id,
                                                ws,
                                                is_strict,
                                                timeout).boxed());
-        let _ = wait_any.spawn(rt.clone(),
+        wait_any.spawn(rt.clone(),
                        async move {
                            rt.timeout(timeout as usize).await;
                            Err(Error::new(ErrorKind::TimedOut, format!("Open websocket failed, url: {}, protocols: {:?}, reason: connect timeout", url, protocols)))
@@ -761,7 +762,7 @@ impl<
     pub async fn send(&self, msg: AsyncWebsocketMessage) -> Result<()> {
         let rt = self.0.rt.clone();
         let ws = self.clone();
-        let task_id = rt.alloc();
+        let task_id = rt.alloc::<()>();
 
         AsyncWebsocketSend::new(rt, task_id, ws, msg).await
     }
@@ -780,7 +781,7 @@ impl<
 
         let rt = self.0.rt.clone();
         let ws = self.clone();
-        let task_id = rt.alloc();
+        let task_id = rt.alloc::<()>();
 
         AsyncWebsocketReceive::new(rt, task_id, ws, limit, receive_timeout).await
     }
@@ -789,7 +790,7 @@ impl<
     pub async fn close(&self, code: AsyncWebsocketCloseCode) -> Result<()> {
         let rt = self.0.rt.clone();
         let ws = self.clone();
-        let task_id = rt.alloc();
+        let task_id = rt.alloc::<()>();
 
         AsyncCloseWebsocket::new(rt, task_id, ws, Some(code)).await
     }
@@ -926,7 +927,7 @@ fn split_parts(bin: Bytes, fragment_size: usize) -> Vec<Bytes> {
     let mut len = offset + fragment_size;
     let mut top = bin.len(); //缓冲区当前长度
     loop {
-        top -= len - offset; //更新缓冲区当前长度
+        top -= (len - offset); //更新缓冲区当前长度
         let part = bin.slice(offset..len);
         if top == 0 {
             //分帧完成，则立即返回
@@ -1094,7 +1095,7 @@ impl<
         let result = self.ws.0.rt.pending(&self.task_id, cx.waker().clone());
 
         //异步打开Websocket连接
-        let _ = self.rt.spawn(self.rt.alloc(), async move {
+        self.rt.spawn(async move {
             if let Err(e) = ws.send_to_client(cmd).await {
                 error!("Open websocket failed, reason: {:?}", e);
             }
@@ -1151,7 +1152,7 @@ impl<
 > Future for AsyncWebsocketSend<P, RT> {
     type Output = Result<()>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if let Some(result) = self.result.0.borrow_mut().take() {
             //消息已发送，则返回
             return Poll::Ready(result);
@@ -1170,7 +1171,7 @@ impl<
         let result = self.ws.0.rt.pending(&self.task_id, cx.waker().clone());
 
         //异步发送消息
-        let _ = self.rt.spawn(self.rt.alloc(), async move {
+        self.rt.spawn(async move {
             if let Err(e) = ws.send_to_client(cmd).await {
                 error!("Send websocket failed, reason: {:?}", e);
             }
@@ -1244,7 +1245,7 @@ impl<
         let result = self.ws.0.rt.pending(&self.task_id, cx.waker().clone());
 
         //异步接收消息
-        let _ = self.rt.spawn(self.rt.alloc(), async move {
+        self.rt.spawn(async move {
             if let Err(e) = ws.send_to_client(cmd).await {
                 error!("Receive websocket failed, reason: {:?}", e);
             }
@@ -1306,7 +1307,7 @@ impl<
 > Future for AsyncCloseWebsocket<P, RT> {
     type Output = Result<()>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if let Some(result) = self.result.0.borrow_mut().take() {
             //消息已接收，则返回
             return Poll::Ready(result);
@@ -1325,7 +1326,7 @@ impl<
         let result = self.ws.0.rt.pending(&self.task_id, cx.waker().clone());
 
         //异步关闭Websocket连接
-        let _ = self.rt.spawn(self.rt.alloc(), async move {
+        self.rt.spawn(async move {
             if let Err(e) = ws.send_to_client(cmd).await {
                 error!("Close websocket failed, reason: {:?}", e);
             }

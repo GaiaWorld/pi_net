@@ -14,9 +14,9 @@ use twox_hash::RandomXxHashBuilder;
 use parking_lot::RwLock;
 use mqtt311::{TopicPath, Topic};
 
-use pi_hash::XHashMap;
+use hash::XHashMap;
 
-use pi_mqtt::utils::PathTree;
+use mqtt::utils::PathTree;
 
 #[bench]
 fn bench_topic_tree_by_base(b: &mut Bencher) {

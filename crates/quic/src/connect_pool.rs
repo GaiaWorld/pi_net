@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 use std::cell::UnsafeCell;
 use std::time::{Instant, Duration};
@@ -12,13 +11,15 @@ use quinn_proto::{EndpointEvent, ConnectionEvent, ConnectionHandle, Dir, Transmi
 use dashmap::DashMap;
 use slotmap::{Key, KeyData};
 use bytes::BufMut;
-use log::error;
+use log::{debug, error};
 
-use pi_async::rt::{serial_local_thread::LocalTaskRuntime};
+use pi_async_rt::rt::{AsyncValueNonBlocking,
+                   serial::AsyncRuntime,
+                   serial_local_thread::LocalTaskRuntime};
 use pi_cancel_timer::Timer;
-use udp::SocketHandle as UdpSocketHandle;
+use udp::{Socket, SocketHandle as UdpSocketHandle};
 
-use log::debug;
+use tracing;
 
 use crate::{AsyncService, SocketEvent, QuicEvent,
             connect::QuicSocket,
@@ -81,7 +82,7 @@ impl<P: EndPointPoller> QuicSocketPool<P> {
     /// 在指定运行时上运行Quic连接池
     pub fn run(self,
                rt: LocalTaskRuntime<()>) {
-        let pool = self;
+        let mut pool = self;
         let timeout = Duration::from_millis(pool.timeout);
         rt.spawn(event_loop(rt.clone(), pool, timeout));
     }
@@ -127,11 +128,19 @@ fn event_loop<P: EndPointPoller>(rt: LocalTaskRuntime<()>,
                                                  handle,
                                                  trasmit);
                     },
-                    QuicEvent::StreamReady(handle, ready) => {
+                    QuicEvent::StreamOpen(handle, stream_type, result) => {
+                        //Quic本地连接流打开
+                        handle_local_stream_open(&mut pool,
+                                                 handle,
+                                                 stream_type,
+                                                 result);
+                    },
+                    QuicEvent::StreamReady(handle, stream_id, ready) => {
                         //Quic连接流已就绪
                         handle_streams(&rt,
                                        &mut pool,
                                        handle,
+                                       stream_id,
                                        ready);
                     },
                     QuicEvent::StreamWrite(handle, stream_id, bin) => {
@@ -147,7 +156,7 @@ fn event_loop<P: EndPointPoller>(rt: LocalTaskRuntime<()>,
                     },
                     QuicEvent::Timeout(handle, timeout_event) => {
                         //Quic连接超时
-                        let _ = handle_timeout_timer(&mut pool,
+                        handle_timeout_timer(&mut pool,
                                              handle,
                                              timeout_event);
                     },
@@ -237,7 +246,7 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
         let socket = item.value();
 
         unsafe {
-            // let mut keep_going = false;
+            let mut keep_going = false;
             let now = (&*socket.get())
                 .get_clock()
                 .clone();
@@ -258,13 +267,13 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                 };
 
                 //写入下行数据报文
-                if let Err(_e) = (&*socket.get()).write_transmit(t) {
+                if let Err(e) = (&*socket.get()).write_transmit(t) {
                     //TODO...
                 }
 
                 if count > 20 {
                     //处理的下行数据报文已达上限，则可以继续处理
-                    // keep_going = true;
+                    keep_going = true;
                     break;
                 }
             }
@@ -277,7 +286,7 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                     //当前连接已设置定时器
                     if let Some(expired) = (&*socket.get()).get_expired() {
                         //当前连接已设置了下个到期时间
-                        if expired != &time {
+                        if (expired != &time) {
                             //当前连接的下次到期时间不匹配，则重置当前连接的定时器到下次到期时间
                             let _ = pool.timer.cancel(KeyData::from_ffi(timer_ref).into());
                             let key = pool.timer.push(next_expire_time, (connection_handle_number, SocketEvent::empty()));
@@ -301,9 +310,9 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                 //连接的下次到期时间不存在，则重置当前连接的下次到期时间为空
                 (&mut *socket.get()).set_expired(None);
             }
-            // if (&*socket.get()).get_expired().is_none() {
-                // keep_going = false;
-            // }
+            if (&*socket.get()).get_expired().is_none() {
+                keep_going = false;
+            }
 
             //推动连接所在端点事件的处理
             let mut endpoint_events = VecDeque::new();
@@ -313,7 +322,7 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
             }
             pool
                 .poller
-                .poll(&*socket.get(),
+                .poll((&*socket.get()),
                       ConnectionHandle(connection_handle_number),
                       endpoint_events);
 
@@ -347,45 +356,67 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                     }
                     ConnectionLost { reason } => {
                         //当前连接已丢失，则立即关闭当前连接
-                        let _ = (*socket.get()).close(0,
-                                                   Err(Error::new(ErrorKind::ConnectionAborted,
-                                                                  format!("Quic connect closed, uid: {:?}, remtoe: {:?}, local: {:?}, code: 0, reason: {:?}",
-                                                                          (&*socket.get()).get_uid(),
-                                                                          (&*socket.get()).get_remote(),
-                                                                          (&*socket.get()).get_local(),
-                                                                          reason))));
+                        let _ = (&mut *socket.get()).close(0,
+                                                           Err(Error::new(ErrorKind::ConnectionAborted,
+                                                                          format!("Quic connect closed, uid: {:?}, remtoe: {:?}, local: {:?}, code: 0, reason: {:?}",
+                                                                                  (&*socket.get()).get_uid(),
+                                                                                  (&*socket.get()).get_remote(),
+                                                                                  (&*socket.get()).get_local(),
+                                                                                  reason))));
 
                         debug!("Quic connect closed, uid: {:?}, remtoe: {:?}, local: {:?}",
                             (&*socket.get()).get_uid(),
                             (&*socket.get()).get_remote(),
                             (&*socket.get()).get_local());
                     }
-                    Stream(StreamEvent::Writable { .. }) => {
+                    Stream(StreamEvent::Writable { id }) => {
                         //TODO 当前连接的指定流的可写事件...
                     }
                     Stream(StreamEvent::Opened { dir: Dir::Uni }) => {
                         //TODO 当前连接打开一个或多个单向流事件...
                     }
                     Stream(StreamEvent::Opened { dir: Dir::Bi }) => {
-                        //TODO 当前连接打开一个或多个双向流事件...
+                        //当前连接打开一个或多个双向流事件，并且可能可读
                         debug!("Quic bi stream opened , uid: {:?}, remtoe: {:?}, local: {:?}",
                                  (&*socket.get()).get_uid(),
                                  (&*socket.get()).get_remote(),
                                  (&*socket.get()).get_local());
 
                         if let Some(stream_id) = (&mut *socket.get()).get_connect_mut().streams().accept(Dir::Bi) {
-                            let socket_mut = &mut *socket.get();
-                            socket_mut.accept_main_streams(stream_id); //为已建立的连接设置初始双向流
-                            socket_mut.set_socket_handle(socket.clone()); //为已建立的连接设置Quic连接句柄
-                            socket_mut.set_status(QuicSocketStatus::Connected); //为已建立的连接设置状态为Quic连接已建立
+                            let socket_mut = (&mut *socket.get());
+                            if stream_id.0 == 0 {
+                                //创建初始双向流
+                                socket_mut.accept_main_streams(stream_id); //为已建立的连接设置初始双向流
+                                socket_mut.set_socket_handle(socket.clone()); //为已建立的连接设置Quic连接句柄
+                                socket_mut.set_status(QuicSocketStatus::Connected); //为已建立的连接设置状态为Quic连接已建立
+
+                                let service = pool.service.clone();
+                                rt
+                                    .spawn(service
+                                        .handle_connected(socket_mut.get_socket_handle(),
+                                                          Ok(()))); //异步调用连接回调
+                            } else {
+                                //创建扩展双向流
+                                socket_mut.accept_expanding_streams(stream_id, Dir::Bi);
+
+                                let service = pool.service.clone();
+                                rt
+                                    .spawn(service
+                                        .handle_opened_expanding_stream(socket_mut.get_socket_handle(),
+                                                                        stream_id,
+                                                                        Dir::Bi,
+                                                                        Ok(()))); //异步调用连接回调
+                            }
+
+                            //尝试读取新打开的流
+                            (&mut *socket.get())
+                                .set_ready(stream_id, QuicSocketReady::Readable);
 
                             debug!("Open bi stream accepted, uid: {:?}, remtoe: {:?}, local: {:?}, stream_id: {:?}",
                                 (&*socket.get()).get_uid(),
                                 (&*socket.get()).get_remote(),
                                 (&*socket.get()).get_local(),
                                 stream_id);
-                            let service = pool.service.clone();
-                            rt.spawn(service.handle_connected(socket_mut.get_socket_handle(), Ok(()))); //异步调用连接回调
                         } else {
                             //创建Quic连接初始流失败，则继续处理下一个接受的Quic连接
                             error!("Open bi stream unaccepted, uid: {:?}, remote: {:?}, local: {:?}, reason: invalid init stream",
@@ -399,7 +430,8 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                     }
                     Stream(StreamEvent::Readable { id }) => {
                         //当前连接的指定流的可读事件
-                        (&mut *socket.get()).set_ready(QuicSocketReady::Readable);
+                        (&mut *socket.get())
+                            .set_ready(id, QuicSocketReady::Readable);
 
                         debug!("Quic stream readable, uid: {:?}, remtoe: {:?}, local: {:?}, stream_id: {:?}",
                             (&*socket.get()).get_uid(),
@@ -407,7 +439,7 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                             (&*socket.get()).get_local(),
                             id);
                     }
-                    Stream(StreamEvent::Available { .. }) => {
+                    Stream(StreamEvent::Available { dir }) => {
                         //TODO 当前连接可打开指定方向的流事件...
                     }
                     Stream(StreamEvent::Finished { id }) => {
@@ -431,14 +463,14 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 
                         if (&mut *socket.get()).is_send_finished() {
                             //当前连接的所有流都已完成，则继续关闭当前连接
-                            let _ = (*socket.get()).close(code,
-                                                       Err(Error::new(ErrorKind::ConnectionAborted,
-                                                                      format!("Quic stream closed, uid: {:?}, remtoe: {:?}, local: {:?}, stream_id: {:?}, code: {:?}, reason: peer already closed",
-                                                                              (&*socket.get()).get_uid(),
-                                                                              (&*socket.get()).get_remote(),
-                                                                              (&*socket.get()).get_local(),
-                                                                              code,
-                                                                              id))));
+                            let _ = (&mut *socket.get()).close(code,
+                                                               Err(Error::new(ErrorKind::ConnectionAborted,
+                                                                              format!("Quic stream closed, uid: {:?}, remtoe: {:?}, local: {:?}, stream_id: {:?}, code: {:?}, reason: peer already closed",
+                                                                                      (&*socket.get()).get_uid(),
+                                                                                      (&*socket.get()).get_remote(),
+                                                                                      (&*socket.get()).get_local(),
+                                                                                      code,
+                                                                                      id))));
                         }
 
                         debug!("Quic stream closed, uid: {:?}, remtoe: {:?}, local: {:?}, stream_id: {:?}, code: {:?}",
@@ -456,7 +488,7 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 
 // 处理所有Quic连接接收和超时
 #[inline]
-fn handle_connection_received<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
+fn handle_connection_received<P: EndPointPoller>(_rt: &LocalTaskRuntime<()>,
                                                  pool: &mut QuicSocketPool<P>,
                                                  connection_handle: ConnectionHandle,
                                                  event: ConnectionEvent) {
@@ -479,7 +511,7 @@ fn handle_connection_received<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 
 // 处理所有准备写数据报文的Quic连接
 #[inline]
-fn handle_connection_sended<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
+fn handle_connection_sended<P: EndPointPoller>(_rt: &LocalTaskRuntime<()>,
                                                pool: &mut QuicSocketPool<P>,
                                                connection_handle: ConnectionHandle,
                                                transmit: Transmit) {
@@ -498,23 +530,51 @@ fn handle_connection_sended<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 #[inline]
 fn handle_stream_write_event<P: EndPointPoller>(pool: &mut QuicSocketPool<P>,
                                                 connection_handle: ConnectionHandle,
-                                                stream_id: Option<StreamId>,
+                                                stream_id: StreamId,
                                                 buf: Vec<u8>) {
     //当前连接池有连接流的写事件
     if let Some(item) = pool.sockets.get(&connection_handle.0) {
         //写事件指定的连接存在
         let socket = item.value();
         unsafe {
-            (&mut *socket.get()).set_ready(QuicSocketReady::Writable);
-            if let Some(_stream_id) = stream_id {
-                //TODO 向当前连接的指定流的写缓冲写入数据...
-            } else {
-                //向当前连接的主流的写缓冲写入数据
-                if let Some(write_buf) = (&mut *socket.get()).get_write_buffer() {
-                    write_buf.put_slice(buf.as_ref());
-                }
+            //向当前连接的指定流的写缓冲写入数据.
+            (&mut *socket.get()).set_ready(stream_id, QuicSocketReady::Writable);
+            if let Some(write_buf) = (&mut *socket.get()).get_write_buffer(&stream_id) {
+                write_buf.put_slice(buf.as_ref());
             }
         }
+    }
+}
+
+// 处理本地连接流打开
+#[inline]
+fn handle_local_stream_open<P: EndPointPoller>(pool: &mut QuicSocketPool<P>,
+                                               connction_handle: ConnectionHandle,
+                                               stream_type: Dir,
+                                               result: AsyncValueNonBlocking<Result<StreamId>>) {
+    if let Some(item) = pool.sockets.get(&connction_handle.0) {
+        //指定的连接存在
+        let socket = item.value();
+        let socket_mut = unsafe { (&mut *socket.get()) };
+
+        if let Some(stream_id) = socket_mut.get_connection_mut().streams().open(stream_type) {
+            //创建流成功，则为当前连接设置流的唯一id
+            socket_mut.add_expanding_stream(stream_id, stream_type);
+            result.set(Ok(stream_id));
+        } else {
+            //创建流失败，则立即返回错误原因
+            result.set(Err(Error::new(ErrorKind::ConnectionAborted,
+                           format!("Open expanding stream failed, uid: {:?}, remote: {:?}, local: {:?}, stream_type: {:?}, reason: open expanding stream error",
+                                   socket_mut.get_uid(),
+                                   socket_mut.get_remote(),
+                                   socket_mut.get_local(),
+                                   stream_type))));
+        }
+    } else {
+        //指定的连接不存在
+        result.set(Err(Error::new(ErrorKind::ConnectionAborted,
+                                  format!("Open expanding stream failed, uid: {:?}, reason: connection not exist",
+                                          stream_type))));
     }
 }
 
@@ -523,6 +583,7 @@ fn handle_stream_write_event<P: EndPointPoller>(pool: &mut QuicSocketPool<P>,
 fn handle_streams<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                                      pool: &mut QuicSocketPool<P>,
                                      connction_handle: ConnectionHandle,
+                                     stream_id: StreamId,
                                      ready: QuicSocketReady) {
     //处理所有连接流的就绪请求
     if let Some(item) = pool.sockets.get(&connction_handle.0) {
@@ -535,28 +596,29 @@ fn handle_streams<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 
             rt.spawn(async move {
                 let mut close_reason: Option<Result<()>> = None;
-                let socket_mut = unsafe { &mut *socket_copy.get() };
 
-                match socket_mut.recv() {
+                let socket_mut = unsafe { (&mut *socket_copy.get()) };
+
+                match socket_mut.recv(stream_id) {
                     Ok(0) => {
                         //本次接收已阻塞，则立即结束本次接收，当前流会等待下次接收
                         return;
                     },
                     Ok(len) => {
                         //按需接收完成，则执行已读回调
-                        if socket_mut.is_wait_wakeup_read_ready() {
+                        if socket_mut.is_wait_wakeup_read_ready(&stream_id) {
                             //当前连接有需要唤醒的异步准备读取器，则唤醒当前的异步准备读取器
-                            socket_mut.wakeup_read_ready();
+                            socket_mut.wakeup_read_ready(&stream_id);
                         } else {
                             if socket_mut.is_hibernated() {
                                 //当前连接已休眠，则将本次读任务加入当前连接的休眠任务队列，等待连接被唤醒后再继续处理
                                 let socket_handle = socket_mut.get_socket_handle();
-                                socket_mut.push_hibernated_task(service.handle_readed(socket_handle, Ok(len)));
+                                socket_mut.push_hibernated_task(service.handle_readed(socket_handle, stream_id, Ok(len)));
                             } else {
                                 //当前连接没有需要唤醒的异步准备读取器，则调用接收回调
                                 let socket_handle = socket_mut.get_socket_handle();
                                 drop(socket_mut); //在继续调用前释放连接引用
-                                service.handle_readed(socket_handle, Ok(len)).await;
+                                service.handle_readed(socket_handle, stream_id, Ok(len)).await;
                             }
                         }
                     },
@@ -575,26 +637,29 @@ fn handle_streams<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 
             rt.spawn(async move {
                 let mut close_reason: Option<Result<()>> = None;
-                let socket_mut = unsafe { (&mut *socket_copy.get()) };
 
-                match socket_mut.send() {
-                    Ok(_len) => {
-                        //发送完成，并执行已写回调
-                        if socket_mut.is_hibernated() {
-                            //当前连接已休眠，则将本次写任务加入当前连接的休眠任务队列，等待连接被唤醒后再继续处理
-                            let socket_handle = socket_mut.get_socket_handle();
-                            socket_mut.push_hibernated_task(service.handle_writed(socket_handle, Ok(())));
-                        } else {
-                            //调用发送回调
-                            let socket_handle = socket_mut.get_socket_handle();
-                            drop(socket_mut); //在继续调用前释放连接引用
-                            service.handle_writed(socket_handle, Ok(())).await;
-                        }
-                    },
-                    Err(e) => {
-                        //发送失败，准备关闭当前连接
-                        close_reason = Some(Err(e));
-                    },
+                for stream_id in unsafe { (&*socket_copy.get()).get_stream_ids() } {
+                    let socket_mut = unsafe { (&mut *socket_copy.get()) };
+
+                    match socket_mut.send(stream_id) {
+                        Ok(_len) => {
+                            //发送完成，并执行已写回调
+                            if socket_mut.is_hibernated() {
+                                //当前连接已休眠，则将本次写任务加入当前连接的休眠任务队列，等待连接被唤醒后再继续处理
+                                let socket_handle = socket_mut.get_socket_handle();
+                                socket_mut.push_hibernated_task(service.handle_writed(socket_handle, stream_id, Ok(())));
+                            } else {
+                                //调用发送回调
+                                let socket_handle = socket_mut.get_socket_handle();
+                                drop(socket_mut); //在继续调用前释放连接引用
+                                service.handle_writed(socket_handle, stream_id, Ok(())).await;
+                            }
+                        },
+                        Err(e) => {
+                            //发送失败，准备关闭当前连接
+                            close_reason = Some(Err(e));
+                        },
+                    }
                 }
             });
         }
@@ -630,23 +695,15 @@ fn handle_stream_close<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
             (&mut *socket.get()).force_close(code, reason);
 
             //关闭连接的流
-            if (&mut *socket.get()).is_client() {
-                //当前连接是客户端，则直接关闭连接
-                let _ = pool
-                    .event_send
-                    .send(QuicEvent::ConnectionClose(ConnectionHandle(connection_handle.0)));
+            if let Err(e) = (&mut *socket.get()).shutdown(stream_id, code) {
+                error!("{:?}", e);
             } else {
-                //当前连接是服务端，且已完成所有发送，则继续关闭当前连接的流
-                if let Err(e) = (&mut *socket.get()).shutdown(code) {
-                    error!("{:?}", e);
-                } else {
-                    //关闭当前连接的流成功
-                    if code == 0 {
-                        //当前连接的对端已关闭，则继续关闭当前连接
-                        let _ = pool
-                            .event_send
-                            .send(QuicEvent::ConnectionClose(connection_handle));
-                    }
+                //关闭当前连接的流成功
+                if code == 0 {
+                    //当前连接的对端已关闭，则继续关闭当前连接
+                    let _ = pool
+                        .event_send
+                        .send(QuicEvent::ConnectionClose(connection_handle));
                 }
             }
         }

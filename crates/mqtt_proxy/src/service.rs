@@ -1,9 +1,11 @@
 use std::sync::Arc;
 use std::net::SocketAddr;
+use std::result::Result as GenResult;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use futures::future::{FutureExt, LocalBoxFuture};
+use futures::StreamExt;
 use log::warn;
 
 use pi_atom::Atom;
@@ -11,10 +13,10 @@ use pi_gray::GrayVersion;
 use pi_handler::{Args, Handler};
 
 use tcp::{Socket,
-          utils::{ContextHandle, Hibernate, Ready}};
+          utils::{ContextHandle, SocketContext, Hibernate, Ready}};
 use mqtt::server::MqttBrokerProtocol;
 use mqtt::broker::{MQTT_RESPONSE_SYS_TOPIC, MqttBrokerListener, MqttBrokerService};
-use mqtt::session::MqttConnect;
+use mqtt::session::{MqttSession, MqttConnect};
 use mqtt::utils::BrokerSession;
 
 ///
@@ -229,7 +231,7 @@ impl<S: Socket> MqttConnectHandle<S> {
 
     /// 发送指定主题的数据
     pub fn send(&self, topic: &String, bin: Vec<u8>) {
-        let _ = self.connect.send(topic, Arc::new(bin));
+        self.connect.send(topic, Arc::new(bin));
     }
 
     /// 回应指定请求
@@ -320,7 +322,7 @@ impl<S: Socket> MqttBrokerListener<S> for MqttProxyListener {
     fn closed(&self,
               protocol: MqttBrokerProtocol,
               connect: Arc<dyn MqttConnect<S>>,
-              context: BrokerSession,
+              mut context: BrokerSession,
               reason: Result<()>) -> LocalBoxFuture<'static, ()> {
         //Mqtt连接已关闭
         if let Err(e) = &reason {

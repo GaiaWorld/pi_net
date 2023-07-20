@@ -6,7 +6,8 @@ use parking_lot::RwLock;
 
 use pi_hash::XHashMap;
 
-use tcp::{connect::TcpSocket,
+use tcp::{Socket,
+          connect::TcpSocket,
           tls_connect::TlsSocket};
 use ws::{connect::WsSocket,
          utils::ChildProtocol};
@@ -15,18 +16,22 @@ use quic::{SocketHandle, AsyncService};
 use crate::{v311::{self, WsMqtt311},
             tls_v311::{self, WssMqtt311},
             broker::{MqttBrokerListener, MqttBrokerService},
-            session::MqttSession,
+            session::{MqttSession, QosZeroSession},
             quic_v311::{self, QuicMqtt311},
             quic_broker::{MqttBrokerListener as QuicMqttBrokerListener, MqttBrokerService as QuicMqttBrokerService},
             quic_session::MqttSession as QuicMqttSession};
 
-// Mqtt代理表和代理映射表
+///
+/// Mqtt代理表和代理映射表
+///
 lazy_static! {
     static ref MQTT_BROKERS: RwLock<XHashMap<String, MqttBrokerProtocol>> = RwLock::new(XHashMap::default());
     static ref MQTT_BROKERS_MAP: RwLock<XHashMap<u16, String>> = RwLock::new(XHashMap::default());
 }
 
-// Mqtt的Quic代理表和代理映射表
+///
+/// Mqtt的Quic代理表和代理映射表
+///
 lazy_static! {
     static ref QUIC_MQTT_BROKERS: RwLock<XHashMap<String, MqttBrokerProtocol>> = RwLock::new(XHashMap::default());
     static ref QUIC_MQTT_BROKERS_MAP: RwLock<XHashMap<u16, String>> = RwLock::new(XHashMap::default());

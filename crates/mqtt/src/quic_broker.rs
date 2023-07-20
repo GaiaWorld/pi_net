@@ -11,7 +11,9 @@ use crate::{server::MqttBrokerProtocol,
             quic_session::{MqttConnect, QosZeroSession},
             utils::{PathTree, QuicBrokerSession}};
 
-// Mqtt连接回应的系统主题
+///
+/// Mqtt连接回应的系统主题
+///
 lazy_static! {
     pub static ref MQTT_RESPONSE_SYS_TOPIC: String = "$r".to_string();
 }
@@ -368,7 +370,7 @@ impl MqttBroker {
                 }
 
                 //线程安全的确认当前主题的订阅缓存不为空，则初始化订阅表失败，并重试
-                // self.subscribed(is_public, topic, qos, retain)
+                self.subscribed(is_public, topic, qos, retain)
             } else {
                 None
             }

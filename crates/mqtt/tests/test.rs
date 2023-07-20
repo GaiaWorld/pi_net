@@ -7,9 +7,10 @@ use std::io::{ErrorKind, Result, Error};
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use mqtt311::{TopicPath, Topic};
+use quinn_proto::{TransportConfig, VarInt};
 use env_logger;
 
-use pi_async::rt::{serial::AsyncRuntimeBuilder, AsyncValue};
+use pi_async_rt::rt::{serial::AsyncRuntimeBuilder, AsyncValue};
 
 use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
           connect::TcpSocket,
@@ -23,7 +24,7 @@ use ws::{server::WebsocketListener,
 use udp::terminal::UdpTerminal;
 use quic::{server::{QuicListener, ClientCertVerifyLevel},
            utils::QuicSocketReady};
-use pi_mqtt::{server::{register_mqtt_listener, register_mqtt_service,
+use mqtt::{server::{register_mqtt_listener, register_mqtt_service,
                     register_mqtts_listener, register_mqtts_service,
                     register_quic_mqtt_listener, register_quic_mqtt_service,
                     MqttBrokerProtocol, WsMqttBrokerFactory, WssMqttBrokerFactory, QuicMqttBrokerFactory},
@@ -384,6 +385,8 @@ fn test_quic_mqtt_311() {
     register_quic_mqtt_listener(broker_name, service.clone());
     register_quic_mqtt_service(broker_name, service);
 
+    let mut transport_config = TransportConfig::default();
+    transport_config.max_concurrent_bidi_streams(VarInt::from_u32(1024));
     let listener = QuicListener::new(vec![quic_rt],
                                      "./tests/quic.com.crt",
                                      "./tests/quic.com.key",
@@ -391,8 +394,10 @@ fn test_quic_mqtt_311() {
                                      Default::default(),
                                      65535,
                                      65535,
+                                     100000,
+                                     Some(Arc::new(transport_config)),
                                      broker_factory.new_quic_service(),
-                                     10)
+                                     1)
         .expect("Create quic listener failed");
     let addrs = SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), port);
 

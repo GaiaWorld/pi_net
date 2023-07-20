@@ -1,18 +1,19 @@
 use std::rc::Rc;
 use std::sync::Arc;
+use std::path::Path;
 use std::net::SocketAddr;
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
-use std::path::Path;
 use std::time::{Instant, SystemTime};
 use std::io::{Error, Result, ErrorKind};
 
 use futures::future::{FutureExt, LocalBoxFuture};
-use quinn_proto::{EndpointConfig, ServerConfig, Endpoint, EndpointEvent, ConnectionHandle};
+use quinn_proto::{EndpointConfig, ServerConfig, Endpoint, EndpointEvent, ConnectionHandle, TransportConfig};
 use crossbeam_channel::{Sender, unbounded};
+use futures::task::SpawnExt;
 use rustls;
 
-use pi_async::rt::serial_local_thread::LocalTaskRuntime;
+use pi_async_rt::rt::serial_local_thread::LocalTaskRuntime;
 use pi_hash::XHashMap;
 use udp::{AsyncService, SocketHandle, TaskResult};
 
@@ -57,7 +58,7 @@ impl AsyncService for QuicListener {
             match result {
                 Err(e) => {
                     //Udp接收数据失败
-                    let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                    handle.close(Err(Error::new(ErrorKind::Other,
                                                     format!("Receive udp failed, uid: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                                                         handle.get_uid(),
                                                         handle.get_remote(),
@@ -80,7 +81,7 @@ impl AsyncService for QuicListener {
                             .event_sents
                             .get(&(connection_handle.0 % listener.0.event_sents.len())) {
                             //向连接所在连接池发送Socket事件
-                            let _ = event_sent
+                            let _= event_sent
                                 .send(QuicEvent::ConnectionReceived(connection_handle, event));
                         }
                     }
@@ -112,7 +113,7 @@ impl EndPointPoller for QuicListener {
             handle: ConnectionHandle,
             events: VecDeque<EndpointEvent>) {
         let listener = self.clone();
-        socket
+        let _ = socket
             .get_udp_handle()
             .spawn(async move {
                 handle_endpoint_events(listener,
@@ -133,6 +134,8 @@ impl QuicListener {
                                config: EndpointConfig,
                                readed_read_size_limit: usize,
                                readed_write_size_limit: usize,
+                               concurrent_connections: u32,
+                               transport_config: Option<Arc<TransportConfig>>,
                                service: Arc<dyn QuicAsyncService>,
                                timeout: u64) -> Result<Self> {
         match load_certs_file(server_certs_path) {
@@ -149,7 +152,7 @@ impl QuicListener {
                     },
                     Ok(key) => {
                         //加载指定的私钥成功
-                        let server_config = match verify_level {
+                        let mut server_config = match verify_level {
                             ClientCertVerifyLevel::Ignore => {
                                 //不需要严格验证客户端证书
                                 match ServerConfig::with_single_cert(certs, key) {
@@ -187,6 +190,11 @@ impl QuicListener {
                         };
 
                         //创建Quic状态机
+                        server_config.concurrent_connections(concurrent_connections); //设置最大并发连接数
+                        if let Some(transport) = transport_config {
+                            //使用外部自定义传输配置
+                            server_config.transport = transport;
+                        }
                         let end_point = Rc::new(UnsafeCell::new(Endpoint::new(Arc::new(config), Some(Arc::new(server_config)))));
 
                         //创建Quic连接接受器

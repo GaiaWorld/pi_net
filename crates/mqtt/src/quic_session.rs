@@ -11,7 +11,7 @@ use mqtt311::{MqttWrite, QoS, LastWill, Packet, Publish};
 use quic::{SocketHandle,
            utils::{ContextHandle, Hibernate, QuicSocketReady}};
 
-use crate::{utils::{ValueEq, QuicBrokerSession}};
+use crate::utils::{ValueEq, QuicBrokerSession};
 
 ///
 /// Mqtt会话
@@ -351,7 +351,8 @@ impl MqttConnect for QosZeroSession {
             }
 
             //通过Ws连接发送指定报文
-            return connect.write_ready(buf.into_inner());
+            return connect.write_ready(connect.get_main_stream_id().unwrap().clone(),
+                                       buf.into_inner());
         }
 
         Ok(())
@@ -359,7 +360,8 @@ impl MqttConnect for QosZeroSession {
 
     fn hibernate(&self, ready: QuicSocketReady) -> Option<Hibernate> {
         if let Some(connect) = &self.connect {
-            connect.hibernate(ready)
+            connect.hibernate(connect.get_main_stream_id().unwrap().clone(),
+                              ready)
         } else {
             None
         }

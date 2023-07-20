@@ -1,9 +1,9 @@
 [package]
 name = "pi_blocking_udp"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "pi_blocking_udp"
-repository = "https://github.com/GaiaWorld/pi_net"
+repository = "https://github.com/GaiaWorld/pi_net/tree/crateio"
 license = "MIT OR Apache-2.0"
 keywords = ["pi", "blocking_udp"]
 
@@ -11,17 +11,16 @@ keywords = ["pi", "blocking_udp"]
 futures = "0.3"
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
-dashmap = "4.0"
+dashmap = "5.5"
 socket2 = "0.5"
-bytes = "1.3"
+bytes = "1.4"
 fnv = "1.0"
 lazy_static = "1.4"
 log = "0.4"
 pi_slotmap = "0.1"
 pi_hash = "0.1"
-pi_async = "0.5"
+pi-async-rt = "0.1"
 async-channel = "1.8"
-udp = {version = "0.1", path = "../udp", package = "pi_udp" }
 
 [dev-dependencies]
 env_logger = "0.9"

@@ -1,21 +1,21 @@
 use std::thread;
 use std::sync::Arc;
-use std::time::Duration;
 use std::io::Result;
+use std::time::Duration;
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use httparse::{EMPTY_HEADER, Request};
 use bytes::{BufMut, BytesMut};
 use env_logger;
 
-use pi_async::rt::{serial::AsyncRuntimeBuilder};
+use pi_async_rt::rt::serial::AsyncRuntimeBuilder;
 
-use tcp::{Socket, SocketConfig, SocketEvent,
+use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
           connect::TcpSocket,
           tls_connect::TlsSocket,
           server::{PortsAdapterFactory, SocketListener},
-          utils::{TlsConfig}};
-use pi_ws::{server::WebsocketListener,
+          utils::{TlsConfig, Ready}};
+use ws::{server::WebsocketListener,
          connect::WsSocket,
          utils::{ChildProtocol, WsSession}};
 
@@ -32,7 +32,7 @@ fn test_parse_http_header() {
     if let Ok(status) = req.parse(bytes.as_ref()) {
         if status.is_partial() {
             match req.parse(part1) {
-                Err(e) => panic!("{:?}", e),
+                Err(e) => panic!(e),
                 Ok(status) => {
                     println!("{}", status.is_partial());
                 },
@@ -87,8 +87,8 @@ impl<S: Socket> ChildProtocol<S> for TestChildProtocol {
     }
 
     fn close_protocol(&self,
-                      _connect: WsSocket<S>,
-                      _context: WsSession,
+                      connect: WsSocket<S>,
+                      context: WsSession,
                       reason: Result<()>) -> LocalBoxFuture<'static, ()> {
         async move {
             if let Err(e) = reason {
@@ -100,9 +100,9 @@ impl<S: Socket> ChildProtocol<S> for TestChildProtocol {
     }
 
     fn protocol_timeout(&self,
-                        _connect: WsSocket<S>,
-                        _context: &mut WsSession,
-                        _event: SocketEvent) -> LocalBoxFuture<'static, Result<()>> {
+                        connect: WsSocket<S>,
+                        context: &mut WsSession,
+                        event: SocketEvent) -> LocalBoxFuture<'static, Result<()>> {
         async move {
             println!("websocket timeout");
 
@@ -144,7 +144,7 @@ fn test_websocket_listener() {
         Err(e) => {
             println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
         },
-        Ok(_driver) => {
+        Ok(driver) => {
             println!("===> Websocket Listener Bind Ok");
         }
     }
@@ -195,7 +195,7 @@ fn test_tls_websocket_listener() {
         Err(e) => {
             println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
         },
-        Ok(_driver) => {
+        Ok(driver) => {
             println!("===> Websocket Listener Bind Ok");
         }
     }

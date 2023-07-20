@@ -1,4 +1,5 @@
 use std::ptr;
+use std::any::Any;
 use std::sync::Arc;
 use std::task::Waker;
 use std::time::Duration;
@@ -9,12 +10,13 @@ use std::io::{Error, Result, ErrorKind};
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use futures::future::LocalBoxFuture;
-use quinn_proto::{ConnectionHandle, ConnectionEvent, StreamId, Transmit};
+use quinn_proto::{ConnectionHandle, ConnectionEvent, Dir, StreamId, Transmit};
 use crossbeam_channel::Sender;
 use crossbeam_utils::atomic::AtomicCell;
 use bytes::BytesMut;
-use pi_async::prelude::SpinLock;
-use pi_async::rt::serial::AsyncValueNonBlocking;
+use pi_async_rt::{lock::spin_lock::SpinLock,
+                  rt::{AsyncValueNonBlocking,
+                       serial_local_thread::LocalTaskRuntime}};
 
 use udp::SocketHandle as UdpSocketHandle;
 
@@ -37,14 +39,23 @@ pub trait AsyncService: Send + Sync + 'static {
                         handle: SocketHandle,
                         result: Result<()>) -> LocalBoxFuture<'static, ()>;
 
+    /// 异步处理已打开扩展流
+    fn handle_opened_expanding_stream(&self,
+                                      handle: SocketHandle,
+                                      stream_id: StreamId,
+                                      stream_type: Dir,
+                                      result: Result<()>) -> LocalBoxFuture<'static, ()>;
+
     /// 异步处理已读
     fn handle_readed(&self,
                      handle: SocketHandle,
+                     stream_id: StreamId,
                      result: Result<usize>) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已写
     fn handle_writed(&self,
                      handle: SocketHandle,
+                     stream_id: StreamId,
                      result: Result<()>) -> LocalBoxFuture<'static, ()>;
 
     /// 异步处理已关闭
@@ -103,7 +114,9 @@ impl SocketHandle {
         }
 
         for handle in handles {
-            handle.write_ready(payload.clone())?;
+            for stream_id in handle.get_stream_ids() {
+                handle.write_ready(stream_id, payload.clone())?;
+            }
         }
 
         Ok(())
@@ -121,6 +134,24 @@ impl SocketHandle {
             .status
             .load(Ordering::Acquire)
             .into()
+    }
+
+    /// 获取本地Udp连接地址
+    pub fn get_local_udp(&self) -> &SocketAddr {
+        unsafe {
+            (&*self.0.inner.get())
+                .get_udp_handle()
+                .get_local()
+        }
+    }
+
+    /// 获取远端Udp连接地址
+    pub fn get_remote_udp(&self) -> Option<&SocketAddr> {
+        unsafe {
+            (&*self.0.inner.get())
+                .get_udp_handle()
+                .get_remote()
+        }
     }
 
     /// 获取本地连接地址
@@ -148,6 +179,13 @@ impl SocketHandle {
     pub fn get_udp_uid(&self) -> usize {
         unsafe {
             (&*self.0.inner.get()).get_udp_handle().get_uid()
+        }
+    }
+
+    /// 判断当前连接是否是客户端连接
+    pub fn is_client(&self) -> bool {
+        unsafe {
+            (&*self.0.inner.get()).is_client()
         }
     }
 
@@ -211,45 +249,66 @@ impl SocketHandle {
     }
 
     /// 打开连接的主流，主流一定是双向流
-    pub fn open_main_streams(&self) -> Result<()> {
+    pub(crate) fn open_main_streams(&self) -> Result<()> {
         unsafe {
             (&mut *self.0.inner.get()).open_main_streams()
         }
     }
 
-    /// 设置当前连接感兴趣的事件
-    pub fn set_ready(&self, ready: QuicSocketReady) {
+    /// 打开连接的扩展流，可以指定流的类型
+    pub async fn open_expanding_stream(&self, stream_type: Dir) -> Result<StreamId> {
         unsafe {
-            (&*self.0.inner.get()).set_ready(ready);
+            (&*self.0.inner.get()).open_expanding_stream(stream_type).await
         }
     }
 
-    /// 通知连接读就绪
-    pub fn read_ready(&self, adjust: usize) -> GenResult<AsyncValueNonBlocking<usize>, usize> {
+    /// 设置当前连接感兴趣的事件
+    pub fn set_ready(&self,
+                     stream_id: StreamId,
+                     ready: QuicSocketReady) {
         unsafe {
-            (&mut *self.0.inner.get()).read_ready(adjust)
+            (&*self.0.inner.get()).set_ready(stream_id, ready);
+        }
+    }
+
+    /// 获取连接的所有流唯一id
+    pub fn get_stream_ids(&self) -> Vec<StreamId> {
+        unsafe {
+            (&*self.0.inner.get()).get_stream_ids()
+        }
+    }
+
+    /// 通知连接的指定流读就绪
+    pub fn read_ready(&self,
+                      stream_id: &StreamId,
+                      adjust: usize) -> GenResult<AsyncValueNonBlocking<usize>, usize> {
+        unsafe {
+            (&mut *self.0.inner.get()).read_ready(stream_id, adjust)
         }
     }
 
     /// 获取连接的输入缓冲区的剩余未读字节数
-    pub fn read_buffer_remaining(&self) -> Option<usize> {
+    pub fn read_buffer_remaining(&self, stream_id: &StreamId) -> Option<usize> {
         unsafe {
-            (&*self.0.inner.get()).read_buffer_remaining()
+            (&*self.0.inner.get()).read_buffer_remaining(stream_id)
         }
     }
 
     /// 获取连接的输入缓冲区的只读引用
-    pub fn get_read_buffer(&self) -> Arc<SpinLock<Option<BytesMut>>> {
+    pub fn get_read_buffer(&self,
+                           stream_id: &StreamId) -> Option<Arc<SpinLock<Option<BytesMut>>>> {
         unsafe {
-            (&*self.0.inner.get()).get_read_buffer()
+            (&*self.0.inner.get()).get_read_buffer(stream_id)
         }
     }
 
     /// 通知连接写就绪，可以开始发送指定的数据
-    pub fn write_ready<B>(&self, buf: B) -> Result<()>
+    pub fn write_ready<B>(&self,
+                          stream_id: StreamId,
+                          buf: B) -> Result<()>
         where B: AsRef<[u8]> + 'static {
         unsafe {
-            (&mut *self.0.inner.get()).write_ready(buf)
+            (&*self.0.inner.get()).write_ready(stream_id, buf)
         }
     }
 
@@ -276,9 +335,12 @@ impl SocketHandle {
 
     /// 获取当前连接的休眠对象，返回空表示连接已关闭
     pub fn hibernate(&self,
+                     stream_id: StreamId,
                      ready: QuicSocketReady) -> Option<Hibernate> {
         unsafe {
-            (&*self.0.inner.get()).hibernate(self.clone(), ready)
+            (&*self.0.inner.get()).hibernate(self.clone(),
+                                             stream_id,
+                                             ready)
         }
     }
 
@@ -302,6 +364,27 @@ impl SocketHandle {
     pub fn wakeup(&self, result: Result<()>) -> bool {
         unsafe {
             (&mut *self.0.inner.get()).wakeup(result)
+        }
+    }
+
+    /// 线程安全的获取连接所在运行时
+    pub fn get_runtime(&self) -> Option<LocalTaskRuntime<()>> {
+        unsafe {
+            (&*self.0.inner.get()).get_runtime()
+        }
+    }
+
+    /// 线程安全的派发一个异步任务到连接所在运行时
+    pub fn spawn(&self, task: LocalBoxFuture<'static, ()>) {
+        unsafe {
+            (&*self.0.inner.get()).spawn(task);
+        }
+    }
+
+    /// 关闭指定的流
+    pub fn close_expanding_stream(&self, stream_id: StreamId) -> Result<()> {
+        unsafe {
+            (&*self.0.inner.get()).close_expanding_stream(stream_id)
         }
     }
 
@@ -368,7 +451,7 @@ impl SocketEvent {
             return false;
         }
 
-        self.inner = Box::into_raw(Box::new(event)) as *mut T as *mut ();
+        self.inner = Box::into_raw(Box::new(event)) as *mut ();
         true
     }
 
@@ -389,15 +472,16 @@ impl SocketEvent {
 ///
 #[derive(Debug)]
 pub enum QuicEvent {
-    Accepted(QuicSocket),                                       //Quic已接受连接
-    ConnectionReceived(ConnectionHandle, ConnectionEvent),      //Quic连接接收数据
-    ConnectionSend(ConnectionHandle, Transmit),                 //Quic连接发送数据
-    StreamReady(ConnectionHandle, QuicSocketReady),             //Quic流就绪
-    StreamWrite(ConnectionHandle, Option<StreamId>, Vec<u8>),   //Quic流写数据
-    RebindUdp(UdpSocketHandle),                                 //Quic重绑定Udp连接句柄
-    Timeout(ConnectionHandle, Option<(usize, SocketEvent)>),    //Quic连接超时
-    StreamClose(ConnectionHandle, Option<StreamId>, u32),       //Quic流关闭
-    ConnectionClose(ConnectionHandle),                          //Quic连接关闭
+    Accepted(QuicSocket),                                                       //Quic已接受连接
+    ConnectionReceived(ConnectionHandle, ConnectionEvent),                      //Quic连接接收数据
+    ConnectionSend(ConnectionHandle, Transmit),                                 //Quic连接发送数据
+    StreamOpen(ConnectionHandle, Dir, AsyncValueNonBlocking<Result<StreamId>>), //Quic流打开
+    StreamReady(ConnectionHandle, StreamId, QuicSocketReady),                   //Quic流就绪
+    StreamWrite(ConnectionHandle, StreamId, Vec<u8>),                           //Quic流写数据
+    RebindUdp(UdpSocketHandle),                                                 //Quic重绑定Udp连接句柄
+    Timeout(ConnectionHandle, Option<(usize, SocketEvent)>),                    //Quic连接超时
+    StreamClose(ConnectionHandle, Option<StreamId>, u32),                       //Quic流关闭
+    ConnectionClose(ConnectionHandle),                                          //Quic连接关闭
 }
 
 

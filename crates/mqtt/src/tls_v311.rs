@@ -1,13 +1,20 @@
 use std::sync::Arc;
+use std::marker::PhantomData;
+use std::collections::HashMap;
 use std::io::{Cursor, Result, ErrorKind, Error};
 
 use futures::future::{FutureExt, LocalBoxFuture};
-use mqtt311::{MqttWrite, MqttRead, ConnectReturnCode, Packet, Connect,
-              Connack, QoS, Publish, SubscribeReturnCodes,
+use mio::Token;
+use fnv::FnvBuildHasher;
+use mqtt311::{MqttWrite, MqttRead, Protocol, ConnectReturnCode, Packet, Connect,
+              Connack, QoS, Publish, PacketIdentifier, SubscribeTopic, SubscribeReturnCodes,
               Subscribe, Suback, Unsubscribe, TopicPath};
 use log::warn;
 
-use tcp::{SocketEvent,
+use pi_atom::Atom;
+use pi_hash::XHashMap;
+
+use tcp::{Socket, SocketEvent,
           tls_connect::TlsSocket,
           utils::Ready};
 use ws::{connect::WsSocket,
@@ -278,7 +285,7 @@ async fn accept(protocol: WssMqtt311,
     let mqtt_connect = reset_session(&protocol, connect.clone(), client_id, packet);
     if let Some(listener) = protocol.broker.get_listener() {
         //指定的监听器存在，则执行已连接处理
-        if let Err(_e) = listener
+        if let Err(e) = listener
             .0
             .connected(MqttBrokerProtocol::WssMqtt311(Arc::new(protocol)),
                        mqtt_connect).await {
@@ -411,7 +418,7 @@ async fn publish(protocol: WssMqtt311,
     }
 
     //如果指定主题没有服务，则执行标准发布
-    let is_public = true; //是否为公共主题
+    let mut is_public = true; //是否为公共主题
 
     if let Some(sessions) = protocol
         .broker
@@ -518,11 +525,11 @@ async fn subscribe(protocol: WssMqtt311,
         //已订阅主题有最新发布的消息，则发布订阅主题的最新消息
         match r {
             Retain::Single(p) => {
-                let _ = send_packet(&connect, &Packet::Publish(p));
+                send_packet(&connect, &Packet::Publish(p));
             },
             Retain::Mutil(ps) => {
                 for p in ps {
-                    let _ = send_packet(&connect, &Packet::Publish(p));
+                    send_packet(&connect, &Packet::Publish(p));
                 }
             },
         }

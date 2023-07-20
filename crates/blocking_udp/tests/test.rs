@@ -1,16 +1,16 @@
-use std::future::Future;
 use std::thread;
+use std::io::Result;
 use std::str::FromStr;
 use std::time::Duration;
 use std::net::{IpAddr, SocketAddr};
-use std::io::{Cursor, Result, Error, ErrorKind};
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use env_logger;
 
-use pi_async::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder}, serial_local_thread::LocalTaskRuntime};
+use pi_async_rt::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder},
+                      serial_local_thread::LocalTaskRuntime};
 
-use pi_blocking_udp::{Socket, AsyncService, SocketHandle,
+use blocking_udp::{Socket, AsyncService, SocketHandle,
                    terminal::UdpTerminal};
 
 struct TestService(bool);

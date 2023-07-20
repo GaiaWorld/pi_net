@@ -10,16 +10,19 @@ use pi_hash::XHashMap;
 use tcp::Socket;
 
 use crate::{server::MqttBrokerProtocol,
-            session::{MqttConnect, QosZeroSession},
+            session::{MqttSession, MqttConnect, QosZeroSession},
             utils::{PathTree, BrokerSession}};
 
-// Mqtt连接回应的系统主题
+///
+/// Mqtt连接回应的系统主题
+///
 lazy_static! {
     pub static ref MQTT_RESPONSE_SYS_TOPIC: String = "$r".to_string();
 }
 
-
+///
 /// Mqtt代理监听器
+///
 pub trait MqttBrokerListener<S: Socket>: Send + Sync + 'static {
     /// 处理Mqtt客户端已连接事件
     fn connected(&self,
@@ -369,7 +372,7 @@ impl<S: Socket> MqttBroker<S> {
                 }
 
                 //线程安全的确认当前主题的订阅缓存不为空，则初始化订阅表失败，并重试
-                // self.subscribed(is_public, topic, qos, retain)
+                self.subscribed(is_public, topic, qos, retain)
             } else {
                 None
             }
@@ -402,7 +405,7 @@ impl<S: Socket> MqttBroker<S> {
             }
 
             //将会话加入主题模式表
-            let _ = self.patterns.write().insert(path, session);
+            self.patterns.write().insert(path, session);
 
             if vec.len() == 0 {
                 None
@@ -498,7 +501,7 @@ impl<S: Socket> MqttBroker<S> {
             }
 
             //移除注册了指定主题模式的会话
-            let _ = self.patterns.write().remove(path, session.clone());
+            self.patterns.write().remove(path, session.clone());
         } else {
             //退订的是主题
             if self.sub_tab.read().get(&topic).is_some() {
