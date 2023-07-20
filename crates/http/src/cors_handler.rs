@@ -1,4 +1,3 @@
-
 use std::str::FromStr;
 use std::time::SystemTime;
 use std::io::{Error, Result, ErrorKind};
@@ -49,7 +48,7 @@ unsafe impl Sync for CORSHandler {}
 
 impl<S: Socket> Middleware<S, GatewayContext> for CORSHandler {
     fn request<'a>(&'a self,
-                   context: &'a mut GatewayContext,
+                   _context: &'a mut GatewayContext,
                    req: HttpRequest<S>)
                    -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
@@ -66,7 +65,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for CORSHandler {
     }
 
     fn response<'a>(&'a self,
-                    context: &'a mut GatewayContext,
+                    _context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
                     -> LocalBoxFuture<'a, MiddlewareResult<S>> {

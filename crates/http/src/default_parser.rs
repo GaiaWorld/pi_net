@@ -126,7 +126,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
     }
 
     fn response<'a>(&'a self,
-                    context: &'a mut GatewayContext,
+                    _context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
                     -> LocalBoxFuture<'a, MiddlewareResult<S>> {
@@ -213,13 +213,13 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
                                                                     deflate.total_out().to_string().as_str());
                                                         deflate.reset();
                                                         let _ = produce_deflate(self.deflate_producor.clone(),
-                                                                        deflate);
+                                                                                deflate);
                                                     }
                                                 },
                                                 Ok(mut deflate) => {
                                                     //有空闲编码器，则开始编码
                                                     if let Some(input) = body.as_slice() {
-                                                        // let cap = (input.len() as f64 * 0.75) as usize;
+                                                        let _cap = (input.len() as f64 * 0.75) as usize;
                                                         let mut output = Vec::with_capacity(input.len());
                                                         unsafe { output.set_len(output.capacity()); }
                                                         if let Err(e) = encode_deflate(&mut deflate,
@@ -248,7 +248,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
                                                                     deflate.total_out().to_string().as_str());
                                                         deflate.reset();
                                                         let _ = produce_deflate(self.deflate_producor.clone(),
-                                                                        deflate);
+                                                                                deflate);
                                                     }
                                                 },
                                             }

@@ -1,6 +1,7 @@
 use std::fs::{self, Metadata};
 use std::io::{Error, ErrorKind, Result};
 use std::path::{Component, Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,7 +15,7 @@ use mime_guess;
 
 use pi_async_file::file::{AsyncFile, AsyncFileOptions};
 use pi_atom::Atom;
-use pi_async::rt::{AsyncRuntime, multi_thread::MultiTaskRuntime};
+use pi_async_rt::rt::{AsyncRuntime, multi_thread::MultiTaskRuntime};
 
 use tcp::Socket;
 
@@ -224,7 +225,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for FileLoad {
                             resp.enable_stream(); //将当前请求的块响应改为流响应
 
                             //异步分块加载指定文件
-                            let _ = async_load_file_chunks(self.files_async_runtime.clone(),
+                            async_load_file_chunks(self.files_async_runtime.clone(),
                                                    &resp,
                                                    path,
                                                    chunk_size,
@@ -455,7 +456,7 @@ async fn async_load_file(files_async_runtime: MultiTaskRuntime<()>,
     if let Some(resp_handler) = resp.get_response_handler() {
         let path = file_path.clone();
         let files_async_runtime_copy = files_async_runtime.clone();
-        if let Err(e) = files_async_runtime.spawn(files_async_runtime.alloc(), async move {
+        if let Err(e) = files_async_runtime.spawn(async move {
             //调用底层open接口
             let file = AsyncFile::open(
                 files_async_runtime_copy,
@@ -530,7 +531,7 @@ fn async_load_file_chunks(files_async_runtime: MultiTaskRuntime<()>,
     if let Some(resp_handler) = resp.get_response_handler() {
         let path = file_path.clone();
         let files_async_runtime_copy = files_async_runtime.clone();
-        if let Err(e) = files_async_runtime.spawn(files_async_runtime.alloc(), async move {
+        if let Err(e) = files_async_runtime.spawn(async move {
             //调用底层open接口
             let file = AsyncFile::open(
                 files_async_runtime_copy.clone(),
@@ -582,8 +583,8 @@ fn async_load_file_chunk(files_async_runtime: MultiTaskRuntime<()>,
                          chunk_size: usize,
                          interval: Option<usize>) {
     let files_async_runtime_copy = files_async_runtime.clone();
-    let _ = files_async_runtime.spawn(files_async_runtime.alloc(), async move {
-        let now = if let Some(_timeout) = interval {
+    files_async_runtime.spawn(async move {
+        let now = if let Some(timeout) = interval {
             //设置了加载间隔时间
             Some(Instant::now())
         } else {

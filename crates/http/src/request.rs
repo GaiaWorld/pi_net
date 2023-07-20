@@ -13,12 +13,12 @@ use tcp::{Socket, SocketHandle};
 ///
 /// 默认的块大小，8KB
 ///
-// const DEFAULT_BLOCK_SIZE: usize = 8192;
+const DEFAULT_BLOCK_SIZE: usize = 8192;
 
 ///
 /// 最大块大小限制，16MB
 ///
-// const MAX_BLOCK_LIMIT: usize = 16 * 1024 * 1024;
+const MAX_BLOCK_LIMIT: usize = 16 * 1024 * 1024;
 
 ///
 /// Http请求启始行

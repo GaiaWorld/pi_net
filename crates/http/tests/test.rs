@@ -1,30 +1,23 @@
 extern crate route_recognizer;
 
 use std::thread;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::cell::RefCell;
 use std::time::Instant;
 use std::time::Duration;
-use std::future::Future;
 use std::net::SocketAddr;
-use std::marker::PhantomData;
-use std::io::{Error, ErrorKind};
-use std::error::Error as StdError;
-use std::task::{Context, Poll, Waker};
 
 use https::HeaderMap;
-use regex::{RegexSetBuilder, RegexSet, RegexBuilder, Regex};
+use regex::{RegexSetBuilder, RegexSet, RegexBuilder};
 use route_recognizer::Router;
 use futures::future::{FutureExt, LocalBoxFuture};
-use flate2::{Compression, FlushCompress, Compress, Status, write::GzEncoder};
+use flate2::{Compression, FlushCompress, Compress, Status};
 use twoway::{find_bytes, rfind_bytes};
-use parking_lot::RwLock;
 use env_logger;
 
-use pi_async::rt::{AsyncRuntime, AsyncValue,
-                   multi_thread::MultiTaskRuntimeBuilder,
-                   serial::AsyncRuntimeBuilder};
+use pi_async_rt::rt::{AsyncRuntime,
+                      multi_thread::MultiTaskRuntimeBuilder,
+                      serial::AsyncRuntimeBuilder};
 use pi_hash::XHashMap;
 use pi_atom::Atom;
 use pi_gray::GrayVersion;
@@ -36,7 +29,7 @@ use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, Socket
           server::{PortsAdapterFactory, SocketListener},
           utils::{TlsConfig, Ready}};
 
-use pi_http::{server::HttpListenerFactory,
+use http::{server::HttpListenerFactory,
            virtual_host::{VirtualHostTab, VirtualHost, VirtualHostPool},
            gateway::GatewayContext,
            route::HttpRoute,
@@ -52,8 +45,7 @@ use pi_http::{server::HttpListenerFactory,
            port::HttpPort,
            static_cache::StaticCache,
            request::HttpRequest,
-           response::{ResponseHandler, HttpResponse},
-           utils::HttpRecvResult};
+           response::{ResponseHandler, HttpResponse}};
 
 #[test]
 fn test_regex() {
@@ -342,10 +334,10 @@ unsafe impl<R: AsyncRuntime> Sync for TestHttpGatewayHandler<R> {}
 
 impl<R: AsyncRuntime> Handler for TestHttpGatewayHandler<R> {
     type A = SocketAddr;
-    type B = Arc<HeaderMap>;
-    type C = Arc<RefCell<XHashMap<String, SGenType>>>;
-    type D = ResponseHandler;
-    type E = ();
+    type B = String;
+    type C = Arc<HeaderMap>;
+    type D = Arc<RefCell<XHashMap<String, SGenType>>>;
+    type E = ResponseHandler;
     type F = ();
     type G = ();
     type H = ();
@@ -355,8 +347,8 @@ impl<R: AsyncRuntime> Handler for TestHttpGatewayHandler<R> {
     fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> LocalBoxFuture<'static, Self::HandleResult> {
         let rt = self.0.clone();
         async move {
-            if let Args::FourArgs(addr, headers, msg, handler) = args {
-                handle(rt, env, topic, addr, headers, msg, handler);
+            if let Args::FiveArgs(addr, method, headers, msg, handler) = args {
+                handle(rt, env, topic, addr, method, headers, msg, handler);
             }
         }.boxed_local()
     }
@@ -366,13 +358,14 @@ fn handle<R: AsyncRuntime>(rt: R,
                            env: Arc<dyn GrayVersion>,
                            topic: Atom,
                            addr: SocketAddr,
+                           method: String,
                            headers: Arc<HeaderMap>,
                            msg: Arc<RefCell<XHashMap<String, SGenType>>>,
                            handler: ResponseHandler) {
     let msg = WrapMsg(msg);
     let resp_handler = Arc::new(handler);
 
-    rt.spawn(rt.alloc(), async move {
+    rt.spawn(async move {
         // println!("!!!!!!http gateway handle, topic: {:?}", topic);
         // println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
         // println!("!!!!!!http gateway handle, headers: {:?}", headers);

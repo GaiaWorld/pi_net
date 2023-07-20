@@ -326,7 +326,7 @@ impl StaticCache {
         }
 
         let thread_name = name + "-" + "StaticCache";
-        let _ = Builder::new()
+        Builder::new()
             .name(thread_name.clone())
             .spawn(move || {
                 //设置缓存的整理状态为已运行
@@ -514,7 +514,7 @@ impl StaticCache {
         let value_size = value.len();
         if self.size.load(Ordering::SeqCst) + value_size > self.max_size {
             //已超过指定的缓存大小限制，则强制缓存进行整理，并返回错误
-            let _ = self.collect_sent.send(CollectCmd::Clear(value_size));
+            self.collect_sent.send(CollectCmd::Clear(value_size));
             return Err(Error::new(ErrorKind::Other,
                                   format!("Insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: cache size full",
                                           owner,
@@ -526,7 +526,7 @@ impl StaticCache {
 
         if self.len.load(Ordering::SeqCst) + 1 > self.max_len {
             //已超过指定的缓存数量限制，则强制缓存进行整理，返回错误
-            let _ = self.collect_sent.send(CollectCmd::Clear(0));
+            self.collect_sent.send(CollectCmd::Clear(0));
             return Err(Error::new(ErrorKind::Other,
                                   format!("Insert http static cache failed, owner: {:?}, max_age: {:?}, mime: {:?}, key: {:?}, len: {:?}, reason: cache length full",
                                           owner,
@@ -576,7 +576,7 @@ impl StaticCache {
                         }
                     };
 
-                    let _ = self
+                    self
                         .collect_sent
                         .send(CollectCmd::Index((timeout, cache_key.clone()))); //更新缓存的超时索引
                     if cache_key.is_private() {
@@ -628,7 +628,7 @@ impl StaticCache {
 
     /// 移除指定用户和名称的缓存，但不移除缓存超时索引
     pub fn remove(&self, owner: Option<Atom>, key: Atom) -> CacheRes {
-        if let Some(owner) = owner {
+        let cache_key = if let Some(owner) = owner {
             //私有缓存
             if let Some((timeout, last_modified, mime, sign, bin)) = self.cache.write().remove(&CacheKey::Private((owner, key))) {
                 //移除私有缓存成功

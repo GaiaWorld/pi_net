@@ -1,4 +1,3 @@
-
 use https::{header::{RANGE, ACCEPT_RANGES, CONTENT_RANGE, CONTENT_LENGTH}, StatusCode};
 use futures::future::{FutureExt, LocalBoxFuture};
 
@@ -19,7 +18,7 @@ unsafe impl Sync for RangeLoad {}
 
 impl<S: Socket> Middleware<S, GatewayContext> for RangeLoad {
     fn request<'a>(&'a self,
-                   context: &'a mut GatewayContext,
+                   _context: &'a mut GatewayContext,
                    req: HttpRequest<S>)
                    -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let future = async move {
@@ -30,7 +29,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for RangeLoad {
     }
 
     fn response<'a>(&'a self,
-                    context: &'a mut GatewayContext,
+                    _context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
                     -> LocalBoxFuture<'a, MiddlewareResult<S>> {
@@ -43,7 +42,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for RangeLoad {
                         let str = r.trim().to_lowercase();
                         let tmp: Vec<&str> = str.split("=").collect();
                         let range_str = tmp[1].trim();
-                        let vec: Vec<&str> = range_str.split("-").collect();
+                        let mut vec: Vec<&str> = range_str.split("-").collect();
                         if let Ok(start) = vec[0].parse::<usize>() {
                             //获取开始范围成功，则获取响应体大小
                             let mut body_len = 0;

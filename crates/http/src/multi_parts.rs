@@ -91,7 +91,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for MutilParts {
                             //当前请求体使用了多部分请求体，则分析，并写入参数表
                             if let Some(param) = mime.get_param(BOUNDARY) {
                                 //获取本次Http多部分请求体的分隔符
-                                let boundary_str = MULTI_PARTS_COMMON_PREFIX_SUFFIX_BIN.to_string() + param.as_str() + MULTI_PARTS_LINE_BREAK;
+                                let boundary_str = (MULTI_PARTS_COMMON_PREFIX_SUFFIX_BIN.to_string() + param.as_str() + MULTI_PARTS_LINE_BREAK);
                                 let boundary = boundary_str.as_bytes();
                                 let boundary_end_bin = [MULTI_PARTS_COMMON_PREFIX_SUFFIX_BIN.as_bytes(),
                                     param.as_str().as_bytes(), MULTI_PARTS_COMMON_PREFIX_SUFFIX_BIN.as_bytes(), MULTI_PARTS_LINE_BREAK.as_bytes()].concat();
@@ -141,7 +141,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for MutilParts {
     }
 
     fn response<'a>(&'a self,
-                    context: &'a mut GatewayContext,
+                    _context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
                     -> LocalBoxFuture<'a, MiddlewareResult<S>> {
@@ -209,7 +209,7 @@ fn parse_part<'a>(context: &'a mut GatewayContext,
 fn parse_part_end<'a>(context: &'a mut GatewayContext,
                       boundary: &'a [u8],
                       boundary_end: &'a [u8]) -> Result<()> {
-    if let Some(part_buf) = context.take_part_buf() {
+    if let Some(mut part_buf) = context.take_part_buf() {
         //解析剩余的非结尾部分
         let boundary_bin = [MULTI_PARTS_COMMON_PREFIX_SUFFIX_BIN.as_bytes(),
             boundary, MULTI_PARTS_LINE_BREAK.as_bytes()].concat();
@@ -219,7 +219,7 @@ fn parse_part_end<'a>(context: &'a mut GatewayContext,
         }
     }
 
-    if let Some(part_buf) = context.take_part_buf() {
+    if let Some(mut part_buf) = context.take_part_buf() {
         //解析结尾部分
         if let Some(index) = check_part_end(&part_buf[..], boundary_end) {
             //查找到指定boundary分隔的结尾负载

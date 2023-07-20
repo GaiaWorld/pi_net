@@ -5,7 +5,8 @@ use https::{status::StatusCode,
 use flate2::{Compression, write::GzEncoder};
 use bytes::BufMut;
 
-use tcp::{Socket, SocketHandle, SocketEvent};
+use tcp::{Socket, SocketHandle, SocketEvent,
+          utils::{SocketContext, Ready}};
 
 use crate::{service::HttpService,
             request::HttpRequest,
@@ -147,7 +148,7 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
                                     },
                                     HttpRecvResult::Ok(None) => {
                                         //获取到的是Http响应体块的尾部，则发送流响应结束帧，并退出循环
-                                        let _= self.reply("0\r\n\r\n");
+                                        let _ = self.reply("0\r\n\r\n");
                                         break;
                                     },
                                     HttpRecvResult::Fin(_) => {

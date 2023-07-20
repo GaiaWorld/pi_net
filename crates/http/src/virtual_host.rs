@@ -6,7 +6,7 @@ use pi_atom::Atom;
 
 use tcp::Socket;
 
-use crate::{service::{ServiceFactory},
+use crate::{service::{HttpService, ServiceFactory},
             gateway::{GatewayContext, HttpGateway},
             route::{RouterTab, HttpRoute},
             middleware::Middleware};

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::str::FromStr;
 use std::cell::RefCell;
 use std::net::SocketAddr;
 
@@ -60,10 +61,10 @@ pub struct HttpPort {
     gray:       RwLock<Option<usize>>,                  //Http端口的灰度
     handler:    Arc<dyn Handler<
         A = SocketAddr,                                 //对端地址
-        B = Arc<HeaderMap>,                             //请求头
-        C = Arc<RefCell<XHashMap<String, SGenType>>>,   //请求参数或请求Body
-        D = ResponseHandler,                            //响应句柄
-        E = (),
+        B = String,                                     //方法名
+        C = Arc<HeaderMap>,                             //请求头
+        D = Arc<RefCell<XHashMap<String, SGenType>>>,   //请求参数或请求Body
+        E = ResponseHandler,                            //响应句柄
         F = (),
         G = (),
         H = (),
@@ -84,6 +85,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for HttpPort {
             let uid = req.get_handle().get_uid(); //获取当前http连接的唯一id
             let gray = self.get_gray(); //获取当前灰度
             let remote_addr = req.get_handle().get_remote().clone(); //获取当前http连接的对端地址
+            let method = req.method().as_str().to_string();
             let headers = req.share_headers(); //获取当前http请求头
             let args = context.as_params().clone(); //获取http请求参数或请求体
 
@@ -113,7 +115,8 @@ impl<S: Socket> Middleware<S, GatewayContext> for HttpPort {
                     .handler
                     .handle(Arc::new(http_gray),
                             Atom::from(req.url().path()),
-                            Args::FourArgs(remote_addr,
+                            Args::FiveArgs(remote_addr,
+                                           method,
                                            headers,
                                            args,
                                            resp_handler)).await;
@@ -126,7 +129,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for HttpPort {
     }
 
     fn response<'a>(&'a self,
-                    context: &'a mut GatewayContext,
+                    _context: &'a mut GatewayContext,
                     req: HttpRequest<S>,
                     resp: HttpResponse)
                     -> LocalBoxFuture<'a, MiddlewareResult<S>> {
@@ -179,10 +182,10 @@ impl HttpPort {
     /// 构建指定异步请求处理器的Http端口中间件
     pub fn with_handler(gray: Option<usize>, handler: Arc<dyn Handler<
         A = SocketAddr,
-        B = Arc<HeaderMap>,
-        C = Arc<RefCell<XHashMap<String, SGenType>>>,
-        D = ResponseHandler,
-        E = (),
+        B = String,
+        C = Arc<HeaderMap>,
+        D = Arc<RefCell<XHashMap<String, SGenType>>>,
+        E = ResponseHandler,
         F = (),
         G = (),
         H = (),

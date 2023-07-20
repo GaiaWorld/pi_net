@@ -2,13 +2,14 @@ use std::marker::PhantomData;
 use std::io::{Error, ErrorKind};
 
 use httparse::{EMPTY_HEADER, Request};
-use https::{Version, header::{HOST, HeaderMap}};
+use https::{Version,
+            header::{HOST, HeaderMap}};
 use bytes::Buf;
 
 use tcp::{Socket, SocketHandle};
 
 use crate::{virtual_host::VirtualHostPool,
-            service::{ServiceFactory},
+            service::{ServiceFactory, HttpService},
             request::HttpRequest,
             connect::HttpConnect,
             packet::UpStreamHeader};
@@ -22,7 +23,7 @@ pub const MAX_CONNECT_HTTP_HEADER_LIMIT: usize = 56;
 /// Http连接接受器
 ///
 pub struct HttpAcceptor<S: Socket> {
-    marker: PhantomData<S>,
+    marker: PhantomData<(S)>,
 }
 
 unsafe impl<S: Socket> Send for HttpAcceptor<S> {}
@@ -51,7 +52,7 @@ impl<S: Socket> Default for HttpAcceptor<S> {
 impl<S: Socket> HttpAcceptor<S> {
     /// 异步接受连接请求
     pub async fn accept<P>(handle: SocketHandle<S>,
-                           acceptor: HttpAcceptor<S>,
+                           _acceptor: HttpAcceptor<S>,
                            hosts: P,
                            keep_alive: usize)
         where P: VirtualHostPool<S> {
@@ -64,7 +65,7 @@ impl<S: Socket> HttpAcceptor<S> {
             parse_count += 1; //更新分析次数
             if parse_count > 16 {
                 //过多的分析次数，则立即返回错误原因
-                let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                handle.close(Err(Error::new(ErrorKind::Other,
                                             format!("Http connect failed, token: {:?}, remote: {:?}, local: {:?}, buf_len: {:?}, buf: {:?}, reason: out of parse",
                                                     handle.get_token(),
                                                     handle.get_remote(),
@@ -103,7 +104,7 @@ impl<S: Socket> HttpAcceptor<S> {
                 }
             } else {
                 //Tcp读缓冲区不存在
-                let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                handle.close(Err(Error::new(ErrorKind::Other,
                                             format!("Http connect failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid read buffer",
                                                     handle.get_token(),
                                                     handle.get_remote(),
@@ -133,7 +134,7 @@ impl<S: Socket> HttpAcceptor<S> {
                     if let Some(value) = headers.get(HOST) {
                         if let Ok(host_name) = value.to_str() {
                             if let Some(host) = hosts.get(host_name) {
-                                let connect = HttpConnect::new(handle.clone(),
+                                let mut connect = HttpConnect::new(handle.clone(),
                                                                    host.new_service(),
                                                                    keep_alive);
                                 if let &Some(method) = &req.method {
@@ -155,7 +156,7 @@ impl<S: Socket> HttpAcceptor<S> {
                                             break;
                                         } else {
                                             //连接请求中的Url无效，则立即关闭当前连接
-                                            let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                                            handle.close(Err(Error::new(ErrorKind::Other,
                                                                         format!("Http connect failed, token: {:?}, remote: {:?}, local: {:?}, url: {:?}, reason: invalid url",
                                                                                 handle.get_token(),
                                                                                 handle.get_remote(),
@@ -167,7 +168,7 @@ impl<S: Socket> HttpAcceptor<S> {
                                 }
                             } else {
                                 //连接请求中的主机不存在，则立即关闭当前连接
-                                let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                                handle.close(Err(Error::new(ErrorKind::Other,
                                                             format!("Http connect failed, token: {:?}, remote: {:?}, local: {:?}, host: {:?}, reason: host not exist",
                                                                     handle.get_token(),
                                                                     handle.get_remote(),
@@ -177,7 +178,7 @@ impl<S: Socket> HttpAcceptor<S> {
                             }
                         } else {
                             //连接请求的主机头无效，则立即关闭当前连接
-                            let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                            handle.close(Err(Error::new(ErrorKind::Other,
                                                         format!("Http connect failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid host header",
                                                                 handle.get_token(),
                                                                 handle.get_remote(),
@@ -186,7 +187,7 @@ impl<S: Socket> HttpAcceptor<S> {
                         }
                     } else {
                         //连接请求中没有主机头，则立即关闭当前连接
-                        let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                        handle.close(Err(Error::new(ErrorKind::Other,
                                                     format!("Http connect failed, token: {:?}, remote: {:?}, local: {:?}, reason: host header not exist",
                                                             handle.get_token(),
                                                             handle.get_remote(),

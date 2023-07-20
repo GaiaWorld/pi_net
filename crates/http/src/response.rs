@@ -9,6 +9,7 @@ use https::{status::StatusCode,
             header::{TRANSFER_ENCODING, CONTENT_ENCODING, HeaderMap, HeaderName, HeaderValue}};
 use parking_lot::Mutex;
 
+use tcp::{Socket, SocketHandle};
 
 use crate::utils::{HttpSender, HttpRecvResult, HttpReceiver, ContentEncode, channel};
 

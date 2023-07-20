@@ -4,6 +4,7 @@ use std::io::{Error, ErrorKind, Result};
 use std::path::{Path, PathBuf};
 use std::result::Result as GenResult;
 use std::str::Chars;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -29,7 +30,7 @@ use crate::{
 use pi_async_file::file::{AsyncFile, AsyncFileOptions};
 use pi_atom::Atom;
 use pi_handler::SGenType;
-use pi_async::rt::{AsyncRuntime, multi_thread::MultiTaskRuntime};
+use pi_async_rt::rt::{AsyncRuntime, multi_thread::MultiTaskRuntime};
 use std::time::SystemTime;
 use tcp::Socket;
 
@@ -790,8 +791,7 @@ async fn async_load_files(files_async_runtime: MultiTaskRuntime<()>,
             let resp_handler_copy = resp_handler.clone();
             let path = file_path.clone();
             let files_async_runtime_copy = files_async_runtime.clone();
-            if let Err(e) = files_async_runtime.spawn(files_async_runtime.alloc(),
-                                                      async move {
+            if let Err(e) = files_async_runtime.spawn(async move {
                 // 调用底层open接口
                 let file = AsyncFile::open(
                     files_async_runtime_copy,

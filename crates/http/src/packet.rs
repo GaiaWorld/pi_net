@@ -1,12 +1,14 @@
 use std::convert::TryFrom;
 use std::io::{Error, Result, ErrorKind};
+
 use bytes::Buf;
 use httparse::{Status, Request};
-use https::{header::{HeaderName, HeaderValue, HeaderMap}};
+use https::header::{HeaderName, HeaderValue, HeaderMap};
 
 use tcp::{Socket, SocketHandle};
 
 use crate::utils::DEFAULT_SUPPORT_HTTP_VERSION;
+use tcp::connect::TcpSocket;
 
 ///
 /// 默认读取Http请求的字节长度
@@ -32,7 +34,7 @@ impl UpStreamHeader {
         match req.parse(buf) {
             Err(e) => {
                 //解析Http头错误
-                let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                handle.close(Err(Error::new(ErrorKind::Other,
                                             format!("Http server parse header failed, token: {:?}, remote: {:?}, local: {:?}, reason: parse request header error, buf_len: {:?}, buf: {:?}, reason: {:?}",
                                                     handle.get_token(),
                                                     handle.get_remote(),
@@ -54,7 +56,7 @@ impl UpStreamHeader {
                 match req.version {
                     Some(ver) if ver != DEFAULT_SUPPORT_HTTP_VERSION => {
                         //不合法的Http版本号
-                        let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                        handle.close(Err(Error::new(ErrorKind::Other,
                                                     format!("Http server parse header failed, token: {:?}, remote: {:?}, local: {:?}, version: {}, reason: not support http version",
                                                             handle.get_token(),
                                                             handle.get_remote(),
@@ -77,12 +79,12 @@ impl UpStreamHeader {
             Ok(status) => {
                 //全部头数据已到达，则继续读取，并解析体数据
                 if let Status::Complete(len) = status {
-                    if let Some(bin) = unsafe { &mut *handle.get_read_buffer().get() } {
+                    if let Some(bin) = unsafe { (&mut *handle.get_read_buffer().get()) } {
                         let _ = bin.copy_to_bytes(len); //消耗请求头的数据
                     }
 
                     if let Err(e) = fill_headers(headers, req) {
-                        let _ = handle.close(Err(e));
+                        handle.close(Err(e));
 
                         return Err(Error::new(ErrorKind::Other,
                                               format!("Http server fill header failed, token: {:?}, remote: {:?}, local: {:?}, reason: fill headers error",

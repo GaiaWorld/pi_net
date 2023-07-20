@@ -1,5 +1,5 @@
-
 use std::io::Error;
+
 use futures::future::{FutureExt, LocalBoxFuture};
 
 use tcp::Socket;
