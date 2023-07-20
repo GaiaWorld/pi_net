@@ -1,16 +1,16 @@
 [package]
 name = "pi_http"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_http"
-repository = "https://github.com/GaiaWorld/pi_net"
+repository = "https://github.com/GaiaWorld/pi_net/tree/crateio"
 license = "MIT OR Apache-2.0"
 keywords = ["pi", "http"]
 
 [dependencies]
 mio = "0.8"
-url = "2.2"
+url = "2.4"
 mime = "0.3"
 mime_guess = "2.0"
 twoway = "0.2"
@@ -24,19 +24,19 @@ crossbeam-channel = "0.5"
 regex = "1.6"
 base64 = "0.13"
 flate2 = "1.0"
-bytes = "1.2"
+bytes = "1.4"
 pi_atom = "0.2"
-path-absolutize = "3.0"
+path-absolutize = "3.1"
 flume = "0.10"
 log = "0.4"
-pi_async = "0.5"
-pi_async_buffer = "0.6"
-pi_async_file = "0.4"
+pi-async-rt = "0.1"
+pi_async_buffer = "0.7"
+pi_async_file = "0.5"
 pi_handler = "0.1"
 pi_hash = { version = "0.1", features = ["xxhash"] }
 pi_gray = "0.1"
 pi_adler32 = "0.1"
-tcp = {version = "0.1", package="pi_tcp", path = "../tcp" }
+tcp = {version = "0.2", package="pi_tcp", path = "../tcp" }
 
 [dev-dependencies]
 route-recognizer = "0.3"
