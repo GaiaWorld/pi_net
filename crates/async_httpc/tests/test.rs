@@ -1,3 +1,4 @@
+extern crate new_tcp as tcp;
 
 use std::fs;
 use std::thread;
@@ -9,20 +10,22 @@ use std::net::SocketAddr;
 use env_logger;
 use futures::future::{FutureExt, LocalBoxFuture};
 use https::HeaderMap;
+use tokio;
 use bytes::BufMut;
 
-use pi_async::rt::{AsyncRuntime,
-                   serial::AsyncRuntimeBuilder,
-                   multi_thread::{MultiTaskRuntimeBuilder}};
-use pi_tcp::{SocketConfig,
+use pi_async_rt::rt::{AsyncRuntime,
+                      serial::AsyncRuntimeBuilder,
+                      multi_thread::{MultiTaskRuntimeBuilder, MultiTaskRuntime}};
+use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
           connect::TcpSocket,
           tls_connect::TlsSocket,
           server::{PortsAdapterFactory, SocketListener},
-          utils::{TlsConfig}};
-use pi_http::{server::HttpListenerFactory,
+          utils::{TlsConfig, Ready}};
+use http::{server::HttpListenerFactory,
            virtual_host::{VirtualHostTab, VirtualHost, VirtualHostPool},
+           gateway::GatewayContext,
            route::HttpRoute,
-           middleware::{MiddlewareChain},
+           middleware::{MiddlewareResult, Middleware, MiddlewareChain},
            cors_handler::CORSHandler,
            default_parser::DefaultParser,
            multi_parts::MutilParts,
@@ -33,13 +36,15 @@ use pi_http::{server::HttpListenerFactory,
            upload::UploadFile,
            port::HttpPort,
            static_cache::StaticCache,
-           response::{ResponseHandler}};
+           request::HttpRequest,
+           response::{ResponseHandler, HttpResponse},
+           utils::HttpRecvResult};
 use pi_handler::{Args, Handler, SGenType};
 use pi_hash::XHashMap;
 use pi_gray::GrayVersion;
 use pi_atom::Atom;
 
-use pi_async_httpc::{AsyncHttpcBuilder, AsyncHttpRequestMethod, AsyncHttpRequestBody};
+use async_httpc::{AsyncHttpcBuilder, AsyncHttpc, AsyncHttpRequestMethod, AsyncHttpForm, AsyncHttpRequestBody};
 
 #[derive(Clone)]
 struct WrapMsg(Arc<RefCell<XHashMap<String, SGenType>>>);
@@ -54,10 +59,10 @@ unsafe impl<R: AsyncRuntime> Sync for TestHttpGatewayHandler<R> {}
 
 impl<R: AsyncRuntime> Handler for TestHttpGatewayHandler<R> {
     type A = SocketAddr;
-    type B = Arc<HeaderMap>;
-    type C = Arc<RefCell<XHashMap<String, SGenType>>>;
-    type D = ResponseHandler;
-    type E = ();
+    type B = String;
+    type C = Arc<HeaderMap>;
+    type D = Arc<RefCell<XHashMap<String, SGenType>>>;
+    type E = ResponseHandler;
     type F = ();
     type G = ();
     type H = ();
@@ -67,8 +72,8 @@ impl<R: AsyncRuntime> Handler for TestHttpGatewayHandler<R> {
     fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> LocalBoxFuture<'static, Self::HandleResult> {
         let rt = self.0.clone();
         async move {
-            if let Args::FourArgs(addr, headers, msg, handler) = args {
-                handle(rt, env, topic, addr, headers, msg, handler);
+            if let Args::FiveArgs(addr, method, headers, msg, handler) = args {
+                handle(rt, env, topic, addr, method, headers, msg, handler);
             }
         }.boxed_local()
     }
@@ -78,13 +83,14 @@ fn handle<R: AsyncRuntime>(rt: R,
                            env: Arc<dyn GrayVersion>,
                            topic: Atom,
                            addr: SocketAddr,
+                           method: String,
                            headers: Arc<HeaderMap>,
                            msg: Arc<RefCell<XHashMap<String, SGenType>>>,
                            handler: ResponseHandler) {
     let msg = WrapMsg(msg);
     let resp_handler = Arc::new(handler);
 
-    rt.spawn(rt.alloc(), async move {
+    rt.spawn(async move {
         // println!("!!!!!!http gateway handle, topic: {:?}", topic);
         // println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
         // println!("!!!!!!http gateway handle, headers: {:?}", headers);
@@ -273,7 +279,7 @@ fn test_http_request() {
 
     //Optinos测试
     let httpc_copy = httpc.clone();
-    file_rt.spawn(file_rt.alloc(), async move {
+    file_rt.spawn(async move {
         match httpc_copy
             .build_request("http://127.0.0.1/fs", AsyncHttpRequestMethod::Optinos)
             .set_pairs(&[("d", "d=:bi(:client((js()png()tpl()):app((js()png()tpl()):res((js()png()tpl()):images(js()png()tpl())))))"), ("f", ":pi(:widget(js(util:widget:painter:forelet:style:frame_mgr:event:virtual_node):)util(js(html:util:tpl:task_mgr:res_mgr:log:hash:math:match:task_pool:event):)gui_virtual(js(frame_mgr):)lang(js(type:mod:time):))")])
@@ -306,7 +312,7 @@ fn test_http_request() {
 
     //批量获取文件
     let httpc_copy = httpc.clone();
-    file_rt.spawn(file_rt.alloc(), async move {
+    file_rt.spawn(async move {
         match httpc_copy
             .build_request("http://127.0.0.1/fs", AsyncHttpRequestMethod::Get)
             .set_pairs(&[("d", "d=:bi(:client((js()png()tpl()):app((js()png()tpl()):res((js()png()tpl()):images(js()png()tpl())))))"), ("f", ":pi(:widget(js(util:widget:painter:forelet:style:frame_mgr:event:virtual_node):)util(js(html:util:tpl:task_mgr:res_mgr:log:hash:math:match:task_pool:event):)gui_virtual(js(frame_mgr):)lang(js(type:mod:time):))")])
@@ -341,7 +347,7 @@ fn test_http_request() {
     println!("");
     let httpc_copy = httpc.clone();
     let body = AsyncHttpRequestBody::with_string("user=test001&pwd=你好".to_string(), true);
-    file_rt.spawn(file_rt.alloc(), async move {
+    file_rt.spawn(async move {
         match httpc_copy
             .build_request("http://127.0.0.1/", AsyncHttpRequestMethod::Post)
             .add_header("content-type", "application/x-www-form-urlencoded")
@@ -387,7 +393,7 @@ fn test_http_request() {
                          "mdb_stat.exe".to_string(),
                          "application/octet-stream".to_string(),
                          bin).unwrap();
-    file_rt.spawn(file_rt.alloc(), async move {
+    file_rt.spawn(async move {
         match httpc_copy
             .build_request("http://127.0.0.1/upload", AsyncHttpRequestMethod::Post)
             .set_body(form.into_body())
@@ -424,7 +430,7 @@ fn test_http_request() {
     let mut form = AsyncHttpRequestBody::form();
     form = form.add_field("method".to_string(), "_$remove".to_string());
     form = form.add_field("file_name".to_string(), "mdb_stat.exe".to_string());
-    file_rt.spawn(file_rt.alloc(), async move {
+    file_rt.spawn(async move {
         match httpc_copy
             .build_request("http://127.0.0.1/upload", AsyncHttpRequestMethod::Post)
             .set_body(form.into_body())
@@ -624,7 +630,7 @@ fn test_https_request() {
 
     //Options测试
     let httpc_copy = httpc.clone();
-    file_rt.spawn(file_rt.alloc(), async move {
+    file_rt.spawn(async move {
         match httpc_copy
             .build_request("https://msg.highapp.com/fs", AsyncHttpRequestMethod::Optinos)
             .set_pairs(&[("d", "d=:bi(:client((js()png()tpl()):app((js()png()tpl()):res((js()png()tpl()):images(js()png()tpl())))))"), ("f", ":pi(:widget(js(util:widget:painter:forelet:style:frame_mgr:event:virtual_node):)util(js(html:util:tpl:task_mgr:res_mgr:log:hash:math:match:task_pool:event):)gui_virtual(js(frame_mgr):)lang(js(type:mod:time):))")])
@@ -657,7 +663,7 @@ fn test_https_request() {
 
     //批量获取文件
     let httpc_copy = httpc.clone();
-    file_rt.spawn(file_rt.alloc(), async move {
+    file_rt.spawn(async move {
         match httpc_copy
             .build_request("https://msg.highapp.com/fs", AsyncHttpRequestMethod::Get)
             .set_pairs(&[("d", "d=:bi(:client((js()png()tpl()):app((js()png()tpl()):res((js()png()tpl()):images(js()png()tpl())))))"), ("f", ":pi(:widget(js(util:widget:painter:forelet:style:frame_mgr:event:virtual_node):)util(js(html:util:tpl:task_mgr:res_mgr:log:hash:math:match:task_pool:event):)gui_virtual(js(frame_mgr):)lang(js(type:mod:time):))")])
@@ -692,7 +698,7 @@ fn test_https_request() {
     println!("");
     let httpc_copy = httpc.clone();
     let body = AsyncHttpRequestBody::with_string("user=test001&pwd=你好".to_string(), true);
-    file_rt.spawn(file_rt.alloc(), async move {
+    file_rt.spawn(async move {
         match httpc_copy
             .build_request("http://msg.highapp.com/", AsyncHttpRequestMethod::Post)
             .add_header("content-type", "application/x-www-form-urlencoded")
@@ -735,7 +741,7 @@ fn test_https_request() {
                          "mdb_stat.exe".to_string(),
                          "application/octet-stream".to_string(),
                          bin).unwrap();
-    file_rt.spawn(file_rt.alloc(), async move {
+    file_rt.spawn(async move {
         match httpc_copy
             .build_request("https://msg.highapp.com/upload", AsyncHttpRequestMethod::Post)
             .set_body(form.into_body())
@@ -772,7 +778,7 @@ fn test_https_request() {
     let mut form = AsyncHttpRequestBody::form();
     form = form.add_field("method".to_string(), "_$remove".to_string());
     form = form.add_field("file_name".to_string(), "mdb_stat.exe".to_string());
-    file_rt.spawn(file_rt.alloc(), async move {
+    file_rt.spawn(async move {
         match httpc_copy
             .build_request("https://msg.highapp.com/upload", AsyncHttpRequestMethod::Post)
             .set_body(form.into_body())

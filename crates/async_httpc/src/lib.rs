@@ -1,5 +1,3 @@
-
-
 #[macro_use]
 extern crate lazy_static;
 
@@ -13,11 +11,11 @@ use std::io::{Error, Result, ErrorKind};
 
 use tokio;
 use percent_encoding::{CONTROLS, percent_encode};
-use reqwest::{ClientBuilder, Client, Proxy, Certificate, Identity, Method, RequestBuilder, Body, Response, Version,
+use reqwest::{ClientBuilder, Client, Proxy, Certificate, Identity, Method, RequestBuilder, Request, Body, Response, Version,
               header::{HeaderMap, HeaderName, HeaderValue},
               redirect::Policy,
               multipart::{Part, Form}};
-use bytes::BufMut;
+use bytes::{Buf, BufMut};
 use flume::bounded;
 
 use pi_hash::XHashMap;
@@ -435,7 +433,7 @@ impl AsyncHttpRequest {
         let(sender, receiver) = bounded(1);
         ASYNC_HTTPC_RUNTIME.spawn(async move {
             let result = request.send().await;
-            let _ = sender.send(result);
+            sender.send(result);
         });
 
         match receiver.recv_async().await {
