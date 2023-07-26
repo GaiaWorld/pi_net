@@ -1,10 +1,11 @@
 use std::str::FromStr;
-use std::io::{Error, Result, ErrorKind, Write};
+use std::io::{Error, Result, ErrorKind, Write, Read};
 
 use url::form_urlencoded;
 use mime::{APPLICATION, WWW_FORM_URLENCODED, JSON, OCTET_STREAM, PDF, TEXT, CHARSET, UTF_8, IMAGE, AUDIO, VIDEO, Mime};
 use https::{Method, header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, CONTENT_LENGTH}, StatusCode};
 use flate2::{Compression, FlushCompress, Compress, Status, write::GzEncoder};
+use brotli::{CompressorReader, CompressorWriter};
 use serde_json::{Result as JsonResult, Value};
 use futures::future::{FutureExt, LocalBoxFuture};
 use crossbeam_channel::{Sender, Receiver, unbounded};
@@ -22,6 +23,7 @@ use crate::{gateway::GatewayContext,
 */
 pub const DEFLATE_ENCODING: &str = "deflate";
 pub const GZIP_ENCODING: &str = "gzip";
+pub const BROTLI_ENCODING: &str = "br";
 
 ///
 /// Http请求和响应的默认分析器，处理Http请求的默认头和Http响应的默认头
@@ -34,9 +36,10 @@ pub const GZIP_ENCODING: &str = "gzip";
 pub struct DefaultParser {
     min_plain_limit:    usize,                          //支持压缩的最小Http响应体明文大小
     level:              Compression,                    //压缩级别
+    buf_size:           usize,                          //压缩缓冲区大小
     flush:              FlushCompress,                  //刷新选项
     deflate_producor:   Sender<Compress>,               //deflate编码器生产者
-    deflate_consumer:   Receiver<Compress>,             //deflate编码器消息者
+    deflate_consumer:   Receiver<Compress>,             //deflate编码器消费者
 }
 
 unsafe impl Send for DefaultParser {}
@@ -298,6 +301,46 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
                                         //已编码，则中止其它类型的编码
                                         break;
                                     },
+				    BROTLI_ENCODING => {
+                                        //接受brotli编码
+                                        if let Some(body) = response.as_mut_body() {
+                                            if body.len().is_none() || body.len().unwrap() < self.min_plain_limit {
+                                                //响应体明文数据过小，则忽略编码
+                                                break;
+                                            }
+
+                                            if let Some(input) = body.as_slice() {
+                                                let brotli = new_brotli(input, 8192, self.level);
+                                                match encode_brotli(brotli, input.len()) {
+                                                    Err(e) => {
+                                                        //编码错误，则立即抛出错误
+                                                        return MiddlewareResult::Throw(e);
+                                                    },
+                                                    Ok(output) => {
+                                                        //编码成功
+                                                        if req.method() == &Method::HEAD {
+                                                            //是HEAD方法请求的响应，则忽略响应体
+                                                            body.reset(&[]);
+                                                        } else {
+                                                            //非HEAD方法请求的响应，则替换为编码成功后的响应体
+                                                            body.reset(output.as_slice());
+                                                        }
+
+                                                        //设置响应头
+                                                        response
+                                                            .header(CONTENT_ENCODING.as_str(),
+                                                                    BROTLI_ENCODING);
+                                                        response
+                                                            .header(CONTENT_LENGTH.as_str(),
+                                                                    output.len().to_string().as_str());
+                                                    },
+                                                }
+                                            }
+                                        }
+
+                                        //已编码，则中止其它类型的编码
+                                        break;
+                                    },
                                     _ => {
                                         //服务器不支持客户端接受的编码，则继续
                                         continue;
@@ -338,7 +381,9 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
 
 impl DefaultParser {
     /// 构建指定最小压缩明文大小和压缩级别的Http响应体的编码处理器
-    pub fn with(min_plain_limit: usize, level: Option<u32>) -> Self {
+    pub fn with(min_plain_limit: usize,
+                level: Option<u32>,
+                buf_size: Option<usize>) -> Self {
         let (deflate_producor, deflate_consumer) = unbounded();
 
         //初始化编码器
@@ -358,9 +403,21 @@ impl DefaultParser {
         };
         let _ = produce_deflate(deflate_producor.clone(), new_deflate(level));
 
+        let buf_size = if let Some(size) = buf_size {
+            if size < 4096 {
+                4096
+            } else {
+                size.next_power_of_two()
+            }
+        } else {
+            //默认压缩缓冲区大小
+            8192
+        };
+
         DefaultParser {
             min_plain_limit,
             level,
+            buf_size,
             flush: FlushCompress::Finish, //默认的刷新选项
             deflate_producor,
             deflate_consumer,
@@ -376,6 +433,13 @@ fn new_deflate(level: Compression) -> Compress {
 // 创建指定流压缩级别的gzip编码器
 fn new_gzip(writer: Vec<u8>, level: Compression) -> GzEncoder<Vec<u8>> {
     GzEncoder::new(writer, level)
+}
+
+// 创建指定流压缩级别的brotli编码器
+fn new_brotli(reader: &[u8],
+              buf_size: usize,
+              level: Compression) -> CompressorReader<&[u8]> {
+    CompressorReader::new(reader, buf_size, level.level(), 22)
 }
 
 // 线程安全的生成指定压缩级别的deflate编码器
@@ -439,4 +503,11 @@ fn encode_gzip(mut gzip: GzEncoder<Vec<u8>>, input: &[u8]) -> Result<Vec<u8>> {
     }
 
     gzip.finish()
+}
+
+// 进行brotli编码
+fn encode_brotli(mut brotli: CompressorReader<&[u8]>, init_capacity: usize) -> Result<Vec<u8>> {
+    let mut result = Vec::with_capacity(init_capacity);
+    let _size = brotli.read_to_end(&mut result)?;
+    Ok(result)
 }
