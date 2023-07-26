@@ -438,7 +438,7 @@ fn test_http_hosts() {
     cors_handler.allow_origin("http".to_string(), "msg.highapp.com".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     cors_handler.allow_origin("http".to_string(), "127.0.0.1".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     let cors_handler = Arc::new(cors_handler);
-    let parser = Arc::new(DefaultParser::with(128, None));
+    let parser = Arc::new(DefaultParser::with(128, None, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
     let mut file_load = FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10);
@@ -582,7 +582,7 @@ fn test_https_hosts() {
     cors_handler.allow_origin("https".to_string(), "msg.highapp.com".to_string(), 443, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     cors_handler.allow_origin("https".to_string(), "127.0.0.1".to_string(), 443, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     let cors_handler = Arc::new(cors_handler);
-    let parser = Arc::new(DefaultParser::with(128, None));
+    let parser = Arc::new(DefaultParser::with(128, None, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
     let file_load = Arc::new(FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
