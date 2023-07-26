@@ -3,6 +3,7 @@ extern crate route_recognizer;
 use std::thread;
 use std::sync::Arc;
 use std::cell::RefCell;
+use std::io::{Read, Write};
 use std::time::Instant;
 use std::time::Duration;
 use std::net::SocketAddr;
@@ -12,6 +13,7 @@ use regex::{RegexSetBuilder, RegexSet, RegexBuilder};
 use route_recognizer::Router;
 use futures::future::{FutureExt, LocalBoxFuture};
 use flate2::{Compression, FlushCompress, Compress, Status};
+use brotli::{CompressorReader, Decompressor};
 use twoway::{find_bytes, rfind_bytes};
 use env_logger;
 
@@ -248,6 +250,27 @@ fn test_compress() {
 }
 
 #[test]
+fn test_brotli_compress() {
+    let input = "------WebKitFormBoundaryda3kjf6KAEbPATkF\r\nContent-Disposition: form-data; name=\"method\"\r\n\r\n\r\n------WebKitFormBoundaryda3kjf6KAEbPATkF\r\nContent-Disposition: form-data; name=\"file_name\"\r\n\r\n\r\n------WebKitFormBoundaryda3kjf6KAEbPATkF\r\nContent-Disposition: form-data; name=\"content\"; filename=\"README.md\"\r\nContent-Type: application/octet-stream\r\n\r\n# pi_pt\n\npi_serv.exe -r ../dst -l ../dst/pi_pt ../dst/pi_pi\n\npi_serv收到参数， 读../dst中的.depend, 创建依赖表。\n根据-l 中的路径， 找到项目所需js路径， 编译js代码， 存储在mgr中\n\n按 .c .a .b .e .i 顺序，合并一个js，开一个虚拟机执行， 执行完毕后虚拟机销毁\n\n.c为配置文件\n.a .b .e 读取server.cfg中的配置， 决定是否启动对应的服务模块和如何启动服务模块\n\n配置入口是多个路径。\n原生代码\n\n定义一个server.cfg，它描述了服务模块的配置结构\n然后init.ts里面就会有\n\n\n\n\npi_serv.exe -start cc.init.js  \n\npi_serv.exe ../dst/pi_pt ../dst/pi_pi\npi_serv收到参数， 找到项目下所有js， 编译js代码， 存储在mgr中\npi_serv收到参数， 找到项目下所有*.init.js， 按名字(如果相同，按目录名称)依次合并。然后执行。\n\n\n\r\n------WebKitFormBoundaryda3kjf6KAEbPATkF--\r\n".as_bytes().to_vec();
+    let mut reader = CompressorReader::new(input.as_slice(), 4096, 5, 22);
+    let mut output = Vec::with_capacity(input.len());
+    if let Err(e) = reader.read_to_end(&mut output) {
+        panic!("Compress failed, reason: {:?}", e);
+    }
+    println!("Compress ok, input len: {}, output len: {}", input.len(), output.len());
+
+    let mut decompressor = Decompressor::new(output.as_slice(), 4096);
+    let mut output_ = Vec::with_capacity(output.len());
+    if let Err(e) = decompressor.read_to_end(&mut output_) {
+        panic!("Decompress failed, reason: {:?}", e);
+    }
+    println!("Decompress ok, input len: {}, output len: {}, output: {}",
+             output.len(),
+             output_.len(),
+             String::from_utf8(output_).unwrap());
+}
+
+#[test]
 fn test_find_bytes() {
     let data = "------WebKitFormBoundaryda3kjf6KAEbPATkF\r\nContent-Disposition: form-data; name=\"method\"\r\n\r\n\r\n------WebKitFormBoundaryda3kjf6KAEbPATkF\r\nContent-Disposition: form-data; name=\"file_name\"\r\n\r\n\r\n------WebKitFormBoundaryda3kjf6KAEbPATkF\r\nContent-Disposition: form-data; name=\"content\"; filename=\"README.md\"\r\nContent-Type: application/octet-stream\r\n\r\n# pi_pt\n\npi_serv.exe -r ../dst -l ../dst/pi_pt ../dst/pi_pi\n\npi_serv收到参数， 读../dst中的.depend, 创建依赖表。\n根据-l 中的路径， 找到项目所需js路径， 编译js代码， 存储在mgr中\n\n按 .c .a .b .e .i 顺序，合并一个js，开一个虚拟机执行， 执行完毕后虚拟机销毁\n\n.c为配置文件\n.a .b .e 读取server.cfg中的配置， 决定是否启动对应的服务模块和如何启动服务模块\n\n配置入口是多个路径。\n原生代码\n\n定义一个server.cfg，它描述了服务模块的配置结构\n然后init.ts里面就会有\n\n\n\n\npi_serv.exe -start cc.init.js  \n\npi_serv.exe ../dst/pi_pt ../dst/pi_pi\npi_serv收到参数， 找到项目下所有js， 编译js代码， 存储在mgr中\npi_serv收到参数， 找到项目下所有*.init.js， 按名字(如果相同，按目录名称)依次合并。然后执行。\n\n\n\r\n------WebKitFormBoundaryda3kjf6KAEbPATkF--\r\n".as_bytes();
     let boundary = b"------WebKitFormBoundaryda3kjf6KAEbPATkF\r\n";
@@ -414,7 +437,7 @@ fn test_http_hosts() {
     cors_handler.allow_origin("http".to_string(), "msg.highapp.com".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     cors_handler.allow_origin("http".to_string(), "127.0.0.1".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     let cors_handler = Arc::new(cors_handler);
-    let parser = Arc::new(DefaultParser::with(128, None));
+    let parser = Arc::new(DefaultParser::with(128, None, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
     let mut file_load = FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10);
@@ -558,7 +581,7 @@ fn test_https_hosts() {
     cors_handler.allow_origin("https".to_string(), "msg.highapp.com".to_string(), 443, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     cors_handler.allow_origin("https".to_string(), "127.0.0.1".to_string(), 443, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     let cors_handler = Arc::new(cors_handler);
-    let parser = Arc::new(DefaultParser::with(128, None));
+    let parser = Arc::new(DefaultParser::with(128, None, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
     let file_load = Arc::new(FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
