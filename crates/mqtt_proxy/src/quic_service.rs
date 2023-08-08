@@ -172,42 +172,20 @@ impl MqttConnectHandle {
 
     /// 为当前的Mqtt客户端订阅指定的主题
     pub fn sub(&self, topic: String) {
-        if self.is_security() {
-            //安全的会话
-            if let MqttBrokerProtocol::WssMqtt311(broker) = &self.protocol {
-                if let Some(session) = broker.get_broker().get_session(&self.client_id) {
-                    //客户端的会话存在，则订阅主题
-                    let _ = broker.get_broker().subscribe(session.clone(), topic);
-                }
-            }
-        } else {
-            //非安全的会主知
-            if let MqttBrokerProtocol::WsMqtt311(broker) = &self.protocol {
-                if let Some(session) = broker.get_broker().get_session(&self.client_id) {
-                    //客户端的会话存在，则订阅主题
-                    let _ = broker.get_broker().subscribe(session.clone(), topic);
-                }
+        if let MqttBrokerProtocol::QuicMqtt311(broker) = &self.protocol {
+            if let Some(session) = broker.get_broker().get_session(&self.client_id) {
+                //客户端的会话存在，则订阅主题
+                let _ = broker.get_broker().subscribe(session.clone(), topic);
             }
         }
     }
 
     /// 为当前的Mqtt客户端退订指定的主题
     pub fn unsub(&self, topic: String) {
-        if self.is_security() {
-            //安全的会话
-            if let MqttBrokerProtocol::WssMqtt311(broker) = &self.protocol {
-                if let Some(session) = broker.get_broker().get_session(&self.client_id) {
-                    //客户端的会话存在，则退订主题
-                    let _ = broker.get_broker().unsubscribe(&session, topic);
-                }
-            }
-        } else {
-            //非安全的会主知
-            if let MqttBrokerProtocol::WsMqtt311(broker) = &self.protocol {
-                if let Some(session) = broker.get_broker().get_session(&self.client_id) {
-                    //客户端的会话存在，则退订主题
-                    let _ = broker.get_broker().unsubscribe(&session, topic);
-                }
+        if let MqttBrokerProtocol::QuicMqtt311(broker) = &self.protocol {
+            if let Some(session) = broker.get_broker().get_session(&self.client_id) {
+                //客户端的会话存在，则退订主题
+                let _ = broker.get_broker().unsubscribe(&session, topic);
             }
         }
     }

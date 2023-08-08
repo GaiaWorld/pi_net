@@ -1,15 +1,20 @@
+#![feature(once_cell)]
+
 use std::thread;
 use std::sync::Arc;
 use std::str::FromStr;
-use std::net::{IpAddr, SocketAddr};
+use std::cell::OnceCell;
 use std::marker::PhantomData;
+use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use futures::future::{FutureExt, LocalBoxFuture};
 use quinn_proto::{TransportConfig, VarInt};
 use env_logger;
 
-use pi_async_rt::rt::{serial::AsyncRuntimeBuilder};
+use pi_async_rt::rt::{AsyncRuntime, AsyncRuntimeBuilder as RTBuilder, startup_global_time_loop,
+                      serial::AsyncRuntimeBuilder,
+                      multi_thread::MultiTaskRuntime};
 use pi_atom::Atom;
 use pi_gray::GrayVersion;
 use pi_handler::{Args, Handler};
@@ -27,8 +32,10 @@ use mqtt::server::{WsMqttBrokerFactory, WssMqttBrokerFactory, QuicMqttBrokerFact
                    register_mqtt_listener, register_mqtt_service, register_quic_mqtt_service,
                    register_mqtts_listener, register_mqtts_service, register_quic_mqtt_listener};
 
-use mqtt_proxy::{service::{MqttEvent, MqttConnectHandle, MqttProxyListener, MqttProxyService},
-                 quic_service::{MqttEvent as QuicMqttEvent, MqttConnectHandle as QuicMqttConnectHandle, MqttProxyListener as QuicMqttProxyListener, MqttProxyService as QuicMqttProxyService}};
+use pi_mqtt_proxy::{service::{MqttEvent, MqttConnectHandle, MqttProxyListener, MqttProxyService},
+                    quic_service::{MqttEvent as QuicMqttEvent, MqttConnectHandle as QuicMqttConnectHandle, MqttProxyListener as QuicMqttProxyListener, MqttProxyService as QuicMqttProxyService}};
+
+static mut handler_runtime: OnceCell<MultiTaskRuntime<()>> = OnceCell::new();
 
 struct TestMqttConnectHandler<S: Socket>(PhantomData<S>);
 
@@ -142,8 +149,18 @@ impl<S: Socket> Handler for TestMqttRequestHandler<S> {
                 },
                 Args::OneArgs(MqttEvent::Publish(socket_id, broker_name, client_id, address, topic, payload)) => {
                     //处理Mqtt发布主题
-                    connect.send(&"rpc/send".to_string(), address.unwrap().to_string().into_bytes());
-                    connect.reply(payload.as_slice().to_vec());
+                    let rt = unsafe {
+                        handler_runtime.get_or_init(move || {
+                            RTBuilder::default_multi_thread(None, None, None, None)
+                        })
+                    };
+
+                    let rt_copy = rt.clone();
+                    rt.spawn(async move {
+                        rt_copy.timeout(10).await;
+                        connect.send(&"rpc/send".to_string(), address.unwrap().to_string().into_bytes());
+                        connect.reply(payload.as_slice().to_vec());
+                    });
                 },
                 _ => {
                     println!("!!!!!!Invalid mqtt event");
@@ -164,6 +181,7 @@ fn test_mqtt_proxy_service() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
+    let _handle = startup_global_time_loop(10);
     let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
 
     let protocol_name = "mqttv3.1";

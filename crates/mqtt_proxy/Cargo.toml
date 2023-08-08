@@ -1,6 +1,6 @@
 [package]
 name = "pi_mqtt_proxy"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_mqtt_proxy"
