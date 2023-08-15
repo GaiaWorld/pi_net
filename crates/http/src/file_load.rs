@@ -25,7 +25,7 @@ use crate::{
     request::HttpRequest,
     response::HttpResponse,
     static_cache::{
-        is_modified, is_unmodified, request_get_cache, set_cache_resp_headers, CacheRes,
+        is_modified, is_unmodified, request_get_cache, set_cache_resp_headers, simple_sign, CacheRes,
         StaticCache,
     },
     utils::{DEAFULT_CHUNK_SIZE, HttpRecvResult, trim_path},
@@ -110,7 +110,11 @@ impl<S: Socket> Middleware<S, GatewayContext> for FileLoad {
                     }
                 }
 
-                match request_get_cache(cache.as_ref(), &req, None, file_path_id.clone()) {
+                match request_get_cache(cache.as_ref(),
+                                        &req,
+                                        None,
+                                        file_path_id.clone(),
+                                        self.max_age) {
                     Err(e) => {
                         //获取指定文件的缓存错误，则立即抛出错误
                         return MiddlewareResult::Throw(e);
@@ -334,6 +338,19 @@ impl<S: Socket> Middleware<S, GatewayContext> for FileLoad {
                                         warn!("!!!> File Load Ok, But Cache Failed, file: {:?}, reason: {:?}",
                                             file_path,
                                             e);
+
+                                        let sign = simple_sign(last_modified);
+                                        set_cache_resp_headers(
+                                            &mut response,
+                                            false,
+                                            self.is_cache,
+                                            self.is_store,
+                                            self.is_transform,
+                                            self.is_only_if_cached,
+                                            self.max_age,
+                                            Some(last_modified),
+                                            sign,
+                                        );
                                     }
                                     Ok((sign, _)) => {
                                         //缓存指定文件成功，则设置响应的缓存头

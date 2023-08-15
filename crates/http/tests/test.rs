@@ -31,23 +31,23 @@ use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, Socket
           server::{PortsAdapterFactory, SocketListener},
           utils::{TlsConfig, Ready}};
 
-use http::{server::HttpListenerFactory,
-           virtual_host::{VirtualHostTab, VirtualHost, VirtualHostPool},
-           gateway::GatewayContext,
-           route::HttpRoute,
-           middleware::{MiddlewareResult, Middleware, MiddlewareChain},
-           cors_handler::CORSHandler,
-           default_parser::DefaultParser,
-           multi_parts::MutilParts,
-           range_load::RangeLoad,
-           file_load::FileLoad,
-           files_load::FilesLoad,
-           batch_load::BatchLoad,
-           upload::UploadFile,
-           port::HttpPort,
-           static_cache::StaticCache,
-           request::HttpRequest,
-           response::{ResponseHandler, HttpResponse}};
+use pi_http::{server::HttpListenerFactory,
+              virtual_host::{VirtualHostTab, VirtualHost, VirtualHostPool},
+              gateway::GatewayContext,
+              route::HttpRoute,
+              middleware::{MiddlewareResult, Middleware, MiddlewareChain},
+              cors_handler::CORSHandler,
+              default_parser::DefaultParser,
+              multi_parts::MutilParts,
+              range_load::RangeLoad,
+              file_load::FileLoad,
+              files_load::FilesLoad,
+              batch_load::BatchLoad,
+              upload::UploadFile,
+              port::HttpPort,
+              static_cache::StaticCache,
+              request::HttpRequest,
+              response::{ResponseHandler, HttpResponse}};
 
 #[test]
 fn test_regex() {
@@ -440,14 +440,14 @@ fn test_http_hosts() {
     let parser = Arc::new(DefaultParser::with(128, None, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
-    let mut file_load = FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10);
+    let mut file_load = FileLoad::new(file_rt.clone(), "../../htdocs", Some(cache.clone()), true, true, true, false, 10);
     file_load.set_min_block_size(Some(8 * 1024 * 1024));
     file_load.set_chunk_size(Some(512 * 1024));
     file_load.set_interval(Some(100));
     let file_load = Arc::new(file_load);
-    let files_load = Arc::new(FilesLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let batch_load = Arc::new(BatchLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let upload = Arc::new(UploadFile::new(file_rt.clone(), "../upload"));
+    let files_load = Arc::new(FilesLoad::new(file_rt.clone(), "../../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let batch_load = Arc::new(BatchLoad::new(file_rt.clone(), "../../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let upload = Arc::new(UploadFile::new(file_rt.clone(), "../../upload"));
     let port = Arc::new(HttpPort::with_handler(None, handler));
 
     //构建处理CORS的Options方法的请求的中间件链
@@ -584,10 +584,10 @@ fn test_https_hosts() {
     let parser = Arc::new(DefaultParser::with(128, None, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
-    let file_load = Arc::new(FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let files_load = Arc::new(FilesLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let batch_load = Arc::new(BatchLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
-    let upload = Arc::new(UploadFile::new(file_rt.clone(), "../upload"));
+    let file_load = Arc::new(FileLoad::new(file_rt.clone(), "../../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let files_load = Arc::new(FilesLoad::new(file_rt.clone(), "../../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let batch_load = Arc::new(BatchLoad::new(file_rt.clone(), "../../htdocs", Some(cache.clone()), true, true, true, false, 10));
+    let upload = Arc::new(UploadFile::new(file_rt.clone(), "../../upload"));
     let port = Arc::new(HttpPort::with_handler(None, handler));
 
     //构建处理CORS的Options方法的请求的中间件链

@@ -22,7 +22,7 @@ use crate::{
     request::HttpRequest,
     response::HttpResponse,
     static_cache::{
-        is_modified, is_unmodified, request_get_cache, set_cache_resp_headers, CacheRes,
+        is_modified, is_unmodified, request_get_cache, set_cache_resp_headers, full_sign, CacheRes,
         StaticCache,
     },
     utils::{trim_path, HttpRecvResult},
@@ -120,7 +120,8 @@ impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
                 match request_get_cache(cache.as_ref(),
                                         &req,
                                         None,
-                                        files_id.clone()) {
+                                        files_id.clone(),
+                                        self.max_age) {
                     Err(e) => {
                         //获取指定文件的缓存错误，则立即抛出错误
                         return MiddlewareResult::Throw(e);
@@ -359,6 +360,19 @@ impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
                                         warn!("Files Load Ok, But Cache Failed, file: {:?}, reason: {:?}",
                                             files_id,
                                             e);
+
+                                        let sign = full_sign(value.as_slice());
+                                        set_cache_resp_headers(
+                                            &mut response,
+                                            false,
+                                            self.is_cache,
+                                            self.is_store,
+                                            self.is_transform,
+                                            self.is_only_if_cached,
+                                            self.max_age,
+                                            None,
+                                            sign,
+                                        );
                                     }
                                     Ok((sign, _)) => {
                                         //缓存指定的批量文件成功，则设置响应的缓存头

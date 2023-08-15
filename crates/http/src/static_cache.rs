@@ -150,9 +150,10 @@ pub fn is_modified<S: Socket>(cache: &StaticCache,
 pub fn request_get_cache<S: Socket>(cache: &StaticCache,
                                     req: &HttpRequest<S>,
                                     owner: Option<Atom>,
-                                    key: Atom) -> Result<(bool, u64, CacheRes)> {
+                                    key: Atom,
+                                    default_max_age: u64) -> Result<(bool, u64, CacheRes)> {
     let mut is_store = true; //默认要缓存资源
-    let mut max_age: u64 = 0; //默认缓存立即过期，即每次Http请求必须进行缓存是否未修改的验证
+    let mut max_age: u64 = default_max_age;
     if let Some(value) = req.headers().get(CACHE_CONTROL.as_str()) {
         //当前请求有缓存指令
         for val in String::from_utf8_lossy(value.as_bytes()).split(',').collect::<Vec<&str>>() {
@@ -508,7 +509,7 @@ impl StaticCache {
                   max_age: u64,
                   last_modified: SystemTime,
                   mime: Mime,
-                  full_sign: bool,
+                  is_full_sign: bool,
                   key: Atom,
                   value: Arc<Vec<u8>>) -> Result<(usize, CacheRes)> {
         let value_size = value.len();
@@ -556,24 +557,12 @@ impl StaticCache {
                     };
 
                     //计算缓存资源的签名
-                    let sign = if full_sign {
+                    let sign = if is_full_sign {
                         //完整签名
-                        if let Ok(sign) = encode_adler32(value.as_slice()) {
-                            //完整签名成功
-                            sign as usize
-                        } else {
-                            //完整签名失败
-                            0
-                        }
+                        full_sign(value.as_slice())
                     } else {
                         //简单签名
-                        if let Ok(sign) = encode_adler32(fmt_http_date(last_modified).as_bytes()) {
-                            //简单签名成功
-                            sign as usize
-                        } else {
-                            //简单签名失败
-                            0
-                        }
+                        simple_sign(last_modified)
                     };
 
                     self
@@ -790,5 +779,29 @@ fn collect_clear(cache: &StaticCache, mut size: usize) {
                 size = 0;
             }
         }
+    }
+}
+
+// 完整签名
+#[inline]
+pub(crate) fn full_sign(bin: &[u8]) -> usize {
+    if let Ok(sign) = encode_adler32(bin) {
+        //完整签名成功
+        sign as usize
+    } else {
+        //完整签名失败
+        0
+    }
+}
+
+//简单签名
+#[inline]
+pub(crate) fn simple_sign(last_modified: SystemTime) -> usize {
+    if let Ok(sign) = encode_adler32(fmt_http_date(last_modified).as_bytes()) {
+        //简单签名成功
+        sign as usize
+    } else {
+        //简单签名失败
+        0
     }
 }
