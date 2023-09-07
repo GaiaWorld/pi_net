@@ -597,7 +597,7 @@ impl QuicSocket {
     /// 获取连接的所有流唯一id，主流是第一个流
     pub fn get_stream_ids(&self) -> Vec<StreamId> {
         let vec = if let Some(main_stream_id) = &self.main_stream_id {
-            vec![main_stream_id]
+            vec![main_stream_id.clone()]
         } else {
             vec![]
         };
