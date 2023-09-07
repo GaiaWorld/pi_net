@@ -596,7 +596,12 @@ impl QuicSocket {
 
     /// 获取连接的所有流唯一id，主流是第一个流
     pub fn get_stream_ids(&self) -> Vec<StreamId> {
-        let mut ids: Vec<StreamId> = vec![self.main_stream_id.unwrap().clone()]
+        let vec = if let Some(main_stream_id) = &self.main_stream_id {
+            vec![main_stream_id]
+        } else {
+            vec![]
+        };
+        let mut ids: Vec<StreamId> = vec
             .iter()
             .chain(self.expanding_streams.keys())
             .map(|x| x.clone())
