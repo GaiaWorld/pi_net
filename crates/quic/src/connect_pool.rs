@@ -356,18 +356,11 @@ fn poll_connection<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                     }
                     ConnectionLost { reason } => {
                         //当前连接已丢失，则立即关闭当前连接
-                        let _ = (&mut *socket.get()).close(0,
-                                                           Err(Error::new(ErrorKind::ConnectionAborted,
-                                                                          format!("Quic connect closed, uid: {:?}, remtoe: {:?}, local: {:?}, code: 0, reason: {:?}",
-                                                                                  (&*socket.get()).get_uid(),
-                                                                                  (&*socket.get()).get_remote(),
-                                                                                  (&*socket.get()).get_local(),
-                                                                                  reason))));
-
-                        debug!("Quic connect closed, uid: {:?}, remtoe: {:?}, local: {:?}",
+                        debug!("Quic connect closed, uid: {:?}, remtoe: {:?}, local: {:?}, code: 0, reason: {:?}",
                             (&*socket.get()).get_uid(),
                             (&*socket.get()).get_remote(),
-                            (&*socket.get()).get_local());
+                            (&*socket.get()).get_local(),
+                            reason);
                     }
                     Stream(StreamEvent::Writable { id }) => {
                         //TODO 当前连接的指定流的可写事件...
