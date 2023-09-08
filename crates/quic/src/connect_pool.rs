@@ -697,14 +697,6 @@ fn handle_stream_close<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
             //关闭连接的流
             if let Err(e) = (&mut *socket.get()).shutdown(stream_id, code) {
                 error!("{:?}", e);
-            } else {
-                //关闭当前连接的流成功
-                if code == 0 {
-                    //当前连接的对端已关闭，则继续关闭当前连接
-                    let _ = pool
-                        .event_send
-                        .send(QuicEvent::ConnectionClose(connection_handle));
-                }
             }
         }
     }

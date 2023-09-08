@@ -1,6 +1,6 @@
 [package]
 name = "pi_quic"
-version = "0.5.1"
+version = "0.5.2"
 authors = ["vmos <vmosone007@gmail.com>"]
 edition = "2021"
 description = "Quic client/server"
