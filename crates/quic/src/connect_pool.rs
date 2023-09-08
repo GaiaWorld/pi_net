@@ -696,6 +696,8 @@ fn handle_stream_close<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
 
             //关闭连接的流
             if let Err(e) = (&mut *socket.get()).shutdown(stream_id, code) {
+                //连接关闭被中止，如果不是send_stream.finish()导致的错误，
+                //则可以强制关闭连接，即发送QuicEvent::ConnectionClose(connection_handle)
                 error!("{:?}", e);
             }
         }
