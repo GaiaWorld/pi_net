@@ -11,7 +11,7 @@ use https::{
     header::{CONTENT_LENGTH, CONTENT_TYPE},
     StatusCode,
 };
-use log::warn;
+use log::{warn, debug};
 use mime_guess;
 
 use pi_async_file::file::{AsyncFile, AsyncFileOptions};
@@ -89,6 +89,8 @@ impl<S: Socket> Middleware<S, GatewayContext> for FileLoad {
                     }
                 }
             }
+
+            debug!("fle_load file path:{:?}", file_path);
             file_path.extend(&normalize_path(Path::new(req.url().path())));
 
             let mut file_path_id = Atom::from("");

@@ -15,7 +15,7 @@ use https::{
     header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
     StatusCode,
 };
-use log::warn;
+use log::{warn, debug};
 use mime::APPLICATION_OCTET_STREAM;
 use pi_adler32::adler32;
 
@@ -117,6 +117,8 @@ impl<S: Socket> Middleware<S, GatewayContext> for BatchLoad {
 
                 file_path
             };
+
+            debug!("batch_load file path:{:?}", root);
             //访问指定的批量文件的内存缓存
             if let Some(cache) = &self.cache {
                 //设置了文件缓存
