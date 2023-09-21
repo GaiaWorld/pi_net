@@ -10,20 +10,21 @@ use std::sync::Arc;
 
 use bytes::BufMut;
 use futures::future::{FutureExt, LocalBoxFuture};
+use httpdate::fmt_http_date;
 use https::{
     header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
     StatusCode,
 };
-use httpdate::fmt_http_date;
-use pi_adler32::adler32;
 use log::warn;
 use mime::APPLICATION_OCTET_STREAM;
+use pi_adler32::adler32;
 
 use pi_async_file::file::{AsyncFile, AsyncFileOptions};
+use pi_async_rt::rt::{multi_thread::MultiTaskRuntime, AsyncRuntime};
 use pi_atom::Atom;
 use pi_handler::SGenType;
-use pi_async_rt::rt::{AsyncRuntime, multi_thread::MultiTaskRuntime};
 use tcp::Socket;
+use url::Host;
 
 use crate::{
     gateway::GatewayContext,
@@ -31,7 +32,7 @@ use crate::{
     request::HttpRequest,
     response::HttpResponse,
     static_cache::{
-        is_modified, is_unmodified, request_get_cache, set_cache_resp_headers, full_sign, CacheRes,
+        full_sign, is_modified, is_unmodified, request_get_cache, set_cache_resp_headers, CacheRes,
         StaticCache,
     },
     utils::{trim_path, HttpRecvResult},
@@ -47,14 +48,14 @@ const DEFAULT_CONTENT_DISPOSITION: &str = "attachment;filename=batch";
 * Http文件改进的批量加载器
 */
 pub struct BatchLoad {
-    files_async_runtime:    MultiTaskRuntime<()>,       //异步文件运行时
-    root:                   PathBuf,                    //文件根路径
-    cache:                  Option<Arc<StaticCache>>,   //文件缓存
-    is_cache:               bool,                       //是否要求客户端每次请求强制验证资源是否过期
-    is_store:               bool,                       //设置是否缓存资源
-    is_transform:           bool,                       //设置是否允许客户端更改前端资源内容
-    is_only_if_cached:      bool,                       //设置是否要求代理有缓存，则只由代理向客户端提供资源
-    max_age:                u64,                        //缓存有效时长
+    files_async_runtime: MultiTaskRuntime<()>, //异步文件运行时
+    root: PathBuf,                             //文件根路径
+    cache: Option<Arc<StaticCache>>,           //文件缓存
+    is_cache: bool,                            //是否要求客户端每次请求强制验证资源是否过期
+    is_store: bool,                            //设置是否缓存资源
+    is_transform: bool,                        //设置是否允许客户端更改前端资源内容
+    is_only_if_cached: bool,                   //设置是否要求代理有缓存，则只由代理向客户端提供资源
+    max_age: u64,                              //缓存有效时长
 }
 
 unsafe impl Send for BatchLoad {}
@@ -71,11 +72,11 @@ impl<S: Socket> Middleware<S, GatewayContext> for BatchLoad {
             //获取请求参数
             let mut ds = String::from("");
             let mut fs = String::from("");
-            let mut rp = PathBuf::new();
-            if let Some(SGenType::Str(r)) = context.as_params().borrow().get("r") {
-                rp.push(&self.root);
-                rp.push(r.as_str());
-            }
+            // let mut rp = PathBuf::new();
+            // if let Some(SGenType::Str(r)) = context.as_params().borrow().get("r") {
+            //     rp.push(&self.root);
+            //     rp.push(r.as_str());
+            // }
             if let Some(SGenType::Str(d)) = context.as_params().borrow().get("d") {
                 ds = d.clone();
             }
@@ -83,12 +84,39 @@ impl<S: Socket> Middleware<S, GatewayContext> for BatchLoad {
                 fs = f.clone();
             }
             let files_id = Atom::from(ds.to_string() + "&" + fs.as_str());
-            let root = if rp.as_path().to_str().unwrap().as_bytes().len() > 0 {
-                &rp
-            } else {
-                &self.root
-            };
+            let root = {
+                // &self.root
+                let mut file_path = self.root.to_path_buf();
+                // 判断root配置是否是新结构(支持多项目资源加载)
+                let tmp = OsStr::new("*");
+                if Some(tmp) == file_path.file_name() {
+                    // 弹出*目录
+                    file_path.pop();
 
+                    // 判断请求中是否携带路径参数r
+                    if let Some(SGenType::Str(p)) = context.as_params().borrow().get("r") {
+                        file_path.push(p.as_str());
+                    } else {
+                        // 目前情况使用主机头作为目录
+                        match req.url().host() {
+                            Some(Host::Domain(domain)) => {
+                                let parts: Vec<&str> = domain.split('.').collect();
+                                let subdomain = parts.first().unwrap();
+                                file_path.push(subdomain);
+                            }
+                            Some(Host::Ipv4(ipv4)) => {
+                                file_path.push(ipv4.to_string());
+                            }
+                            Some(Host::Ipv6(ipv6)) => {
+                                file_path.push(ipv6.to_string());
+                            }
+                            None => {}
+                        }
+                    }
+                }
+
+                file_path
+            };
             //访问指定的批量文件的内存缓存
             if let Some(cache) = &self.cache {
                 //设置了文件缓存
@@ -125,11 +153,8 @@ impl<S: Socket> Middleware<S, GatewayContext> for BatchLoad {
                     }
                 }
 
-                match request_get_cache(cache.as_ref(),
-                                        &req,
-                                        None,
-                                        files_id.clone(),
-                                        self.max_age) {
+                match request_get_cache(cache.as_ref(), &req, None, files_id.clone(), self.max_age)
+                {
                     Err(e) => {
                         //获取指定文件的缓存错误，则立即抛出错误
                         return MiddlewareResult::Throw(e);
@@ -171,25 +196,20 @@ impl<S: Socket> Middleware<S, GatewayContext> for BatchLoad {
             //访问指定的批量文件的磁盘资源
             let mut dir_vec: Vec<(u64, PathBuf)> = Vec::new();
             let mut dirs: Vec<String> = Vec::new();
-            match decode(&mut ds.chars(),
-                         &mut vec![],
-                         &mut vec![],
-                         &mut dirs,
-                         0) {
+            match decode(&mut ds.chars(), &mut vec![], &mut vec![], &mut dirs, 0) {
                 Err(pos) => {
                     //解析请求的目录参数错误，则立即中止请求处理，并返回响应
                     return MiddlewareResult::Throw(Error::new(
                         ErrorKind::NotFound,
                         format!(
                             "Batch load failed, dir: {}, pos: {}, reason: decode dir failed",
-                            ds,
-                            pos
+                            ds, pos
                         ),
                     ));
                 }
                 Ok(_) => {
                     //解析请求的目录参数成功，则开始解析指定目录下的文件
-                    if let Err(e) = decode_dir(&mut dirs, root, &mut dir_vec) {
+                    if let Err(e) = decode_dir(&mut dirs, &root, &mut dir_vec) {
                         //解析指定目录下的文件错误，则立即中止请求处理，并返回响应
                         return MiddlewareResult::Throw(e);
                     }
@@ -198,11 +218,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for BatchLoad {
 
             let mut file_vec: Vec<(u64, PathBuf)>;
             let mut files: Vec<String> = Vec::new();
-            match decode(&mut fs.chars(),
-                         &mut vec![],
-                         &mut vec![],
-                         &mut files,
-                         0) {
+            match decode(&mut fs.chars(), &mut vec![], &mut vec![], &mut files, 0) {
                 Err(pos) => {
                     //解析请求的文件参数错误，则立即中止请求处理，并返回响应
                     return MiddlewareResult::Throw(Error::new(
@@ -239,7 +255,9 @@ impl<S: Socket> Middleware<S, GatewayContext> for BatchLoad {
                 &resp,
                 dir_vec,
                 root.to_str().unwrap().as_bytes().len() + 1,
-            ).await {
+            )
+            .await
+            {
                 Err(e) => {
                     //异步批量加载文件错误，则立即中止请求处理，并返回响应
                     return MiddlewareResult::Throw(e);
@@ -785,10 +803,12 @@ fn filter_file(suffix: Option<&OsStr>, entry: DirEntry, result: &mut Vec<(u64, P
 }
 
 // 异步批量加载文件，并返回批量加载文件的总大小和总数量
-async fn async_load_files(files_async_runtime: MultiTaskRuntime<()>,
-                          resp: &HttpResponse,
-                          files: Vec<(u64, PathBuf)>,
-                          root_len: usize) -> Result<(u64, usize)> {
+async fn async_load_files(
+    files_async_runtime: MultiTaskRuntime<()>,
+    resp: &HttpResponse,
+    files: Vec<(u64, PathBuf)>,
+    root_len: usize,
+) -> Result<(u64, usize)> {
     let mut total_size = 0;
     let mut index: u64 = 0;
 
