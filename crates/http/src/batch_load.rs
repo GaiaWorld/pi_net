@@ -15,7 +15,7 @@ use https::{
     header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
     StatusCode,
 };
-use log::{warn, debug};
+use log::{debug, warn};
 use mime::APPLICATION_OCTET_STREAM;
 use pi_adler32::adler32;
 
@@ -108,9 +108,15 @@ impl<S: Socket> Middleware<S, GatewayContext> for BatchLoad {
                                 file_path.push(ipv4.to_string());
                             }
                             Some(Host::Ipv6(ipv6)) => {
-                                file_path.push(ipv6.to_string());
+                                file_path.push(ipv6.to_string().replace(":", "."));
                             }
-                            None => {}
+                            None => {
+                                //无法获取host
+                                return MiddlewareResult::Throw(Error::new(
+                                    ErrorKind::Other,
+                                    "File load failed, reason: invaild host",
+                                ));
+                            }
                         }
                     }
                 }

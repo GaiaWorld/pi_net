@@ -11,7 +11,7 @@ use https::{
     header::{CONTENT_LENGTH, CONTENT_TYPE},
     StatusCode,
 };
-use log::{warn, debug};
+use log::{debug, warn};
 use mime_guess;
 
 use pi_async_file::file::{AsyncFile, AsyncFileOptions};
@@ -84,8 +84,16 @@ impl<S: Socket> Middleware<S, GatewayContext> for FileLoad {
                             file_path.push(subdomain)
                         }
                         Some(Host::Ipv4(ipv4)) => file_path.push(ipv4.to_string()),
-                        Some(Host::Ipv6(ipv6)) => file_path.push(ipv6.to_string()),
-                        None => {}
+                        Some(Host::Ipv6(ipv6)) => {
+                            file_path.push(ipv6.to_string().replace(":", "."))
+                        }
+                        None => {
+                            //无法获取host
+                            return MiddlewareResult::Throw(Error::new(
+                                ErrorKind::Other,
+                                "File load failed, reason: invaild host",
+                            ));
+                        }
                     }
                 }
             }

@@ -1,6 +1,6 @@
 [package]
 name = "pi_http"
-version = "0.2.5"
+version = "0.2.6"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_http"
