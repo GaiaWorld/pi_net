@@ -17,7 +17,7 @@ use futures::{sink::SinkExt,
 use bytes::{Buf, BufMut, BytesMut};
 
 use pi_async_rt::{lock::spin_lock::SpinLock,
-                  rt::{serial::AsyncValue,
+                  rt::{serial::AsyncValueNonBlocking,
                        serial_local_thread::LocalTaskRuntime}};
 use pi_async_buffer::async_pipeline::{AsyncReceiverExt, AsyncPipeLineExt, PipeSender, channel};
 
@@ -67,7 +67,7 @@ pub struct TcpSocket {
     read_buf:           Rc<UnsafeCell<Option<BytesMut>>>,                       //连接读缓冲
     wait_ready_len:     usize,                                                  //连接异步准备读取的字节数
     ready_len:          usize,                                                  //连接异步准备读取已就绪的字节数
-    ready_reader:       SpinLock<Option<AsyncValue<usize>>>,                    //异步准备读取器
+    ready_reader:       SpinLock<Option<AsyncValueNonBlocking<usize>>>,                    //异步准备读取器
     wait_sent_len:      AtomicUsize,                                            //连接需要发送的字节数
     sent_len:           usize,                                                  //连接已发送的字节数
     write_len:          Arc<AtomicUsize>,                                       //连接写入块大小
@@ -553,7 +553,7 @@ impl Socket for TcpSocket {
         false
     }
 
-    fn read_ready(&mut self, adjust: usize) -> GenResult<AsyncValue<usize>, usize> {
+    fn read_ready(&mut self, adjust: usize) -> GenResult<AsyncValueNonBlocking<usize>, usize> {
         if self.is_closed() {
             //连接已关闭，则忽略，并立即返回
             return Err(0);
@@ -575,7 +575,7 @@ impl Socket for TcpSocket {
         }
 
         //连接当前读缓冲区没有足够的数据，则只读需要的字节数
-        let value = AsyncValue::new();
+        let value = AsyncValueNonBlocking::new();
         let value_copy = value.clone();
         *self.ready_reader.lock() = Some(value); //设置当前连接的异步准备读取器
         self.wait_ready_len = adjust - remaining; //设置本次异步准备读取实际需要的字节数

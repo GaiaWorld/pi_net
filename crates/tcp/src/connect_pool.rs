@@ -14,7 +14,7 @@ use spin_sleep::LoopHelper;
 use log::{warn, error};
 
 use pi_async_rt::{lock::spin_lock::SpinLock,
-                  rt::{serial::AsyncValue,
+                  rt::{serial::AsyncValueNonBlocking,
                        serial_local_thread::LocalTaskRuntime}};
 use pi_hash::XHashMap;
 use pi_cancel_timer::Timer;

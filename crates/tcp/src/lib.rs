@@ -20,7 +20,7 @@ use mio::{Token, Interest, Poll,
           net::TcpStream};
 use bytes::BytesMut;
 
-use pi_async_rt::rt::{serial::AsyncValue,
+use pi_async_rt::rt::{serial::AsyncValueNonBlocking,
                       serial_local_thread::LocalTaskRuntime};
 use pi_hash::XHashMap;
 
@@ -535,13 +535,13 @@ pub trait Socket: Sized + 'static {
     /// 是否是安全的连接
     fn is_security(&self) -> bool;
 
-    /// 通知连接读就绪，可以开始接收指定字节数的数据，如果当前需要等待接收则返回AsyncValue, 否则返回接收缓冲区中已有数据的字节数
+    /// 通知连接读就绪，可以开始接收指定字节数的数据，如果当前需要等待接收则返回AsyncValueNonBlocking, 否则返回接收缓冲区中已有数据的字节数
     /// 设置准备读取的字节大小为0，则表示准备接收任意数量的字节，直到当前连接的流没有可接收的数据
     /// 设置准备读取的字节大小大于0，则表示至少需要接收指定数量的字节，如果还未接收到指定数量的字节，则继续从流中接收
     /// 异步阻塞读取读缓冲前应该保证调用此函数对读缓冲进行填充，避免异步读取被异步阻塞
     /// 返回0长度，表示当前连接已关闭，继续操作将是未定义行为
     /// 注意调用此方法，在保持连接的前提下，必须保证后续一定还可以接收到数据，否则会导致无法唤醒当前异步准备读取器
-    fn read_ready(&mut self, adjust: usize) -> GenResult<AsyncValue<usize>, usize>;
+    fn read_ready(&mut self, adjust: usize) -> GenResult<AsyncValueNonBlocking<usize>, usize>;
 
     /// 判断当前连接是否有异步准备读取器
     fn is_wait_wakeup_read_ready(&self) -> bool;
@@ -783,7 +783,7 @@ impl<S: Socket> SocketHandle<S> {
     }
 
     /// 线程安全的准备读
-    pub fn read_ready(&self, size: usize) -> GenResult<AsyncValue<usize>, usize> {
+    pub fn read_ready(&self, size: usize) -> GenResult<AsyncValueNonBlocking<usize>, usize> {
         unsafe {
             (&mut *self.0.inner.get()).read_ready(size)
         }
