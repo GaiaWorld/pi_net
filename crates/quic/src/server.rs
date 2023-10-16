@@ -12,6 +12,7 @@ use quinn_proto::{EndpointConfig, ServerConfig, Endpoint, EndpointEvent, Connect
 use crossbeam_channel::{Sender, unbounded};
 use futures::task::SpawnExt;
 use rustls;
+use log::warn;
 
 use pi_async_rt::rt::serial_local_thread::LocalTaskRuntime;
 use pi_hash::XHashMap;
@@ -256,6 +257,8 @@ impl QuicListener {
         if let Some(rt) = self.0.rt.as_ref() {
             let _ = rt.clone().close();
         }
+
+        warn!("Closed quic socket listener, reason: {:?}", reason);
     }
 }
 

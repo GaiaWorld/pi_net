@@ -9,6 +9,7 @@ use crossbeam_channel::{Sender, unbounded};
 use futures::future::{FutureExt, LocalBoxFuture};
 use dashmap::DashMap;
 use num_cpus;
+use log::warn;
 
 use pi_async_rt::rt::serial_local_thread::LocalTaskRuntime;
 
@@ -360,5 +361,6 @@ impl<S, F> SocketListener<S, F>
         for runtime in self.runtimes {
             let _ = runtime.close();
         }
+        warn!("Closed tcp socket listener, reason: {:?}", reason);
     }
 }
