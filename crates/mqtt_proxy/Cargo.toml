@@ -1,6 +1,6 @@
 [package]
 name = "pi_mqtt_proxy"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_mqtt_proxy"
@@ -10,8 +10,8 @@ keywords = ["pi", "mqtt_proxy"]
 
 [dependencies]
 futures = "0.3"
-tcp = {version = "0.2", path = "../tcp", package = "pi_tcp" }
-quic = {version = "0.5", path = "../quic", package = "pi_quic" }
+tcp = {version = "0.3", path = "../tcp", package = "pi_tcp" }
+quic = {version = "0.6", path = "../quic", package = "pi_quic" }
 mqtt = {version = "0.2", path = "../mqtt", package = "pi_mqtt" }
 pi-async-rt = "0.1"
 pi_handler = "0.1"

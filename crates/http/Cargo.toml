@@ -1,6 +1,6 @@
 [package]
 name = "pi_http"
-version = "0.2.6"
+version = "0.2.7"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_http"
@@ -37,7 +37,7 @@ pi_handler = "0.1"
 pi_hash = { version = "0.1", features = ["xxhash"] }
 pi_gray = "0.1"
 pi_adler32 = "0.1"
-tcp = {version = "0.2", package="pi_tcp", path = "../tcp" }
+tcp = {version = "0.3", package="pi_tcp", path = "../tcp" }
 
 [dev-dependencies]
 route-recognizer = "0.3"

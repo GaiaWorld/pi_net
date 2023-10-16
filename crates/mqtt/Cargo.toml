@@ -1,6 +1,6 @@
 [package]
 name = "pi_mqtt"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_mqtt"
@@ -16,10 +16,10 @@ mqtt311 = "0.2"
 parking_lot = "0.12"
 lazy_static = "1.4"
 pi_hash = { version = "0.1", features = ["xxhash"] }
-tcp = {version = "0.2", path = "../tcp", package = "pi_tcp" }
+tcp = {version = "0.3", path = "../tcp", package = "pi_tcp" }
 ws = {version = "0.3", path = "../ws", package = "pi_ws" }
 udp = {version = "0.2", path = "../blocking_udp", package = "pi_blocking_udp"}
-quic = {version = "0.5", path = "../quic", package = "pi_quic" }
+quic = {version = "0.6", path = "../quic", package = "pi_quic" }
 quinn-proto = "0.8"
 bytes = "1.4"
 log = "0.4"

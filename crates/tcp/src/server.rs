@@ -262,7 +262,8 @@ impl<S: Socket> PortsAdapterFactory<S> {
 /// Tcp连接监听器
 ///
 pub struct SocketListener<S: Socket + Stream, F: SocketAdapterFactory<Connect = S, Adapter = PortsAdapter<S>>> {
-    marker: PhantomData<(S, F)>,
+    runtimes:   Vec<LocalTaskRuntime<()>>,  //运行时
+    marker:     PhantomData<(S, F)>,
 }
 
 impl<S, F> SocketListener<S, F>
@@ -279,7 +280,7 @@ impl<S, F> SocketListener<S, F>
                 readed_read_size_limit: usize,  //已读读缓冲大小限制
                 readed_write_size_limit: usize, //已读写缓冲大小限制
                 timeout: Option<usize>          //事件轮询超时时长
-    ) -> Result<SocketDriver<S, PortsAdapter<S>>> {
+    ) -> Result<Self> {
         if runtimes.is_empty() {
             //至少需要一个工作者
             return Err(Error::new(ErrorKind::Other,
@@ -322,10 +323,11 @@ impl<S, F> SocketListener<S, F>
 
         driver.set_controller(acceptor.get_controller()); //设置连接驱动的控制器
         //为所有连接池，设置不同端口适配器的连接驱动，并启动所有连接池
+        let mut runtimes_copy = runtimes.clone();
         for pool in pools {
             let mut driver_clone = driver.clone();
             driver_clone.set_adapter(factory.get_instance()); //设置连接驱动的端口适配器
-            if let Some(rt) = runtimes.pop() {
+            if let Some(rt) = runtimes_copy.pop() {
                 if let Err(e) = pool.run(rt,
                                          driver_clone,
                                          event_size,
@@ -347,6 +349,16 @@ impl<S, F> SocketListener<S, F>
             return Err(e);
         }
 
-        Ok(driver)
+        Ok(SocketListener {
+            runtimes,
+            marker: PhantomData,
+        })
+    }
+
+    //关闭Tcp连接监听器
+    pub fn close(self, reason: Result<()>) {
+        for runtime in self.runtimes {
+            let _ = runtime.close();
+        }
     }
 }

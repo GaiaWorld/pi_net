@@ -214,6 +214,7 @@ impl QuicListener {
 
                         let inner = InnerQuicListener {
                             rt: None,
+                            runtimes: runtimes.clone(),
                             acceptor,
                             event_sents,
                             end_point,
@@ -243,6 +244,17 @@ impl QuicListener {
                     },
                 }
             },
+        }
+    }
+
+    /// 关闭Quic连接监听器
+    pub fn close(self, reason: Result<()>) {
+        for runtime in self.0.runtimes.clone() {
+            let _ = runtime.close();
+        }
+
+        if let Some(rt) = self.0.rt.as_ref() {
+            let _ = rt.clone().close();
         }
     }
 }
@@ -280,6 +292,7 @@ fn handle_endpoint_events(listener: QuicListener,
 // 内部Quic连接监听器
 struct InnerQuicListener {
     rt:                         Option<LocalTaskRuntime<()>>,                                   //运行时
+    runtimes:                   Vec<LocalTaskRuntime<()>>,                                      //连接运行时
     acceptor:                   QuicAcceptor,                                                   //Quic连接接受器
     event_sents:                XHashMap<usize, Sender<QuicEvent>>,                             //Quic事件发送器表
     end_point:                  Rc<UnsafeCell<Endpoint>>,                                       //Quic端点
