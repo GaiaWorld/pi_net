@@ -1,6 +1,6 @@
 [package]
 name = "pi_async_httpc"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_async_httpc"
@@ -27,7 +27,7 @@ pi_hash = "0.1"
 pi-async-rt = "0.1"
 env_logger = "0.7"
 futures = "0.3"
-pi_tcp = {version = "0.2", path = "../tcp" }
+pi_tcp = {version = "0.3", path = "../tcp" }
 pi_http = {version = "0.2", path = "../http" }
 https = {package = "http", version = "0.2" }
 pi_handler = "0.1"

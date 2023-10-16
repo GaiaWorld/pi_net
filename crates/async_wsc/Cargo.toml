@@ -19,7 +19,7 @@ actix-rt = "2.1"
 actix-codec = "0.5"
 actix-http = "3.0"
 awc = {version = "0.1", package = "pi_awc", path = "../awc", features = ["rustls"] }
-tcp = {version = "0.2", package = "pi_tcp", path = "../tcp" }
+tcp = {version = "0.3", package = "pi_tcp", path = "../tcp" }
 ws = "0.9"
 url = "2.1"
 lazy_static = "1.4"
