@@ -361,6 +361,7 @@ impl<S, F> SocketListener<S, F>
         for runtime in self.runtimes {
             let _ = runtime.close();
         }
+
         warn!("Closed tcp socket listener, reason: {:?}", reason);
     }
 }
