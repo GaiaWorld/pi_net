@@ -16,7 +16,7 @@ use https::{
     StatusCode,
 };
 use log::{debug, warn};
-use mime::APPLICATION_OCTET_STREAM;
+use mime::TEXT_PLAIN;
 use pi_adler32::adler32;
 
 use pi_async_file::file::{AsyncFile, AsyncFileOptions};
@@ -274,7 +274,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for BatchLoad {
                     //设置本次批量文件加载的缓存id、Mime、加载时间、异步批量加载文件大小和数量到网关上下文
                     context.set_cache_args(Some((
                         files_id.as_ref().to_string(),
-                        APPLICATION_OCTET_STREAM,
+                        TEXT_PLAIN,
                         SystemTime::now(),
                     )));
                     context.set_files_size(files_size);

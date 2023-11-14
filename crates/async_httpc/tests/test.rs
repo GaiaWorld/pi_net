@@ -13,7 +13,7 @@ use https::HeaderMap;
 use tokio;
 use bytes::BufMut;
 
-use pi_async_rt::rt::{AsyncRuntime,
+use pi_async_rt::rt::{AsyncRuntime, AsyncRuntimeBuilder as RTAsyncRuntimeBuilder,
                       serial::AsyncRuntimeBuilder,
                       multi_thread::{MultiTaskRuntimeBuilder, MultiTaskRuntime}};
 use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
@@ -43,8 +43,9 @@ use pi_handler::{Args, Handler, SGenType};
 use pi_hash::XHashMap;
 use pi_gray::GrayVersion;
 use pi_atom::Atom;
+use tokio::time::Instant;
 
-use async_httpc::{AsyncHttpcBuilder, AsyncHttpc, AsyncHttpRequestMethod, AsyncHttpForm, AsyncHttpRequestBody};
+use pi_async_httpc::{AsyncHttpcBuilder, AsyncHttpc, AsyncHttpRequestMethod, AsyncHttpForm, AsyncHttpRequestBody};
 
 #[derive(Clone)]
 struct WrapMsg(Arc<RefCell<XHashMap<String, SGenType>>>);
@@ -143,7 +144,7 @@ fn test_http_request() {
     cors_handler.allow_origin("http".to_string(), "msg.highapp.com".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     cors_handler.allow_origin("http".to_string(), "127.0.0.1".to_string(), 80, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     let cors_handler = Arc::new(cors_handler);
-    let parser = Arc::new(DefaultParser::with(128, None));
+    let parser = Arc::new(DefaultParser::with(128, None, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
     let mut file_load = FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10);
@@ -489,7 +490,7 @@ fn test_https_request() {
     cors_handler.allow_origin("https".to_string(), "msg.highapp.com".to_string(), 443, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     cors_handler.allow_origin("https".to_string(), "127.0.0.1".to_string(), 443, &["OPTIONS".to_string(), "GET".to_string(), "POST".to_string()], &[], Some(10));
     let cors_handler = Arc::new(cors_handler);
-    let parser = Arc::new(DefaultParser::with(128, None));
+    let parser = Arc::new(DefaultParser::with(128, None, None));
     let multi_parts = Arc::new(MutilParts::with(8 * 1024 * 1024));
     let range_load = Arc::new(RangeLoad::new());
     let file_load = Arc::new(FileLoad::new(file_rt.clone(), "../htdocs", Some(cache.clone()), true, true, true, false, 10));
@@ -808,6 +809,67 @@ fn test_https_request() {
         }
     });
     thread::sleep(Duration::from_millis(5000));
+
+    thread::sleep(Duration::from_millis(10000000));
+}
+
+#[test]
+fn test_access_delay() {
+    let rt = RTAsyncRuntimeBuilder::default_multi_thread(None, None, None, None);
+
+    //初始化异步Http客户端
+    let httpc =
+        AsyncHttpcBuilder::new()
+            .bind_address("192.168.35.65")
+            .set_default_user_agent("TestHttpClient")
+            .new_default_header("XXX_XXX_XXX", "undefined")
+            .add_default_header("XXX_XXX_XXX", "null")
+            .enable_cookie(true)
+            .enable_gzip(true)
+            .enable_auto_referer(true)
+            .enable_strict(true)
+            .set_redirect_limit(10)
+            .set_connect_timeout(5000)
+            .set_request_timeout(10000)
+            .set_connection_timeout(Some(60000))
+            .set_host_connection_limit(10)
+            .build().unwrap();
+
+    let httpc_copy = httpc.clone();
+    rt.spawn(async move {
+        let now = Instant::now();
+        match httpc_copy
+            .build_request("https://newpttest.17youx.cn:8443/api/sso/random", AsyncHttpRequestMethod::Get)
+            .set_pairs(&[("login_type", "2"), ("user", "1694151132349ldxNJ")])
+            .send().await {
+            Err(e) => println!("!!!!!!test request failed, e: {:?}", e),
+            Ok(mut resp) => {
+                println!("!!!!!!request time: {:?}", now.elapsed());
+
+                loop {
+                    match resp.get_body().await {
+                        Err(e) => {
+                            println!("!!!!!!get body failed, reason: {:?}", e);
+                            break;
+                        },
+                        Ok(Some(_body)) => {
+                            continue;
+                        },
+                        Ok(None) => {
+                            println!("!!!!!!response time: {:?}", now.elapsed());
+                            println!("!!!!!!peer address: {:?}", resp.get_peer_addr());
+                            println!("!!!!!!url: {}", resp.get_url());
+                            println!("!!!!!!status: {}", resp.get_status());
+                            println!("!!!!!!version: {}", resp.get_version());
+                            println!("!!!!!!headers: {:#?}", resp.to_headers());
+                            println!("!!!!!!body len: {:?}", resp.get_headers("content-length"));
+                            break;
+                        },
+                    }
+                }
+            },
+        }
+    });
 
     thread::sleep(Duration::from_millis(10000000));
 }

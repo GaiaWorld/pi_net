@@ -29,7 +29,7 @@ use wss::{server::WebsocketListener,
           connect::WsSocket,
           utils::{ChildProtocol, WsSession}};
 
-use async_wsc::{AsyncWebsocketClient, AsyncWebsocket, AsyncWebsocketHandler, AsyncWebsocketMessage, AsyncWebsocketCloseCode};
+use pi_async_wsc::{AsyncWebsocketClient, AsyncWebsocket, AsyncWebsocketHandler, AsyncWebsocketMessage, AsyncWebsocketCloseCode};
 
 struct TestChildProtocol;
 
@@ -356,48 +356,48 @@ fn test_tls_wsc() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
-    let rt0 = AsyncRuntimeBuilder::default_local_thread(None, None);
-    let rt1 = AsyncRuntimeBuilder::default_local_thread(None, None);
-    let rt2 = AsyncRuntimeBuilder::default_local_thread(None, None);
-    let rt3 = AsyncRuntimeBuilder::default_local_thread(None, None);
-    let rt4 = AsyncRuntimeBuilder::default_local_thread(None, None);
-    let rt5 = AsyncRuntimeBuilder::default_local_thread(None, None);
-    let rt6 = AsyncRuntimeBuilder::default_local_thread(None, None);
-    let rt7 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    // let rt0 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    // let rt1 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    // let rt2 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    // let rt3 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    // let rt4 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    // let rt5 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    // let rt6 = AsyncRuntimeBuilder::default_local_thread(None, None);
+    // let rt7 = AsyncRuntimeBuilder::default_local_thread(None, None);
 
-    let mut factory = PortsAdapterFactory::<TlsSocket>::new();
-    factory.bind(38080,
-                 Box::new(WebsocketListener::with_protocol(Arc::new(TestChildProtocol))));
-    let tls_config = TlsConfig::new_server("",
-                                           false,
-                                           "./tests/7285407__17youx.cn.pem",
-                                           "./tests/7285407__17youx.cn.key",
-                                           "",
-                                           "",
-                                           "",
-                                           512,
-                                           false,
-                                           "").unwrap();
-    let mut config = SocketConfig::with_tls("0.0.0.0", &[(38080, tls_config)]);
-    config.set_option(16384, 16384, 16384, 16);
-
-    match SocketListener::bind(vec![rt0, rt1, rt2, rt3, rt4, rt5, rt6, rt7],
-                               factory,
-                               config,
-                               1024,
-                               1024 * 1024,
-                               1024,
-                               16,
-                               4096,
-                               4096,
-                               Some(1000)) {
-        Err(e) => {
-            println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
-        },
-        Ok(driver) => {
-            println!("===> Websocket Listener Bind Ok");
-        }
-    }
+    // let mut factory = PortsAdapterFactory::<TlsSocket>::new();
+    // factory.bind(38080,
+    //              Box::new(WebsocketListener::with_protocol(Arc::new(TestChildProtocol))));
+    // let tls_config = TlsConfig::new_server("",
+    //                                        false,
+    //                                        "./tests/7285407__17youx.cn.pem",
+    //                                        "./tests/7285407__17youx.cn.key",
+    //                                        "",
+    //                                        "",
+    //                                        "",
+    //                                        512,
+    //                                        false,
+    //                                        "").unwrap();
+    // let mut config = SocketConfig::with_tls("0.0.0.0", &[(38080, tls_config)]);
+    // config.set_option(16384, 16384, 16384, 16);
+    //
+    // match SocketListener::bind(vec![rt0, rt1, rt2, rt3, rt4, rt5, rt6, rt7],
+    //                            factory,
+    //                            config,
+    //                            1024,
+    //                            1024 * 1024,
+    //                            1024,
+    //                            16,
+    //                            4096,
+    //                            4096,
+    //                            Some(1000)) {
+    //     Err(e) => {
+    //         println!("!!!> Websocket Listener Bind Error, reason: {:?}", e);
+    //     },
+    //     Ok(driver) => {
+    //         println!("===> Websocket Listener Bind Ok");
+    //     }
+    // }
 
     //初始化异步运行时
     let builder = MultiTaskRuntimeBuilder::default();
@@ -431,7 +431,7 @@ fn test_tls_wsc() {
 
     //创建连接
     // let ws = client.build("wss://test.17youx.cn:38080", vec!["mqttv3.1".to_string()], handler).unwrap();
-    let ws = client.build("wss://meligame.meli.games:2234/mqtt", vec!["mqttv3.1".to_string()], handler).unwrap();
+    let ws = client.build("wss://boomwss.17youx.cn:20201/mqtt", vec!["mqttv3.1".to_string()], handler).unwrap();
     // let ws = client.build("ws://16.163.41.96:1234/mqtt", vec!["mqttv3.1".to_string()], handler).unwrap();
     // let ws = client.build("wss://meliws.17youx.cn:443", vec!["mqttv3.1".to_string()], handler).unwrap();
 
