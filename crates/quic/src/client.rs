@@ -464,8 +464,11 @@ impl QuicClient {
         //初始化Udp终端
         init_udp_terminal(Box::new(client.clone()));
 
-        //启动客户端定时器
-        udp_client_runtime.spawn(poll_timer(client.clone()));
+        //用最后一个Quic运行时启动客户端定时器
+        runtimes
+            .last()
+            .unwrap()
+            .spawn(poll_timer(client.clone()));
 
         //构建并启动客户端连接池
         let mut pool_id = 0;
@@ -700,14 +703,17 @@ fn poll_timer(client: QuicClient) -> LocalBoxFuture<'static, ()> {
                 };
 
                 match event {
-                    QuicClientTimerEvent::UdpConnect(_udp_connect_uid) => {
+                    QuicClientTimerEvent::UdpConnect(udp_connect_uid) => {
                         //Udp连接超时事件
-                        unimplemented!();
+                        if let Some((_, (_udp_connect_uid, connect_value))) = client.0.connect_events.remove(&udp_connect_uid) {
+                            //指定的Udp连接超时，则立即返回错误原因
+                            connect_value.set(Err(Error::new(ErrorKind::TimedOut, "Connect udp timeout")));
+                        }
                     },
                     QuicClientTimerEvent::QuicConnect(quic_connect_uid) => {
                         //Quic连接超时事件
-                        if let Some((_, (_udp_connect_uid, connect_value))) = client.0.connect_events.remove(&quic_connect_uid) {
-                            //指定的Udp连接超时，则立即返回错误原因
+                        if let Some((_, (_quic_connect_uid, connect_value))) = client.0.connect_events.remove(&quic_connect_uid) {
+                            //指定的Quic连接超时，则立即返回错误原因
                             connect_value.set(Err(Error::new(ErrorKind::TimedOut, "Connect quic timeout")));
                         }
                     },
@@ -716,7 +722,12 @@ fn poll_timer(client: QuicClient) -> LocalBoxFuture<'static, ()> {
 
         }
 
-        client.0.udp_terminal_runtime.spawn(poll_timer(client.clone()));
+        client
+            .0
+            .runtimes
+            .last()
+            .unwrap()
+            .spawn(poll_timer(client.clone()));
     }.boxed_local()
 }
 
