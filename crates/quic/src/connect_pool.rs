@@ -196,7 +196,7 @@ fn handle_udp_accepted<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
     //加入连接池
     let socket_uid = socket.get_uid();
     let socket_shared = Arc::new(UnsafeCell::new(socket));
-    pool.sockets.insert(socket_uid, socket_shared);
+    pool.sockets.insert(socket_uid, socket_shared.clone());
 }
 
 // 轮询连接池定时器
@@ -717,6 +717,17 @@ fn handle_connection_close<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
             //取消连接的定时器
             if let Some(timer_ref) = (&mut *socket.get()).unset_timer_ref() {
                 let _ = pool.timer.cancel(KeyData::from_ffi(timer_ref).into());
+            }
+
+            if (&*socket.get()).is_udp_accepted()
+                || (&*socket.get()).is_handshaking() {
+                //当前连接还未完全成功，则不需要执行已关闭回调
+                rt.spawn(async move {
+                    //因为Quic连接句柄握住了当前连接，所以需要移除当前连接绑定的Quic连接句柄，以释放当前连接
+                    (&mut *socket.get()).remove_socket_handle();
+                });
+
+                return;
             }
 
             //异步执行已关闭回调

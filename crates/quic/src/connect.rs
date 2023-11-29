@@ -146,6 +146,24 @@ impl QuicSocket {
         }
     }
 
+    /// 判断当前连接的Udp连接已接受
+    pub fn is_udp_accepted(&self) -> bool {
+        if let QuicSocketStatus::UdpAccepted = self.status.load(Ordering::Acquire).into() {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 判断当前连接是否正在握手
+    pub fn is_handshaking(&self) -> bool {
+        if let QuicSocketStatus::Handshaking = self.status.load(Ordering::Acquire).into() {
+            true
+        } else {
+            false
+        }
+    }
+
     /// 判断当前连接是否已关闭
     pub fn is_closeing(&self) -> bool {
         if let QuicSocketStatus::Closeing = self.status.load(Ordering::Acquire).into() {

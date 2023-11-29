@@ -6,3 +6,6 @@
 **/.idea
 /htdocs
 /upload
+/crates/quic/tests/*.der
+/crates/quic/tests/*.crt
+/crates/quic/tests/*.key

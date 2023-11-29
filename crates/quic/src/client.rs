@@ -13,7 +13,8 @@ use futures::future::{FutureExt, LocalBoxFuture};
 use parking_lot::RwLock;
 use quinn_proto::{Endpoint, EndpointConfig, ClientConfig, TransportConfig, EndpointEvent, DatagramEvent, ConnectionHandle, StreamId, Dir};
 use crossbeam_channel::{Sender, unbounded};
-use dashmap::DashMap;
+use dashmap::{DashMap,
+              mapref::entry::Entry};
 use bytes::{Buf, Bytes, BytesMut};
 use futures::AsyncReadExt;
 use futures::task::SpawnExt;
@@ -418,6 +419,7 @@ impl QuicClient {
         //创建Quic状态机
         let end_point = Rc::new(UnsafeCell::new(Endpoint::new(Arc::new(config), None)));
         let connections = DashMap::new();
+        let connections_map = DashMap::new();
         let connect_events = DashMap::new();
         let close_events = DashMap::new();
         let timer = SpinLock::new(Timer::<QuicClientTimerEvent, 100, 60, 3>::default());
@@ -448,6 +450,7 @@ impl QuicClient {
             default_config,
             clock,
             connections,
+            connecting: connections_map,
             service: service.clone(),
             router,
             connect_events,
@@ -543,6 +546,18 @@ impl QuicClient {
                          hostname: &str,
                          config: Option<ClientConfig>,
                          timeout: Option<usize>) -> Result<QuicClientConnection> {
+        match self.0.connecting.entry(remote) {
+            Entry::Occupied(_) => {
+                //当前正在连接指定的对端，则立即返回错误原因
+                return Err(Error::new(ErrorKind::WouldBlock,
+                                      format!("Connect quic peer failed, peer: {:?}, reason: connecting to the peer", remote)));
+            },
+            Entry::Vacant(v) => {
+                //未连接指定的对端，则继续连接
+                v.insert(());
+            },
+        }
+
         let udp_connect_uid = self
             .0
             .udp_terminal
@@ -642,6 +657,11 @@ impl QuicClient {
         match connect_value.await {
             Err(e) => {
                 //建立Udp连接失败，则立即返回错误原因
+                let _ = self
+                    .0
+                    .connecting
+                    .remove(&remote);
+
                 Err(e)
             },
             Ok(socket_handle) => {
@@ -652,11 +672,16 @@ impl QuicClient {
                 };
 
                 let connection = QuicClientConnection(Arc::new(inner));
+                let connection_id = connection.get_connection_handle().0;
                 self
                     .0
                     .connections
-                    .insert(connection.get_connection_handle().0,
+                    .insert(connection_id,
                             connection.clone());
+                let _ = self
+                    .0
+                    .connecting
+                    .remove(&remote);
 
                 Ok(connection)
             },
@@ -669,7 +694,7 @@ impl QuicClient {
                                   code: u32,
                                   reason: Result<()>) -> Result<()> {
         let uid = connection_handle.0;
-        if let Some((_uid, connection)) = self.0.connections.remove(&uid) {
+        if let Some((uid, connection)) = self.0.connections.remove(&uid) {
             //指定唯一id的Udp连接存在，则开始关闭
             let value = AsyncValueNonBlocking::new();
             self.0.close_events.insert(uid, value.clone()); //注册指定连接的关闭事件监听器
@@ -712,9 +737,13 @@ fn poll_timer(client: QuicClient) -> LocalBoxFuture<'static, ()> {
                     },
                     QuicClientTimerEvent::QuicConnect(quic_connect_uid) => {
                         //Quic连接超时事件
-                        if let Some((_, (_quic_connect_uid, connect_value))) = client.0.connect_events.remove(&quic_connect_uid) {
+                        if let Some((_, (_udp_connect_uid, connect_value))) = client.0.connect_events.remove(&quic_connect_uid) {
                             //指定的Quic连接超时，则立即返回错误原因
                             connect_value.set(Err(Error::new(ErrorKind::TimedOut, "Connect quic timeout")));
+
+                            //通知Quic连接池关闭超时的连接
+                            let sender = &client.0.router[quic_connect_uid % client.0.router.len()];
+                            let _ = sender.send(QuicEvent::ConnectionClose(ConnectionHandle(quic_connect_uid)));
                         }
                     },
                 }
@@ -753,6 +782,8 @@ struct InnerQuicClient {
     clock:                      Instant,
     //Quic连接表
     connections:                DashMap<usize, QuicClientConnection>,
+    //Quic连接中状态表
+    connecting:                 DashMap<SocketAddr, ()>,
     //Quic客户端服务
     service:                    Arc<QuicClientService>,
     //Quic连接路由器
