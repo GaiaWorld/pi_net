@@ -1303,6 +1303,11 @@ impl QuicSocket {
         if let Some(sender) = &self.event_send {
             if let Err(e) = sender.send(QuicEvent::StreamClose(self.get_connection_handle().clone(), None, code)) {
                 return Err(Error::new(ErrorKind::BrokenPipe,
+                                      format!("Close quic connection streams failed, reason: {:?}",
+                                              e)));
+            }
+            if let Err(e) = sender.send(QuicEvent::ConnectionClose(self.get_connection_handle().clone())) {
+                return Err(Error::new(ErrorKind::BrokenPipe,
                                       format!("Close quic connection failed, reason: {:?}",
                                               e)));
             }
@@ -1334,10 +1339,10 @@ impl QuicSocket {
         };
 
         for stream_id in stream_ids {
-            //关闭接收流
-            if let Err(e) = self.connect.recv_stream(stream_id).stop(VarInt::from_u32(code)) {
+            //关闭发送流
+            if let Err(e) = self.connect.send_stream(stream_id).finish() {
                 return Err(Error::new(ErrorKind::Other,
-                                      format!("Shutdown quic recv stream failed, uid: {:?}, remote: {:?}, local: {:?}, stream_id: {:?}, reason: {:?}",
+                                      format!("Shutdown quic send stream failed, uid: {:?}, remote: {:?}, local: {:?}, stream_id: {:?}, reason: {:?}",
                                               self.get_uid(),
                                               self.get_remote(),
                                               self.get_local(),
@@ -1345,10 +1350,10 @@ impl QuicSocket {
                                               e)));
             }
 
-            //关闭发送流
-            if let Err(e) = self.connect.send_stream(stream_id).finish() {
+            //关闭接收流
+            if let Err(e) = self.connect.recv_stream(stream_id).stop(VarInt::from_u32(code)) {
                 return Err(Error::new(ErrorKind::Other,
-                                      format!("Shutdown quic send stream failed, uid: {:?}, remote: {:?}, local: {:?}, stream_id: {:?}, reason: {:?}",
+                                      format!("Shutdown quic recv stream failed, uid: {:?}, remote: {:?}, local: {:?}, stream_id: {:?}, reason: {:?}",
                                               self.get_uid(),
                                               self.get_remote(),
                                               self.get_local(),

@@ -681,18 +681,24 @@ fn handle_stream_close<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
         let socket = item.value();
 
         unsafe {
-            //强制关闭连接
-            let (code, reason) = if let Some((code, reason)) = (&mut *socket.get()).get_close_reason() {
-                //有连接关闭的原因
-                (*code,
-                 format!("Closed connect, reason: {:?}",
-                         reason))
-            } else {
-                //无连接关闭的原因
-                (0,
-                 format!("Closed connect, reason: normal"))
-            };
-            (&mut *socket.get()).force_close(code, reason);
+            if let Some(stream_id) = &stream_id {
+                if let Some(main_stream_id) = (&mut *socket.get()).get_main_stream_id() {
+                    if main_stream_id == stream_id {
+                        //关闭的当前连接的主流，则强制关闭连接
+                        let (code, reason) = if let Some((code, reason)) = (&mut *socket.get()).get_close_reason() {
+                            //有连接关闭的原因
+                            (*code,
+                             format!("Closed connect, reason: {:?}",
+                                     reason))
+                        } else {
+                            //无连接关闭的原因
+                            (0,
+                             format!("Closed connect, reason: normal"))
+                        };
+                        (&mut *socket.get()).force_close(code, reason);
+                    }
+                }
+            }
 
             //关闭连接的流
             if let Err(e) = (&mut *socket.get()).shutdown(stream_id, code) {
