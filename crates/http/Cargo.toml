@@ -1,6 +1,6 @@
 [package]
 name = "pi_http"
-version = "0.2.8"
+version = "0.2.9"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_http"
@@ -26,7 +26,7 @@ base64 = "0.13"
 flate2 = "1.0"
 brotli = "3.3"
 bytes = "1.4"
-pi_atom = "0.2"
+pi_atom = "0.5"
 path-absolutize = "3.1"
 flume = "0.10"
 log = "0.4"
