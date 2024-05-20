@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use futures::future::{FutureExt, LocalBoxFuture};
 use quinn_proto::{TransportConfig, VarInt};
 use env_logger;
+use pi_async_rt::prelude::{MultiTaskRuntimeBuilder, WorkerRuntime};
 
 use pi_async_rt::rt::{AsyncRuntime, AsyncRuntimeBuilder as RTBuilder, startup_global_time_loop,
                       serial::AsyncRuntimeBuilder,
@@ -260,6 +261,136 @@ fn test_tls_mqtt_proxy_service() {
                                            false,
                                            "").unwrap();
     let mut config = SocketConfig::with_tls("0.0.0.0", &[(port, tls_config)]);
+    config.set_option(16384, 16384, 16384, 16);
+
+    match SocketListener::bind(vec![rt],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               4096,
+                               4096,
+                               Some(1)) {
+        Err(e) => {
+            println!("!!!> Rpc Listener Bind Error, reason: {:?}", e);
+        },
+        Ok(driver) => {
+            println!("===> Rpc Listener Bind Ok");
+        }
+    }
+
+    thread::sleep(Duration::from_millis(10000000));
+}
+
+struct TestMqttSubUnsubRequestHandler<R: AsyncRuntime, S: Socket>(R, PhantomData<S>);
+
+unsafe impl<R: AsyncRuntime, S: Socket> Send for TestMqttSubUnsubRequestHandler<R, S> {}
+unsafe impl<R: AsyncRuntime, S: Socket> Sync for TestMqttSubUnsubRequestHandler<R, S> {}
+
+impl<R: AsyncRuntime, S: Socket> Handler for TestMqttSubUnsubRequestHandler<R, S> {
+    type A = MqttEvent;
+    type B = ();
+    type C = ();
+    type D = ();
+    type E = ();
+    type F = ();
+    type G = ();
+    type H = ();
+    type HandleResult = ();
+
+    fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> LocalBoxFuture<'static, Self::HandleResult> {
+        let rt = self.0.clone();
+        async move {
+            let connect = unsafe { Arc::from_raw(Arc::into_raw(env) as *const MqttConnectHandle<S>) };
+            match args {
+                Args::OneArgs(MqttEvent::Sub(socket_id, broker_name, client_id, topics)) => {
+                    //处理Mqtt订阅主题
+                    let rt_copy = rt.clone();
+                    let topics_copy = topics.clone();
+                    rt.spawn(async move {
+                        loop {
+                            rt_copy.timeout(10).await;
+                            for (topic, _) in topics_copy.clone() {
+                                connect.sub(topic);
+                            }
+                        }
+                    });
+
+                    println!("!!!!!!Sub, socket_id: {:?}, broker_name: {:?}, client_id: {:?}, topics: {:?}", socket_id, broker_name, client_id, topics);
+                },
+                Args::OneArgs(MqttEvent::Unsub(socket_id, broker_name, client_id, topics)) => {
+                    //处理Mqtt退订主题
+                    println!("!!!!!!Unsub, socket_id: {:?}, broker_name: {:?}, client_id: {:?}, topics: {:?}", socket_id, broker_name, client_id, topics);
+
+                    let rt_copy = rt.clone();
+                    rt.spawn(async move {
+                        loop {
+                            rt_copy.timeout(10).await;
+                            for topic in topics.clone() {
+                                connect.unsub(topic);
+                            }
+                        }
+                    });
+                },
+                Args::OneArgs(MqttEvent::Publish(socket_id, broker_name, client_id, address, topic, payload)) => {
+                    //处理Mqtt发布主题
+                    let rt = unsafe {
+                        handler_runtime.get_or_init(move || {
+                            RTBuilder::default_multi_thread(None, None, None, None)
+                        })
+                    };
+
+                    let rt_copy = rt.clone();
+                    rt.spawn(async move {
+                        rt_copy.timeout(10).await;
+                        connect.send(&"rpc/send".to_string(), address.unwrap().to_string().into_bytes());
+                        connect.reply(payload.as_slice().to_vec());
+                    });
+                },
+                _ => {
+                    println!("!!!!!!Invalid mqtt event");
+                },
+            }
+        }.boxed_local()
+    }
+}
+
+impl<R: AsyncRuntime, S: Socket> TestMqttSubUnsubRequestHandler<R, S> {
+    pub fn new(rt: R) -> Self {
+        TestMqttSubUnsubRequestHandler(rt, PhantomData)
+    }
+}
+
+#[test]
+fn test_mqtt_sub_and_unsub() {
+    //启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
+
+    let _handle = startup_global_time_loop(10);
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let rt_worker = RTBuilder::default_multi_thread(None, None, None, None);
+
+    let protocol_name = "mqttv3.1";
+    let broker_name = "test_ws_mqtt";
+    let port = 38080;
+
+    //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
+    let broker_factory = Arc::new(WsMqttBrokerFactory::new(protocol_name,
+                                                           broker_name,
+                                                           port));
+    let event_handler = Arc::new(TestMqttConnectHandler::<TcpSocket>::new());
+    let rpc_handler = Arc::new(TestMqttSubUnsubRequestHandler::<MultiTaskRuntime, TcpSocket>::new(rt_worker));
+    let listener = Arc::new(MqttProxyListener::with_handler(Some(event_handler)));
+    let service = Arc::new(MqttProxyService::with_handler(Some(rpc_handler)));
+    register_mqtt_listener(broker_name, listener);
+    register_mqtt_service(broker_name, service);
+
+    let mut factory = PortsAdapterFactory::<TcpSocket>::new();
+    factory.bind(port,
+                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol())));
+    let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
 
     match SocketListener::bind(vec![rt],
