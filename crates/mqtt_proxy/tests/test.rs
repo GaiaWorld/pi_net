@@ -31,7 +31,8 @@ use quic::{server::{QuicListener, ClientCertVerifyLevel},
            utils::QuicSocketReady};
 use mqtt::server::{WsMqttBrokerFactory, WssMqttBrokerFactory, QuicMqttBrokerFactory,
                    register_mqtt_listener, register_mqtt_service, register_quic_mqtt_service,
-                   register_mqtts_listener, register_mqtts_service, register_quic_mqtt_listener};
+                   register_mqtts_listener, register_mqtts_service, register_quic_mqtt_listener,
+                   publish_topic};
 
 use pi_mqtt_proxy::{service::{MqttEvent, MqttConnectHandle, MqttProxyListener, MqttProxyService},
                     quic_service::{MqttEvent as QuicMqttEvent, MqttConnectHandle as QuicMqttConnectHandle, MqttProxyListener as QuicMqttProxyListener, MqttProxyService as QuicMqttProxyService}};
@@ -310,10 +311,38 @@ impl<R: AsyncRuntime, S: Socket> Handler for TestMqttSubUnsubRequestHandler<R, S
                     let rt_copy = rt.clone();
                     let topics_copy = topics.clone();
                     rt.spawn(async move {
+                        let mut buf = Vec::with_capacity(1000);
                         loop {
+                            if buf.len() >= 1000 {
+                                println!("======> sub time: {:?}ns", buf.iter().sum::<Duration>().as_nanos() / buf.len() as u128);
+                                buf.clear();
+                            }
                             rt_copy.timeout(10).await;
                             for (topic, _) in topics_copy.clone() {
+                                let now = Instant::now();
                                 connect.sub(topic);
+                                buf.push(now.elapsed());
+                            }
+                        }
+                    });
+
+                    let rt_copy = rt.clone();
+                    let broker_name_copy = broker_name.clone();
+                    let topics_copy = topics.clone();
+                    rt.spawn(async move {
+                        let payload = Arc::new(vec![]);
+                        let mut buf = Vec::with_capacity(1000);
+                        loop {
+                            if buf.len() >= 1000 {
+                                println!("======> publish time: {:?}ns", buf.iter().sum::<Duration>().as_nanos() / buf.len() as u128);
+                                buf.clear();
+                            }
+                            rt_copy.timeout(10).await;
+                            for (topic, _) in topics_copy.clone() {
+                                let now = Instant::now();
+                                let r = publish_topic(Some(broker_name_copy.clone()), true, topic, 0, None, payload.clone());
+                                buf.push(now.elapsed());
+                                assert!(r.is_ok());
                             }
                         }
                     });
@@ -326,10 +355,17 @@ impl<R: AsyncRuntime, S: Socket> Handler for TestMqttSubUnsubRequestHandler<R, S
 
                     let rt_copy = rt.clone();
                     rt.spawn(async move {
+                        let mut buf = Vec::with_capacity(1000);
                         loop {
+                            if buf.len() >= 1000 {
+                                println!("======> unsub time: {:?}ns", buf.iter().sum::<Duration>().as_nanos() / buf.len() as u128);
+                                buf.clear();
+                            }
                             rt_copy.timeout(10).await;
                             for topic in topics.clone() {
+                                let now = Instant::now();
                                 connect.unsub(topic);
+                                buf.push(now.elapsed());
                             }
                         }
                     });
