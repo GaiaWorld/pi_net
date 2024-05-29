@@ -1,6 +1,6 @@
 [package]
 name = "pi_mqtt"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_mqtt"
@@ -15,6 +15,7 @@ mio = "0.8"
 mqtt311 = "0.2"
 parking_lot = "0.12"
 lazy_static = "1.4"
+dashmap = "~5.5"
 pi_hash = { version = "0.1", features = ["xxhash"] }
 tcp = {version = "0.3", path = "../tcp", package = "pi_tcp" }
 ws = {version = "0.3", path = "../ws", package = "pi_ws" }

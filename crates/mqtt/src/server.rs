@@ -2,9 +2,8 @@ use std::sync::Arc;
 use std::io::{Error, Result, ErrorKind};
 
 use mqtt311::{QoS, Packet, Publish};
-use parking_lot::RwLock;
-
-use pi_hash::XHashMap;
+use dashmap::{DashMap,
+              mapref::entry::Entry};
 
 use tcp::{Socket,
           connect::TcpSocket,
@@ -16,7 +15,7 @@ use quic::{SocketHandle, AsyncService};
 use crate::{v311::{self, WsMqtt311},
             tls_v311::{self, WssMqtt311},
             broker::{MqttBrokerListener, MqttBrokerService},
-            session::{MqttSession, QosZeroSession},
+            session::MqttSession,
             quic_v311::{self, QuicMqtt311},
             quic_broker::{MqttBrokerListener as QuicMqttBrokerListener, MqttBrokerService as QuicMqttBrokerService},
             quic_session::MqttSession as QuicMqttSession};
@@ -25,30 +24,76 @@ use crate::{v311::{self, WsMqtt311},
 /// Mqtt代理表和代理映射表
 ///
 lazy_static! {
-    static ref MQTT_BROKERS: RwLock<XHashMap<String, MqttBrokerProtocol>> = RwLock::new(XHashMap::default());
-    static ref MQTT_BROKERS_MAP: RwLock<XHashMap<u16, String>> = RwLock::new(XHashMap::default());
+    static ref MQTT_BROKERS: DashMap<String, MqttBrokerProtocol> = DashMap::default();
+    static ref MQTT_BROKERS_MAP: DashMap<u16, String> = DashMap::default();
 }
 
 ///
 /// Mqtt的Quic代理表和代理映射表
 ///
 lazy_static! {
-    static ref QUIC_MQTT_BROKERS: RwLock<XHashMap<String, MqttBrokerProtocol>> = RwLock::new(XHashMap::default());
-    static ref QUIC_MQTT_BROKERS_MAP: RwLock<XHashMap<u16, String>> = RwLock::new(XHashMap::default());
+    static ref QUIC_MQTT_BROKERS: DashMap<String, MqttBrokerProtocol> = DashMap::default();
+    static ref QUIC_MQTT_BROKERS_MAP: DashMap<u16, String> = DashMap::default();
 }
 
 ///
 /// 获取指定端口的Mqtt代理名称
 ///
 pub fn get_broker_name(port: u16) -> Option<String> {
-    MQTT_BROKERS_MAP.read().get(&port).cloned()
+    if let Some(item) = MQTT_BROKERS_MAP.get(&port) {
+        Some(item.value().clone())
+    } else {
+        None
+    }
 }
 
 ///
 /// 获取指定端口的Mqtt的Quic代理名称
 ///
 pub fn get_quic_broker_name(port: u16) -> Option<String> {
-    QUIC_MQTT_BROKERS_MAP.read().get(&port).cloned()
+    if let Some(item) = QUIC_MQTT_BROKERS_MAP.get(&port) {
+        Some(item.value().clone())
+    } else {
+        None
+    }
+}
+
+/// 获取指定名称的Mqtt代理
+pub fn get_broker(broker_name: &String) -> Option<MqttBrokerProtocol> {
+    if let Some(item) = MQTT_BROKERS.get(broker_name) {
+        Some(item.value().clone())
+    } else {
+        None
+    }
+}
+
+/// 获取所有的Mqtt代理
+pub fn all_broker() -> Vec<(String, MqttBrokerProtocol)> {
+    let mut brokers = Vec::with_capacity(MQTT_BROKERS.len());
+    for broker in MQTT_BROKERS.iter() {
+        brokers.push((broker.key().clone(),
+                      broker.value().clone()));
+    }
+    brokers
+}
+
+/// 获取指定名称的Quic Mqtt代理
+pub fn get_quic_broker(broker_name: &String) -> Option<MqttBrokerProtocol> {
+    if let Some(item) = QUIC_MQTT_BROKERS.get(broker_name) {
+        Some(item.value().clone())
+    } else {
+        None
+    }
+}
+
+/// 获取所有的Quic Mqtt代理
+pub fn all_quic_broker() -> Vec<(String, MqttBrokerProtocol)> {
+    let mut brokers = Vec::with_capacity(MQTT_BROKERS.len());
+    for broker in QUIC_MQTT_BROKERS.iter() {
+        brokers.push((broker.key().clone(),
+                      broker.value().clone()));
+    }
+    brokers
 }
 
 ///
@@ -56,8 +101,8 @@ pub fn get_quic_broker_name(port: u16) -> Option<String> {
 ///
 pub fn register_mqtt_listener(name: &str,
                               listener: Arc<dyn MqttBrokerListener<TcpSocket>>) -> bool {
-    if let Some(broker) = MQTT_BROKERS.read().get(&name.to_string()) {
-        match broker {
+    if let Some(item) = MQTT_BROKERS.get(&name.to_string()) {
+        match item.value() {
             MqttBrokerProtocol::WsMqtt311(broker) => {
                 broker
                     .get_broker()
@@ -78,8 +123,8 @@ pub fn register_mqtt_listener(name: &str,
 ///
 pub fn register_mqtts_listener(name: &str,
                                listener: Arc<dyn MqttBrokerListener<TlsSocket>>) -> bool {
-    if let Some(broker) = MQTT_BROKERS.read().get(&name.to_string()) {
-        match broker {
+    if let Some(item) = MQTT_BROKERS.get(&name.to_string()) {
+        match item.value() {
             MqttBrokerProtocol::WssMqtt311(broker) => {
                 broker
                     .get_broker()
@@ -100,8 +145,8 @@ pub fn register_mqtts_listener(name: &str,
 ///
 pub fn register_quic_mqtt_listener(name: &str,
                                    listener: Arc<dyn QuicMqttBrokerListener>) -> bool {
-    if let Some(broker) = QUIC_MQTT_BROKERS.read().get(&name.to_string()) {
-        match broker {
+    if let Some(item) = QUIC_MQTT_BROKERS.get(&name.to_string()) {
+        match item.value() {
             MqttBrokerProtocol::QuicMqtt311(broker) => {
                 broker
                     .get_broker()
@@ -122,8 +167,8 @@ pub fn register_quic_mqtt_listener(name: &str,
 ///
 pub fn register_mqtt_service(name: &str,
                              service: Arc<dyn MqttBrokerService<TcpSocket>>) -> bool {
-    if let Some(broker) = MQTT_BROKERS.read().get(&name.to_string()) {
-        match broker {
+    if let Some(item) = MQTT_BROKERS.get(&name.to_string()) {
+        match item.value() {
             MqttBrokerProtocol::WsMqtt311(broker) => {
                 broker
                     .get_broker()
@@ -144,8 +189,8 @@ pub fn register_mqtt_service(name: &str,
 ///
 pub fn register_mqtts_service(name: &str,
                               service: Arc<dyn MqttBrokerService<TlsSocket>>) -> bool {
-    if let Some(broker) = MQTT_BROKERS.read().get(&name.to_string()) {
-        match broker {
+    if let Some(item) = MQTT_BROKERS.get(&name.to_string()) {
+        match item.value() {
             MqttBrokerProtocol::WssMqtt311(broker) => {
                 broker
                     .get_broker()
@@ -166,8 +211,8 @@ pub fn register_mqtts_service(name: &str,
 ///
 pub fn register_quic_mqtt_service(name: &str,
                                   service: Arc<dyn QuicMqttBrokerService>) -> bool {
-    if let Some(broker) = QUIC_MQTT_BROKERS.read().get(&name.to_string()) {
-        match broker {
+    if let Some(item) = QUIC_MQTT_BROKERS.get(&name.to_string()) {
+        match item.value() {
             MqttBrokerProtocol::QuicMqtt311(broker) => {
                 broker
                     .get_broker()
@@ -224,11 +269,9 @@ impl WsMqttBrokerFactory {
 
         //注册代理
         MQTT_BROKERS
-            .write()
             .insert(broker_name.to_string(),
                     MqttBrokerProtocol::WsMqtt311(broker));
         MQTT_BROKERS_MAP
-            .write()
             .insert(broker_port,
                     broker_name.to_string());
 
@@ -241,8 +284,8 @@ impl WsMqttBrokerFactory {
 
     /// 构建一个Websocket子协议处理器
     pub fn new_child_protocol(&self) -> Arc<dyn ChildProtocol<TcpSocket>> {
-        if let Some(broker) = MQTT_BROKERS.read().get(&self.broker_name) {
-            if let MqttBrokerProtocol::WsMqtt311(broker) = broker {
+        if let Some(item) = MQTT_BROKERS.get(&self.broker_name) {
+            if let MqttBrokerProtocol::WsMqtt311(broker) = item.value() {
                 //已存在指定名称的代理，则返回
                 return broker.clone();
             }
@@ -257,11 +300,9 @@ impl WsMqttBrokerFactory {
 
         //注册代理
         MQTT_BROKERS
-            .write()
             .insert(self.broker_name.clone(),
                     MqttBrokerProtocol::WsMqtt311(broker.clone()));
         MQTT_BROKERS_MAP
-            .write()
             .insert(self.broker_port,
                     self.broker_name.clone());
 
@@ -291,8 +332,11 @@ impl WssMqttBrokerFactory {
         );
 
         //注册代理
-        MQTT_BROKERS.write().insert(broker_name.to_string(), MqttBrokerProtocol::WssMqtt311(broker));
-        MQTT_BROKERS_MAP.write().insert(broker_port, broker_name.to_string());
+        MQTT_BROKERS
+            .insert(broker_name.to_string(),
+                    MqttBrokerProtocol::WssMqtt311(broker));
+        MQTT_BROKERS_MAP
+            .insert(broker_port, broker_name.to_string());
 
         WssMqttBrokerFactory {
             protocol_name: protocol_name.to_string(),
@@ -303,8 +347,8 @@ impl WssMqttBrokerFactory {
 
     /// 构建一个Websocket子协议处理器
     pub fn new_child_protocol(&self) -> Arc<dyn ChildProtocol<TlsSocket>> {
-        if let Some(broker) = MQTT_BROKERS.read().get(&self.broker_name) {
-            if let MqttBrokerProtocol::WssMqtt311(broker) = broker {
+        if let Some(item) = MQTT_BROKERS.get(&self.broker_name) {
+            if let MqttBrokerProtocol::WssMqtt311(broker) = item.value() {
                 //已存在指定名称的代理，则返回
                 return broker.clone();
             }
@@ -315,11 +359,9 @@ impl WssMqttBrokerFactory {
 
         //注册代理
         MQTT_BROKERS
-            .write()
             .insert(self.broker_name.clone(),
                     MqttBrokerProtocol::WssMqtt311(broker.clone()));
         MQTT_BROKERS_MAP
-            .write()
             .insert(self.broker_port,
                     self.broker_name.clone());
 
@@ -345,11 +387,9 @@ impl QuicMqttBrokerFactory {
 
         //注册代理
         QUIC_MQTT_BROKERS
-            .write()
             .insert(broker_name.to_string(),
                     MqttBrokerProtocol::QuicMqtt311(broker));
         QUIC_MQTT_BROKERS_MAP
-            .write()
             .insert(broker_port,
                     broker_name.to_string());
 
@@ -361,8 +401,8 @@ impl QuicMqttBrokerFactory {
 
     /// 构建一个Quic服务
     pub fn new_quic_service(&self) -> Arc<dyn AsyncService> {
-        if let Some(broker) = QUIC_MQTT_BROKERS.read().get(&self.broker_name) {
-            if let MqttBrokerProtocol::QuicMqtt311(broker) = broker {
+        if let Some(item) = QUIC_MQTT_BROKERS.get(&self.broker_name) {
+            if let MqttBrokerProtocol::QuicMqtt311(broker) = item.value() {
                 //已存在指定名称的代理，则返回
                 return broker.clone();
             }
@@ -376,11 +416,9 @@ impl QuicMqttBrokerFactory {
 
         //注册代理
         QUIC_MQTT_BROKERS
-            .write()
             .insert(self.broker_name.clone(),
                     MqttBrokerProtocol::QuicMqtt311(broker.clone()));
         QUIC_MQTT_BROKERS_MAP
-            .write()
             .insert(self.broker_port,
                     self.broker_name.clone());
 
@@ -395,18 +433,22 @@ pub fn add_topic(broker_name: &String,
                  topic: String,
                  qos: u8,
                  retain: Option<Publish>) {
-    if let Some(broker) = MQTT_BROKERS.read().get(broker_name) {
-        match broker {
-            MqttBrokerProtocol::WsMqtt311(broker) => {
-                broker.get_broker().subscribed(is_public, &topic, qos, retain);
-            },
-            MqttBrokerProtocol::WssMqtt311(broker) => {
-                broker.get_broker().subscribed(is_public, &topic, qos, retain);
-            },
-            MqttBrokerProtocol::QuicMqtt311(broker) => {
-                broker.get_broker().subscribed(is_public, &topic, qos, retain);
-            },
-        }
+    let broker = if let Some(broker) = get_broker(broker_name) {
+        broker
+    } else {
+        return;
+    };
+
+    match broker {
+        MqttBrokerProtocol::WsMqtt311(broker) => {
+            broker.get_broker().subscribed(is_public, &topic, qos, retain);
+        },
+        MqttBrokerProtocol::WssMqtt311(broker) => {
+            broker.get_broker().subscribed(is_public, &topic, qos, retain);
+        },
+        MqttBrokerProtocol::QuicMqtt311(broker) => {
+            broker.get_broker().subscribed(is_public, &topic, qos, retain);
+        },
     }
 }
 
@@ -419,8 +461,8 @@ pub fn publish_topic(broker_name: Option<String>,
                      payload: Arc<Vec<u8>>) -> Result<()> {
     if let Some(broker_name) = broker_name {
         //指定了Broker
-        if let Some(broker) = MQTT_BROKERS.read().get(&broker_name) {
-            publish_to_connection(broker,
+        if let Some(broker) = get_broker(&broker_name) {
+            publish_to_connection(&broker,
                                   &broker_name,
                                   is_public,
                                   &topic,
@@ -434,8 +476,8 @@ pub fn publish_topic(broker_name: Option<String>,
         }
     } else {
         //未指定Broker，则全遍历
-        for (broker_name, broker) in MQTT_BROKERS.read().iter() {
-            publish_to_connection(broker,
+        for (broker_name, broker) in all_broker() {
+            publish_to_connection(&broker,
                                   &broker_name,
                                   is_public,
                                   &topic,
@@ -533,9 +575,13 @@ pub fn add_quic_topic(broker_name: &String,
                       topic: String,
                       qos: u8,
                       retain: Option<Publish>) {
-    if let Some(MqttBrokerProtocol::QuicMqtt311(broker)) = QUIC_MQTT_BROKERS.read().get(broker_name) {
-        broker.get_broker().subscribed(is_public, &topic, qos, retain);
-    }
+    let broker = if let Some(MqttBrokerProtocol::QuicMqtt311(broker)) = get_quic_broker(broker_name) {
+        broker
+    } else {
+        return;
+    };
+
+    broker.get_broker().subscribed(is_public, &topic, qos, retain);
 }
 
 /// QUIC服务器发布指定主题的消息
@@ -547,9 +593,9 @@ pub fn publish_quic_topic(broker_name: Option<String>,
                           payload: Arc<Vec<u8>>) -> Result<()> {
     if let Some(broker_name) = broker_name {
         //指定了Broker
-        if let Some(MqttBrokerProtocol::QuicMqtt311(broker)) = QUIC_MQTT_BROKERS.read().get(&broker_name) {
+        if let Some(MqttBrokerProtocol::QuicMqtt311(broker)) = get_quic_broker(&broker_name) {
             //获取订阅了当前主题的Mqtt会话
-            publish_to_quic_connection(broker,
+            publish_to_quic_connection(&broker,
                                        &broker_name,
                                        is_public,
                                        &topic,
@@ -564,9 +610,9 @@ pub fn publish_quic_topic(broker_name: Option<String>,
         }
     } else {
         //未指定Broker，则全遍历
-        for (broker_name, broker) in QUIC_MQTT_BROKERS.read().iter() {
+        for (broker_name, broker) in all_quic_broker() {
             if let MqttBrokerProtocol::QuicMqtt311(broker) = broker {
-                publish_to_quic_connection(broker,
+                publish_to_quic_connection(&broker,
                                            &broker_name,
                                            is_public,
                                            &topic,

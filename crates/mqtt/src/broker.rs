@@ -1,16 +1,17 @@
 use std::sync::Arc;
 use std::io::Result;
+use std::collections::{BTreeMap,
+                       btree_map::Entry};
 
 use futures::future::LocalBoxFuture;
 use parking_lot::RwLock;
+use dashmap::DashMap;
 use mqtt311::{TopicPath, Publish};
-
-use pi_hash::XHashMap;
 
 use tcp::Socket;
 
 use crate::{server::MqttBrokerProtocol,
-            session::{MqttSession, MqttConnect, QosZeroSession},
+            session::{MqttConnect, QosZeroSession},
             utils::{PathTree, BrokerSession}};
 
 ///
@@ -112,14 +113,14 @@ unsafe impl<S: Socket> Sync for MqttService<S> {}
 /// Mqtt代理
 ///
 pub struct MqttBroker<S: Socket> {
-    listener:   Arc<RwLock<Option<Arc<dyn MqttBrokerListener<S>>>>>,           //监听器，用于监听Mqtt连接和关闭事件
-    service:    Arc<RwLock<Option<Arc<dyn MqttBrokerService<S>>>>>,            //通用主题服务
-    services:   Arc<RwLock<XHashMap<String, Arc<dyn MqttBrokerService<S>>>>>,  //服务表，保存指定主题的服务
-    sessions:   Arc<RwLock<XHashMap<String, Arc<QosZeroSession<S>>>>>,          //会话表
-    sub_tab:    Arc<RwLock<XHashMap<String, Arc<RwLock<SubCache<S>>>>>>,        //会话订阅表
-    patterns:   Arc<RwLock<PathTree<Arc<QosZeroSession<S>>>>>,                  //订阅模式表
-    publics:    Arc<RwLock<Vec<(String, u8)>>>,                                 //已发布的公共主题列表
-    topics:     Arc<RwLock<XHashMap<Arc<QosZeroSession<S>>, Vec<String>>>>,     //用户已订阅主题表
+    listener:   Arc<RwLock<Option<Arc<dyn MqttBrokerListener<S>>>>>,    //监听器，用于监听Mqtt连接和关闭事件
+    service:    Arc<RwLock<Option<Arc<dyn MqttBrokerService<S>>>>>,     //通用主题服务
+    services:   Arc<DashMap<String, Arc<dyn MqttBrokerService<S>>>>,    //服务表，保存指定主题的服务
+    sessions:   Arc<DashMap<String, Arc<QosZeroSession<S>>>>,           //会话表
+    sub_tab:    Arc<DashMap<String, Arc<RwLock<SubCache<S>>>>>,         //会话订阅表
+    patterns:   Arc<RwLock<PathTree<Arc<QosZeroSession<S>>>>>,          //订阅模式表
+    publics:    Arc<RwLock<BTreeMap<String, u8>>>,                      //已发布的公共主题列表
+    topics:     Arc<DashMap<Arc<QosZeroSession<S>>, Vec<String>>>,      //用户已订阅主题表
 }
 
 unsafe impl<S: Socket> Send for MqttBroker<S> {}
@@ -146,12 +147,12 @@ impl<S: Socket> MqttBroker<S> {
         MqttBroker {
             listener: Arc::new(RwLock::new(None)),
             service: Arc::new(RwLock::new(None)),
-            services: Arc::new(RwLock::new(XHashMap::default())),
-            sessions: Arc::new(RwLock::new(XHashMap::default())),
-            sub_tab: Arc::new(RwLock::new(XHashMap::default())),
+            services: Arc::new(DashMap::default()),
+            sessions: Arc::new(DashMap::default()),
+            sub_tab: Arc::new(DashMap::default()),
             patterns: Arc::new(RwLock::new(PathTree::empty())),
-            publics: Arc::new(RwLock::new(Vec::new())),
-            topics: Arc::new(RwLock::new(XHashMap::default())),
+            publics: Arc::new(RwLock::new(BTreeMap::new())),
+            topics: Arc::new(DashMap::default()),
         }
     }
 
@@ -185,8 +186,8 @@ impl<S: Socket> MqttBroker<S> {
 
     /// 获取指定主题的服务
     pub fn get_topic_service(&self, topic: &String) -> Option<MqttService<S>> {
-        if let Some(service) = self.services.read().get(topic) {
-            return Some(MqttService(service.clone()));
+        if let Some(item) = self.services.get(topic) {
+            return Some(MqttService(item.value().clone()));
         }
 
         None
@@ -195,22 +196,22 @@ impl<S: Socket> MqttBroker<S> {
     /// 注册指定主题的服务
     pub fn register_topic_service(&self, topic: String,
                                   service: Arc<dyn MqttBrokerService<S>>) {
-        self.services.write().insert(topic, service);
+        self.services.insert(topic, service);
     }
 
     /// 注销指定主题的服务
     pub fn unregister_service(&self, topic: &String) {
-        self.services.write().remove(topic);
+        let _ = self.services.remove(topic);
     }
 
     /// 会话数量
     pub fn session_size(&self) -> usize {
-        self.sessions.read().len()
+        self.sessions.len()
     }
 
     /// 已订阅的主题数
     pub fn sub_size(&self) -> usize {
-        self.sub_tab.read().len()
+        self.sub_tab.len()
     }
 
     /// 已订阅的主题模式的会话数量
@@ -220,13 +221,13 @@ impl<S: Socket> MqttBroker<S> {
 
     /// 判断指定客户端id的会话是否存在
     pub fn is_exist_session(&self, client_id: &String) -> bool {
-        self.sessions.read().contains_key(client_id)
+        self.sessions.contains_key(client_id)
     }
 
     /// 获取指定会话
     pub fn get_session(&self, client_id: &String) -> Option<Arc<QosZeroSession<S>>> {
-        if let Some(r) = self.sessions.read().get(client_id) {
-            return Some(r.clone());
+        if let Some(item) = self.sessions.get(client_id) {
+            return Some(item.value().clone());
         }
 
         None
@@ -236,13 +237,17 @@ impl<S: Socket> MqttBroker<S> {
     pub fn insert_session(&self, client_id: String,
                           session: QosZeroSession<S>) -> Arc<QosZeroSession<S>> {
         let connect = Arc::new(session);
-        self.sessions.write().insert(client_id, connect.clone());
+        self.sessions.insert(client_id, connect.clone());
         connect
     }
 
     /// 移除指定会话，返回被移除的会话
     pub fn remove_session(&self, client_id: &String) -> Option<Arc<QosZeroSession<S>>> {
-        self.sessions.write().remove(client_id)
+        if let Some((_key, value)) = self.sessions.remove(client_id) {
+            Some(value)
+        } else {
+            None
+        }
     }
 
     /// 获取已订阅指定主题的会话
@@ -253,21 +258,16 @@ impl<S: Socket> MqttBroker<S> {
         let mut is_new_public = false; //是否是新的公共主题
         if is_public {
             //如果是公共主题
-            let mut publics = self.publics.write();
-            if let Err(index) = publics.binary_search_by(|(s, _)| {
-                s.cmp(topic)
-            }) {
-                //不在公共主题列表中，则插入指定位置，保证列表有序
-                publics.insert(index, (topic.clone(), qos));
+            if let Entry::Vacant(v) = self.publics.write().entry(topic.clone()) {
+                v.insert(qos);
                 is_new_public = true;
             }
         }
 
-        let cache = if let Some(cache) = self
+        let cache = if let Some(item) = self
             .sub_tab
-            .read()
             .get(topic) {
-            Some(cache.clone())
+            Some(item.value().clone())
         } else {
             None
         };
@@ -329,7 +329,7 @@ impl<S: Socket> MqttBroker<S> {
                     0 => {
                         //没有任何订阅当前主题的会话，则忽略
                         let retain_copy = retain.clone();
-                        self.sub_tab.write().entry(topic.clone()).or_insert_with(move || {
+                        self.sub_tab.entry(topic.clone()).or_insert_with(move || {
                             //锁住订阅表，进行初始化，保证线程安全
                             Arc::new(RwLock::new(SubCache::with_session(None,
                                                                         retain_copy)))
@@ -342,7 +342,7 @@ impl<S: Socket> MqttBroker<S> {
                         //只有一个会话订阅了当前主题
                         let retain_copy = retain.clone();
                         let session = sessions[0].clone();
-                        self.sub_tab.write().entry(topic.clone()).or_insert_with(move || {
+                        self.sub_tab.entry(topic.clone()).or_insert_with(move || {
                             //锁住订阅表，进行初始化，保证线程安全
                             Arc::new(RwLock::new(SubCache::with_session(Some(session),
                                                                         retain_copy)))
@@ -355,7 +355,7 @@ impl<S: Socket> MqttBroker<S> {
                         //多个会话订阅了当前主题
                         let retain_copy = retain.clone();
                         let sessions_copy = sessions.clone();
-                        self.sub_tab.write().entry(topic.clone()).or_insert_with(move || {
+                        self.sub_tab.entry(topic.clone()).or_insert_with(move || {
                             //锁住订阅表，进行初始化，保证线程安全
                             let mut cache = SubCache::with_session(None,
                                                                    retain_copy);
@@ -414,10 +414,10 @@ impl<S: Socket> MqttBroker<S> {
             }
         } else {
             //订阅的是主题，则将会话加入主题订阅表
-            if self.sub_tab.read().get(&topic).is_none() {
+            if !self.sub_tab.contains_key(&topic) {
                 //当前主题，没有任何会话订阅，则初始化指定主题的订阅缓存
                 let session_copy = session.clone();
-                self.sub_tab.write().entry(topic.clone()).or_insert_with(move || {
+                self.sub_tab.entry(topic.clone()).or_insert_with(move || {
                     //锁住订阅表，进行初始化，保证线程安全
                     Arc::new(RwLock::new(SubCache::with_session(Some(session_copy),
                                                                 None)))
@@ -429,34 +429,35 @@ impl<S: Socket> MqttBroker<S> {
                 return None;
             }
 
-            if let Some(cache) = self
+            let cache = if let Some(item) = self
                 .sub_tab
-                .read()
                 .get(&topic) {
                 //线程安全的确认当前主题，有会话订阅
-                let mut w = cache.write();
-                if let Some(session) = w.first.take() {
-                    //当前主题的缓存中只有一个订阅会话，则将会话移动到会话表中，首次插入无需排序
-                    w.sessions.push(session);
-                }
-
-                //将新会话加入当前主题的订阅缓存的会话表
-                if let Err(index) = w.sessions.binary_search_by(|s| {
-                    s.cmp(&session)
-                }) {
-                    //不在会话列表中
-                    save_topic(self, &session, &topic); //记录当前会话订阅的主题
-                    w.sessions.insert(index, session); //插入指定位置，保证列表有序
-                }
-
-                if let Some(retain) = w.retain.as_ref() {
-                    return Some(Retain::Single(retain.clone()));
-                }
-
-                None
+                item.value().clone()
             } else {
-                None
+                return None;
+            };
+
+            let mut w = cache.write();
+            if let Some(session) = w.first.take() {
+                //当前主题的缓存中只有一个订阅会话，则将会话移动到会话表中，首次插入无需排序
+                w.sessions.push(session);
             }
+
+            //将新会话加入当前主题的订阅缓存的会话表
+            if let Err(index) = w.sessions.binary_search_by(|s| {
+                s.cmp(&session)
+            }) {
+                //不在会话列表中
+                save_topic(self, &session, &topic); //记录当前会话订阅的主题
+                w.sessions.insert(index, session); //插入指定位置，保证列表有序
+            }
+
+            if let Some(retain) = w.retain.as_ref() {
+                return Some(Retain::Single(retain.clone()));
+            }
+
+            None
         }
     }
 
@@ -465,8 +466,13 @@ impl<S: Socket> MqttBroker<S> {
         let path = TopicPath::from(topic.clone());
         if path.wildcards {
             //退订的是主题模式，则移除匹配主题模式的指定会话
+            let mut vec = Vec::with_capacity(self.sub_tab.len());
+            for item in self.sub_tab.iter() {
+                vec.push((item.key().clone(), item.value().clone()));
+            }
+
             let mut keys = Vec::new();
-            for (key, cache) in self.sub_tab.read().iter() {
+            for (key, cache) in vec {
                 if is_match(&path, &TopicPath::from(key.as_str())) {
                     //当前主题与退订的主题模式匹配，则退订当前主题的指定会话
                     let mut w = cache.write();
@@ -494,51 +500,52 @@ impl<S: Socket> MqttBroker<S> {
                 }
             }
 
-
             //线程安全的移除匹配指定主题模式的主题
             for key in keys {
-                self.sub_tab.write().remove(&key);
+                let _ = self.sub_tab.remove(&key);
             }
 
             //移除注册了指定主题模式的会话
             self.patterns.write().remove(path, session.clone());
         } else {
             //退订的是主题
-            if self.sub_tab.read().get(&topic).is_some() {
+            if self.sub_tab.contains_key(&topic) {
                 //当前主题，有会话订阅
                 let mut is_remove = false;
                 let cache = self
                     .sub_tab
-                    .read()
                     .get(&topic)
                     .unwrap()
+                    .value()
                     .clone();
-                let mut w = cache.write();
-                if w.first.is_some() {
-                    //当前主题的只有一个订阅会话
-                    if Arc::ptr_eq(session, &w.first.as_ref().unwrap()) {
-                        //会话相同，则从订阅表中移除当前主题
-                        w.first = None;
-                        is_remove = true;
-                    }
-                } else {
-                    //当前主题也许有多个订阅会话，则从会话表中移除指定的会话
-                    if let Ok(index) = w.sessions.binary_search_by(|s| {
-                        s.cmp(&session)
-                    }) {
-                        //从会话表中找到指定会话，则移除
-                        w.sessions.remove(index);
-                    }
+                {
+                    let mut w = cache.write();
+                    if w.first.is_some() {
+                        //当前主题的只有一个订阅会话
+                        if Arc::ptr_eq(session, &w.first.as_ref().unwrap()) {
+                            //会话相同，则从订阅表中移除当前主题
+                            w.first = None;
+                            is_remove = true;
+                        }
+                    } else {
+                        //当前主题也许有多个订阅会话，则从会话表中移除指定的会话
+                        if let Ok(index) = w.sessions.binary_search_by(|s| {
+                            s.cmp(&session)
+                        }) {
+                            //从会话表中找到指定会话，则移除
+                            w.sessions.remove(index);
+                        }
 
-                    if w.sessions.len() == 0 {
-                        //当前主题已退订所有会话，则从订阅表中移除当前主题
-                        is_remove = true;
+                        if w.sessions.len() == 0 {
+                            //当前主题已退订所有会话，则从订阅表中移除当前主题
+                            is_remove = true;
+                        }
                     }
                 }
 
                 //线程安全的移除当前主题
                 if is_remove {
-                    self.sub_tab.write().remove(&topic);
+                    let _ = self.sub_tab.remove(&topic);
                 }
             }
         }
@@ -547,14 +554,14 @@ impl<S: Socket> MqttBroker<S> {
     /// 退订指定会话已订阅的所有主题
     pub fn unsubscribe_all(&self, session: &Arc<QosZeroSession<S>>) {
         //从用户已订阅主题中移除当前会话
-        let opt = self.topics.write().remove(session);
+        let opt = self.topics.remove(session);
 
         match opt {
             None => {
                 //当前会话没有订阅任何主题，则忽略
                 ()
             },
-            Some(topics) => {
+            Some((_key, topics)) => {
                 //当前会话有订阅主题，则退订
                 for topic in topics {
                     self.unsubscribe(session, topic);
@@ -617,13 +624,13 @@ fn is_match(pattern: &TopicPath, path: &TopicPath) -> bool {
 fn save_topic<S: Socket>(broker: &MqttBroker<S>,
                          session: &Arc<QosZeroSession<S>>,
                          topic: &String) {
-    if broker.topics.read().contains_key(session) {
+    if broker.topics.contains_key(session) {
         //指定会话的已订阅主题存在
-        if let Some(topics) = broker.topics.write().get_mut(session) {
-            topics.push(topic.clone());
+        if let Some(mut item) = broker.topics.get_mut(session) {
+            item.value_mut().push(topic.clone());
         }
     } else {
         //指定会话的已订阅主题不存在
-        broker.topics.write().insert(session.clone(), vec![topic.clone()]);
+        broker.topics.insert(session.clone(), vec![topic.clone()]);
     }
 }

@@ -12,7 +12,6 @@ use mqtt311::{MqttWrite, MqttRead, Protocol, ConnectReturnCode, Packet, Connect,
 use log::warn;
 
 use pi_atom::Atom;
-use pi_hash::XHashMap;
 
 use tcp::{Socket, SocketEvent,
           connect::TcpSocket,
