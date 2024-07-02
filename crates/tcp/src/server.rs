@@ -9,11 +9,11 @@ use crossbeam_channel::{Sender, unbounded};
 use futures::future::{FutureExt, LocalBoxFuture};
 use dashmap::DashMap;
 use num_cpus;
-use log::warn;
+use log::{warn, error};
 
 use pi_async_rt::rt::serial_local_thread::LocalTaskRuntime;
 
-use crate::{Socket, Stream, SocketAdapter, SocketAdapterFactory, SocketConfig, SocketEvent, SocketDriver, SocketHandle, AsyncService,
+use crate::{Socket, Stream, SocketAdapter, SocketAdapterFactory, SocketConfig, SocketEvent, SocketDriver, SocketHandle, AsyncService, AcceptorCmd,
             acceptor::Acceptor,
             connect_pool::TcpSocketPool, SocketStatus};
 
@@ -263,8 +263,9 @@ impl<S: Socket> PortsAdapterFactory<S> {
 /// Tcp连接监听器
 ///
 pub struct SocketListener<S: Socket + Stream, F: SocketAdapterFactory<Connect = S, Adapter = PortsAdapter<S>>> {
-    runtimes:   Vec<LocalTaskRuntime<()>>,  //运行时
-    marker:     PhantomData<(S, F)>,
+    runtimes:               Vec<LocalTaskRuntime<()>>,          //运行时
+    acceptor_controller:    Sender<Box<dyn FnOnce() -> AcceptorCmd + Send>>,   //连接驱动器
+    marker:                 PhantomData<(S, F)>,
 }
 
 impl<S, F> SocketListener<S, F>
@@ -340,20 +341,25 @@ impl<S, F> SocketListener<S, F>
         }
 
         //启动接受器的监听
-        if let Err(e) = acceptor.listen(stack_size,
-                                        event_size,
-                                        recv_frame_buf_size,
-                                        readed_read_size_limit,
-                                        readed_write_size_limit,
-                                        timeout) {
-            //启动接受器失败
-            return Err(e);
+        match acceptor.listen(stack_size,
+                              event_size,
+                              recv_frame_buf_size,
+                              readed_read_size_limit,
+                              readed_write_size_limit,
+                              timeout) {
+            Err(e) => {
+                //启动接受器失败
+                Err(e)
+            },
+            Ok(acceptor_controller) => {
+                //启动接受器成功
+                Ok(SocketListener {
+                    runtimes,
+                    acceptor_controller,
+                    marker: PhantomData,
+                })
+            },
         }
-
-        Ok(SocketListener {
-            runtimes,
-            marker: PhantomData,
-        })
     }
 
     //关闭Tcp连接监听器
@@ -362,6 +368,13 @@ impl<S, F> SocketListener<S, F>
             let _ = runtime.close();
         }
 
-        warn!("Closed tcp socket listener, reason: {:?}", reason);
+        let reason_str = format!("Closed tcp socket listener, reason: {:?}", reason);
+        if let Err(e) = self
+            .acceptor_controller
+            .send(Box::new(move|| AcceptorCmd::Close(reason_str))) {
+            error!("Closed tcp socket listener, reason: {:?}", e);
+        } else {
+            warn!("Closed tcp socket listener, reason: {:?}", reason);
+        }
     }
 }

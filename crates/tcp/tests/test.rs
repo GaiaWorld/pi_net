@@ -10,11 +10,11 @@ use env_logger;
 
 use pi_async_rt::rt::{serial::AsyncRuntimeBuilder};
 
-use new_tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus,
-              connect::TcpSocket,
-              tls_connect::TlsSocket,
-              server::{PortsAdapterFactory, SocketListener},
-              utils::TlsConfig};
+use pi_tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus,
+             connect::TcpSocket,
+             tls_connect::TlsSocket,
+             server::{PortsAdapterFactory, SocketListener},
+             utils::TlsConfig};
 
 #[test]
 fn test_accept_connect() {
@@ -198,8 +198,8 @@ fn test_tls_connect() {
     factory.bind(38080, Box::new(TestService));
     let tls_config = TlsConfig::new_server("",
                                            false,
-                                           "./tests/7285407__17youx.cn.pem",
-                                           "./tests/7285407__17youx.cn.key",
+                                           "./tests/17youx.cn.pem",
+                                           "./tests/17youx.cn.key",
                                            "",
                                            "",
                                            "",

@@ -10,7 +10,7 @@ use mio::{Events, Poll, Token, Interest};
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use bytes::BufMut;
 use slotmap::{Key as SlotMapKey, KeyData as SlotMapKeyData};
-use spin_sleep::LoopHelper;
+use spin_sleep_util::{self, Interval};
 use log::{warn, error};
 
 use pi_async_rt::{lock::spin_lock::SpinLock,
@@ -108,24 +108,14 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
             //启动Tcp连接事件循环
             let (helper, poll_timeout) = if let Some(poll_timeout) = timeout {
                 if cfg!(windows) && poll_timeout < 15000 {
-                    (LoopHelper::builder()
-                         .native_accuracy_ns(10_000)
-                         .build_with_target_rate(1000000u32
-                             .checked_div(poll_timeout as u32)
-                             .unwrap_or(1000)),
+                    (spin_sleep_util::interval(Duration::from_micros(poll_timeout as u64)),
                      Some(Duration::from_micros(0)))
                 } else {
-                    (LoopHelper::builder()
-                         .native_accuracy_ns(10_000)
-                         .build_with_target_rate(1000000u32
-                             .checked_div(poll_timeout as u32)
-                             .unwrap_or(1000)),
+                    (spin_sleep_util::interval(Duration::from_micros(poll_timeout as u64)),
                      Some(Duration::from_micros(poll_timeout as u64)))
                 }
             } else {
-                (LoopHelper::builder()
-                     .native_accuracy_ns(10_000)
-                     .build_with_target_rate(10000),
+                (spin_sleep_util::interval(Duration::from_micros(100)),
                  Some(Duration::from_millis(0)))
             };
             event_loop(rt_copy,
@@ -144,14 +134,11 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
 fn event_loop<S, A>(rt: LocalTaskRuntime<()>,
                     mut pool: TcpSocketPool<S, A>,
                     event_size: usize,
-                    mut helper: LoopHelper,
+                    mut helper: Interval,
                     poll_timeout: Option<Duration>) -> LocalBoxFuture<'static, ()>
     where S: Socket + Stream,
           A: SocketAdapter<Connect = S> {
     async move {
-        if cfg!(windows) || poll_timeout.is_some_and(|time| time.is_zero()) {
-            helper.loop_start(); //开始处理事件
-        }
         let mut events = Events::with_capacity(event_size);
         handle_accepted(&rt, &mut pool).await;
 
@@ -197,7 +184,7 @@ fn event_loop<S, A>(rt: LocalTaskRuntime<()>,
 
         //继续异步调用Tcp连接事件循环
         if cfg!(windows) || poll_timeout.is_some_and(|time| time.is_zero()) {
-            helper.loop_sleep_no_spin(); //开始休眠
+            helper.tick_no_spin(); //开始休眠
         }
         let event_loop = event_loop(rt.clone(),
                                     pool,

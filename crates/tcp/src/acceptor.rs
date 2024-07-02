@@ -8,7 +8,7 @@ use mio::{
     net::TcpListener
 };
 use crossbeam_channel::{Sender, Receiver, unbounded};
-use spin_sleep::LoopHelper;
+use spin_sleep_util;
 use log::{info, warn};
 
 use pi_async_rt::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder},
@@ -131,13 +131,14 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
                   recv_frame_buf_size: usize,
                   readed_read_size_limit: usize,
                   readed_write_size_limit: usize,
-                  timeout: Option<usize>) -> Result<()> {
+                  timeout: Option<usize>) -> Result<Sender<Box<dyn FnOnce() -> AcceptorCmd + Send>>> {
         let worker_name = "Tcp Acceptor ".to_string() + &self.name;
         let rt = AsyncRuntimeBuilder::default_worker_thread(Some(worker_name.as_str()),
                                                             Some(stack_size),
                                                             Some(1),
                                                             Some(Some(1)));
 
+        let controller = self.get_controller();
         let acceptor = self;
         let rt_copy = rt.clone();
         rt.spawn(async move {
@@ -150,11 +151,11 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
                         timeout).await;
         });
 
-        Ok(())
+        Ok(controller)
     }
 }
 
-//接受器监听连接事件循环
+//接受器监听连接事件循环，timeout单位为微秒
 #[inline]
 async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: WorkerRuntime<()>,
                                                                         mut acceptor: Acceptor<S, A>,
@@ -165,24 +166,14 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
                                                                         timeout: Option<usize>) {
     let (mut helper, poll_timeout) = if let Some(poll_timeout) = timeout {
         if cfg!(windows) && poll_timeout < 15000 {
-            (LoopHelper::builder()
-                 .native_accuracy_ns(10_000)
-                 .build_with_target_rate(1000000u32
-                     .checked_div(poll_timeout as u32)
-                     .unwrap_or(1000)),
+            (spin_sleep_util::interval(Duration::from_micros(poll_timeout as u64)),
              Some(Duration::from_micros(0)))
         } else {
-            (LoopHelper::builder()
-                 .native_accuracy_ns(10_000)
-                 .build_with_target_rate(1000000u32
-                     .checked_div(poll_timeout as u32)
-                     .unwrap_or(1000)),
+            (spin_sleep_util::interval(Duration::from_micros(poll_timeout as u64)),
              Some(Duration::from_micros(poll_timeout as u64)))
         }
     } else {
-        (LoopHelper::builder()
-             .native_accuracy_ns(10_000)
-             .build_with_target_rate(10000),
+        (spin_sleep_util::interval(Duration::from_micros(100)),
          Some(Duration::from_millis(0)))
     };
 
@@ -192,9 +183,6 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
     let acceptor_name = acceptor.name.clone();
     let mut events = Events::with_capacity(event_size);
     loop {
-        if cfg!(windows) || poll_timeout.is_some_and(|time| time.is_zero()) {
-            helper.loop_start(); //开始处理事件
-        }
         if let Err(e) = acceptor.poll.poll(&mut events, poll_timeout) {
             if e.kind() != ErrorKind::Interrupted {
                 warn!("Tcp acceptor poll failed, timeout: {:?}, ports: {:?}, reason: {:?}",
@@ -315,7 +303,7 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
         }
 
         if cfg!(windows) || poll_timeout.is_some_and(|time| time.is_zero()) {
-            helper.loop_sleep_no_spin(); //开始休眠
+            helper.tick_no_spin(); //开始休眠
         }
     }
 }

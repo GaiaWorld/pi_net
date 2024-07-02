@@ -6,6 +6,16 @@
 **/.idea
 /htdocs
 /upload
+/crates/tcp/tests/*.pem
+/crates/tcp/tests/*.key
+/crates/ws/tests/*.pem
+/crates/ws/tests/*.key
+/crates/http/tests/*.pem
+/crates/http/tests/*.key
 /crates/quic/tests/*.der
 /crates/quic/tests/*.crt
 /crates/quic/tests/*.key
+/crates/mqtt/tests/*.pem
+/crates/mqtt/tests/*.key
+/crates/mqtt_proxy/tests/*.pem
+/crates/mqtt_proxy/tests/*.key
