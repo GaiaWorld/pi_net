@@ -10,8 +10,8 @@ use env_logger;
 use pi_async_rt::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder},
                       serial_local_thread::LocalTaskRuntime};
 
-use blocking_udp::{Socket, AsyncService, SocketHandle,
-                   terminal::UdpTerminal};
+use pi_blocking_udp::{Socket, AsyncService, SocketHandle,
+                      terminal::UdpTerminal};
 
 struct TestService(bool);
 
@@ -317,6 +317,38 @@ fn test_udp_single_client_to_multi_server() {
 
             let result = terminal.close(Ok(()));
             println!("Client connection close, result: {:?}", result);
+        }
+    }
+
+    thread::sleep(Duration::from_millis(10000000));
+}
+
+#[test]
+fn test_close_udp_connect() {
+    //启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
+
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let addrs = SocketAddr::new(IpAddr::from_str("0.0.0.0").unwrap(), 38080);
+
+    match UdpTerminal::bind(addrs,
+                            rt,
+                            8 * 1024 * 1024,
+                            8 * 1024 * 1024,
+                            0xffff,
+                            0xffff,
+                            Box::new(TestService(true))) {
+        Err(e) => {
+            println!("!!!> Socket Listener Bind Ipv4 Address Error, reason: {:?}", e);
+        },
+        Ok(driver) => {
+            println!("===> Socket Listener Bind Ipv4 Address Ok");
+
+            thread::sleep(Duration::from_millis(10000));
+
+            if let Err(e) = driver.close(Ok(())) {
+                println!("!!!!!!> Close Socket Listener failed, reason: {:?}", e);
+            }
         }
     }
 

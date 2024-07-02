@@ -104,6 +104,7 @@ impl UdpTerminal {
                         debug!("{:?}", e);
                     }
                 }
+                warn!("Udp receive loop already exited, local: {:?}", socket_handle.get_local());
             });
 
         //启动事件处理循环
@@ -175,6 +176,7 @@ impl UdpTerminal {
                         debug!("{:?}", e);
                     }
                 }
+                warn!("Udp receive loop already exited, local: {:?}", socket_handle.get_local());
             });
 
         //生成初始化闭包
@@ -270,6 +272,7 @@ impl UdpTerminal {
 
     /// 关闭Udp终端
     pub fn close(self, reason: Result<()>) -> Result<()> {
+        let mut server_local_address = self.1.get_local().clone();
         if let Err(e) = self.0.send(UdpEvent::CloseListener(reason)) {
             Err(Error::new(ErrorKind::Other,
                            format!("Close Udp listener failed, reason: {:?}",
@@ -280,6 +283,13 @@ impl UdpTerminal {
                                format!("Close Udp listener failed, reason: {:?}",
                                        e)))
             } else {
+                //关闭监听器成功，则关闭UDP端口
+                let mut tmp_client_address = server_local_address.clone();
+                tmp_client_address.set_port(0);
+                let tmp_client = UdpSocket::bind(tmp_client_address)?;
+                server_local_address.set_ip(IpAddr::from([127, 0, 0, 1]));
+                tmp_client.connect(server_local_address)?;
+                let _ = tmp_client.send(&[0])?;
                 Ok(())
             }
         }

@@ -1,6 +1,6 @@
 [package]
 name = "pi_blocking_udp"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "pi_blocking_udp"
 repository = "https://github.com/GaiaWorld/pi_net/tree/crateio"

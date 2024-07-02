@@ -1,6 +1,6 @@
 [package]
 name = "pi_tcp"
-version = "0.3.5"
+version = "0.3.6"
 edition = "2021"
 description = "pi_tcp"
 repository = "https://github.com/GaiaWorld/pi_net/tree/crateio"

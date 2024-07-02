@@ -263,8 +263,8 @@ impl<S: Socket> PortsAdapterFactory<S> {
 /// Tcp连接监听器
 ///
 pub struct SocketListener<S: Socket + Stream, F: SocketAdapterFactory<Connect = S, Adapter = PortsAdapter<S>>> {
-    runtimes:               Vec<LocalTaskRuntime<()>>,          //运行时
-    acceptor_controller:    Sender<Box<dyn FnOnce() -> AcceptorCmd + Send>>,   //连接驱动器
+    runtimes:               Vec<LocalTaskRuntime<()>>,                          //运行时
+    acceptor_controller:    Sender<Box<dyn FnOnce() -> AcceptorCmd + Send>>,    //连接驱动器
     marker:                 PhantomData<(S, F)>,
 }
 

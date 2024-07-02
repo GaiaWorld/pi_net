@@ -229,3 +229,40 @@ fn test_tls_connect() {
 
     thread::sleep(Duration::from_millis(10000000));
 }
+
+#[test]
+fn test_close_tcp_listener() {
+    //启动日志系统
+    env_logger::builder().format_timestamp_millis().init();
+
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+
+    let mut factory = PortsAdapterFactory::<TcpSocket>::new();
+    factory.bind(38080, Box::new(TestService));
+    let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
+    config.set_option(16384, 16384, 16384, 16);
+
+    match SocketListener::bind(vec![rt],
+                               factory,
+                               config,
+                               1024,
+                               1024 * 1024,
+                               1024,
+                               16,
+                               4096,
+                               4096,
+                               Some(100)) {
+        Err(e) => {
+            println!("!!!> Socket Listener Bind Ipv4 & Ipv6 Address Error, reason: {:?}", e);
+        },
+        Ok(driver) => {
+            println!("===> Socket Listener Bind Ipv4 & Ipv6 Address Ok");
+
+            thread::sleep(Duration::from_millis(10000));
+
+            driver.close(Ok(()));
+        }
+    }
+
+    thread::sleep(Duration::from_millis(10000000));
+}

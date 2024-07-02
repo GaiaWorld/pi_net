@@ -121,7 +121,20 @@ impl UdpClient {
                            format!("Close udp client failed, reason: {:?}",
                                     e)))
         } else {
-            Ok(())
+            if let Err(e) = self.3.recv_timeout(Duration::from_millis(5000 )) {
+                Err(Error::new(ErrorKind::Other,
+                               format!("Close Udp Client failed, reason: {:?}",
+                                       e)))
+            } else {
+                //关闭客户端成功，则关闭UDP端口
+                let mut tmp_client_address = server_local_address.clone();
+                tmp_client_address.set_port(0);
+                let tmp_client = UdpSocket::bind(tmp_client_address)?;
+                server_local_address.set_ip(IpAddr::from([127, 0, 0, 1]));
+                tmp_client.connect(server_local_address)?;
+                let _ = tmp_client.send(&[0])?;
+                Ok(())
+            }
         }
     }
 }
@@ -310,6 +323,7 @@ impl UdpClient {
                         break;
                     }
                 }
+                warn!("Udp receive loop already exited, local: {:?}", socket_handle.get_local());
             });
 
         Ok(connection)
