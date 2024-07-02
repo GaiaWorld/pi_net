@@ -1,6 +1,6 @@
 [package]
 name = "pi_async_wsc"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_async_wsc"
@@ -12,7 +12,7 @@ keywords = ["pi", "async_wsc"]
 futures = "0.3"
 futures-util = "0.3"
 flume = "0.10"
-bytes = "1.4"
+bytes = "~1.6"
 webpki = "0.22"
 rustls = { version = "0.20", features = ["dangerous_configuration", "tls12"] }
 actix-rt = "2.1"
