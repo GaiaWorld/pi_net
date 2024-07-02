@@ -1,6 +1,6 @@
 [package]
 name = "pi_quic"
-version = "0.6.5"
+version = "0.6.6"
 authors = ["vmos <vmosone007@gmail.com>"]
 edition = "2021"
 description = "Quic client/server"
@@ -15,7 +15,7 @@ quinn-proto = "0.8"
 pi-async-rt = "0.1"
 rustls = { version = "0.20", features = ["dangerous_configuration"] }
 rustls-pemfile = "1.0"
-bytes = "1.4"
+bytes = "~1.6"
 crossbeam-channel = "0.5"
 crossbeam-utils = "0.8"
 pi_hash = "0.1"
