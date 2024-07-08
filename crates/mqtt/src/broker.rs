@@ -514,7 +514,11 @@ impl<S: Socket> MqttBroker<S> {
                 let mut is_remove = false;
                 let cache = self
                     .sub_tab
-                    .get(&topic)
+                    .get(&topic);
+                if cache.is_none() {
+                    return;
+                }
+                let cache = cache
                     .unwrap()
                     .value()
                     .clone();
