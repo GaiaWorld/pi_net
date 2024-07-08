@@ -512,16 +512,18 @@ impl<S: Socket> MqttBroker<S> {
             if self.sub_tab.contains_key(&topic) {
                 //当前主题，有会话订阅
                 let mut is_remove = false;
-                let cache = self
-                    .sub_tab
-                    .get(&topic);
-                if cache.is_none() {
-                    return;
-                }
-                let cache = cache
-                    .unwrap()
-                    .value()
-                    .clone();
+                let cache = {
+                    let cache = self
+                        .sub_tab
+                        .get(&topic);
+                    if cache.is_none() {
+                        return;
+                    }
+                    cache
+                        .unwrap()
+                        .value()
+                        .clone()
+                };
                 {
                     let mut w = cache.write();
                     if w.first.is_some() {
