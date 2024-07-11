@@ -202,7 +202,24 @@ async fn handle_accepted<S, A>(rt: &LocalTaskRuntime<()>,
     where S: Socket + Stream,
           A: SocketAdapter<Connect = S> {
     let socket_opts = pool.config.option();
-    for mut socket in pool.socket_recv.try_iter().collect::<Vec<S>>() {
+
+    let mut sockets = pool.socket_recv.try_iter().collect::<Vec<S>>();
+    if sockets.len() == 0 {
+        match pool.socket_recv.try_recv() {
+            Err(e) if e.is_disconnected() => {
+                //接受器的发送器已失效，则立即退出当前连接运行时
+                rt.clone().close();
+                error!("Handle accepted failed, reason: {:?}", e);
+                return;
+            },
+            Err(_) => (),
+            Ok(socket) => {
+                sockets.push(socket);
+            },
+        }
+    }
+
+    for mut socket in sockets {
         //接受的新的Tcp连接
         let id = pool
             .sockets
