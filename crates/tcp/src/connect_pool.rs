@@ -208,7 +208,7 @@ async fn handle_accepted<S, A>(rt: &LocalTaskRuntime<()>,
         match pool.socket_recv.try_recv() {
             Err(e) if e.is_disconnected() => {
                 //接受器的发送器已失效，则立即退出当前连接运行时
-                rt.clone().close();
+                let _ = rt.clone().close();
                 error!("Handle accepted failed, reason: {:?}", e);
                 return;
             },

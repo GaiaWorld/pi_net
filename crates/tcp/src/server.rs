@@ -301,7 +301,15 @@ impl<S, F> SocketListener<S, F>
         let mut driver = SocketDriver::new(&binds[..]);
         match Acceptor::bind(&addrs[..], &driver) {
             Err(e) => {
-                return Err(e);
+                for runtime in runtimes {
+                    let _ = runtime.close();
+                }
+
+                if e.kind() == ErrorKind::AddrInUse {
+                    panic!("{:?}", e);
+                } else {
+                    return Err(e);
+                }
             },
             Ok(a) => {
                 //创建工作者数量的连接池，共用一个写缓冲池
@@ -313,6 +321,9 @@ impl<S, F> SocketListener<S, F>
                                                        config.clone(),
                                                        init_cap) {
                         Err(e) => {
+                            for runtime in runtimes {
+                                let _ = runtime.close();
+                            }
                             return Err(e);
                         },
                         Ok(pool) => {
@@ -335,6 +346,9 @@ impl<S, F> SocketListener<S, F>
                                          event_size,
                                          timeout) {
                     //启动连接池失败
+                    for runtime in runtimes {
+                        let _ = runtime.close();
+                    }
                     return Err(e);
                 }
             }
