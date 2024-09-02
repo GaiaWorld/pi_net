@@ -1,6 +1,6 @@
 [package]
 name = "pi_async_httpc"
-version = "0.5.5"
+version = "0.5.6"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_async_httpc"

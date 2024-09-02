@@ -532,15 +532,17 @@ impl AsyncHttpResponse {
 impl AsyncHttpResponse {
     //获取响应体块
     pub async fn get_body(&mut self) -> Result<Option<Box<[u8]>>> {
-        match self.0.chunk().await {
-            Err(e) => {
-                Err(Error::new(ErrorKind::Other, format!("Get response body failed, reason: {:?}", e)))
-            },
-            Ok(Some(chunk)) => {
-                Ok(Some(chunk.to_vec().into_boxed_slice()))
-            },
-            Ok(None) => Ok(None),
-        }
+        ASYNC_HTTPC_RUNTIME.block_on(async move {
+            match self.0.chunk().await {
+                Err(e) => {
+                    Err(Error::new(ErrorKind::Other, format!("Get response body failed, reason: {:?}", e)))
+                },
+                Ok(Some(chunk)) => {
+                    Ok(Some(chunk.to_vec().into_boxed_slice()))
+                },
+                Ok(None) => Ok(None),
+            }
+        })
     }
 
     //获取所有响应体块
