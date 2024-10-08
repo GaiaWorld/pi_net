@@ -1,6 +1,6 @@
 [package]
 name = "pi_async_wsc"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_async_wsc"
@@ -33,4 +33,4 @@ bytestring = "1.0"
 env_logger = "0.7"
 httparse = "=1.7.1"
 crossbeam-channel = "0.5"
-wss = { package = "pi_ws", version = "0.3", path = "../ws" }
+wss = { package = "pi_ws", version = "0.5", path = "../ws" }
