@@ -50,6 +50,10 @@ impl<S: Socket> ChildProtocol<S> for TestChildProtocol {
         "echo"
     }
 
+    fn is_strict(&self) -> bool {
+        false
+    }
+
     fn decode_protocol(&self,
                        connect: WsSocket<S>,
                        context: &mut WsSession) -> LocalBoxFuture<'static, Result<()>> {

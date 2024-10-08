@@ -6,6 +6,7 @@ use std::io::{Cursor, Result, ErrorKind, Error};
 use futures::future::{FutureExt, LocalBoxFuture};
 use mio::Token;
 use fnv::FnvBuildHasher;
+use httparse::Request;
 use mqtt311::{MqttWrite, MqttRead, Protocol, ConnectReturnCode, Packet, Connect,
               Connack, QoS, Publish, PacketIdentifier, SubscribeTopic, SubscribeReturnCodes,
               Subscribe, Suback, Unsubscribe, TopicPath};
@@ -13,7 +14,7 @@ use log::warn;
 
 use pi_atom::Atom;
 
-use tcp::{Socket, SocketEvent,
+use tcp::{Socket, SocketEvent, SocketHandle,
           connect::TcpSocket,
           utils::Ready};
 use ws::{connect::WsSocket,
@@ -36,6 +37,7 @@ use crate::{server::MqttBrokerProtocol,
 ///
 #[derive(Clone)]
 pub struct WsMqtt311 {
+    is_strict:      bool,                   //是否严格匹配协议
     protocol_name:  String,                 //协议名
     broker_name:    String,                 //代理名
     qos:            QoS,                    //支持的最大Qos
@@ -50,14 +52,40 @@ impl ChildProtocol<TcpSocket> for WsMqtt311 {
         self.protocol_name.as_str()
     }
 
+    fn handshake_protocol(&self,
+                          _handle: SocketHandle<TcpSocket>,
+                          _request: &Request,
+                          protocols: &Vec<&str>) -> Result<()> {
+        if self.is_strict {
+            //严格匹配协议名，要求第一个协议必须是当前协议
+            if protocols.len() == 0 {
+                return Err(Error::new(ErrorKind::Interrupted, format!("Handshake failed by strict")));
+            } else {
+                if self.protocol_name.as_str() != protocols[0] {
+                    return Err(Error::new(ErrorKind::Interrupted, format!("Invalid handshake protocol")));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn is_strict(&self) -> bool {
+        self.is_strict
+    }
+
     fn decode_protocol(&self,
                        connect: WsSocket<TcpSocket>,
                        context: &mut WsSession) -> LocalBoxFuture<'static, Result<()>> {
         let ws_mqtt = self.clone();
-        match context
-            .pop_msg()
-            .as_slice().
-            read_packet() {
+        let packet: Vec<u8> = context.pop_msg();
+        let mut packet_slice = if self.is_strict {
+            //严格模式需要忽略头部32位的消息Nonce
+            &packet[4..packet.len()]
+        } else {
+            packet.as_slice()
+        };
+        match packet_slice.read_packet() {
             Err(e) => {
                 //解码Mqtt报文失败，则立即返回错误原因
                 async move {
@@ -616,8 +644,10 @@ impl WsMqtt311 {
     //构建指定协议名和支持的最大Qos，且基于Websocket的Mqtt3.1.1协议
     pub fn with_name(protocol_name: &str,
                      broker_name: &str,
-                     qos: u8) -> Self {
+                     qos: u8,
+                     is_strict: bool) -> Self {
         WsMqtt311 {
+            is_strict,
             protocol_name: protocol_name.to_lowercase(),
             broker_name: broker_name.to_string(),
             qos: QoS::from_u8(qos).unwrap(),

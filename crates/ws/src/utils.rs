@@ -4,6 +4,7 @@ use std::io::{Error, Result, ErrorKind};
 use bytes::BufMut;
 use httparse::Request;
 use futures::future::LocalBoxFuture;
+use pi_rand::SecureRng;
 
 use tcp::{Socket, SocketHandle, SocketEvent,
           utils::SocketContext};
@@ -28,9 +29,13 @@ pub trait ChildProtocol<S: Socket>: Send + Sync + 'static {
     /// 处理握手子协议
     fn handshake_protocol(&self,
                           _handle: SocketHandle<S>,
-                          _request: &Request) -> Result<()> {
+                          _request: &Request,
+                          protocols: &Vec<&str>) -> Result<()> {
         Ok(())
     }
+
+    /// 判断当前子协议是否是严格子协议
+    fn is_strict(&self) -> bool;
 
     /// 解码子协议，返回错误将立即关闭当前连接
     fn decode_protocol(&self,
@@ -126,11 +131,14 @@ impl WsFrameType {
 /// Websocket会话
 ///
 pub struct WsSession {
-    status:     WsStatus,           //当前连接状态
-    r#type:     WsFrameType,        //帧类型
-    msg:        Option<Vec<u8>>,    //当前Websocket消息
-    queue:      VecDeque<Vec<u8>>,  //Websocket消息队列
-    context:    SocketContext,      //会话上下文
+    status:         WsStatus,           //当前连接状态
+    r#type:         WsFrameType,        //帧类型
+    seed:           u64,                //当前会话的随机数种子
+    nonce_count:    u64,                //Nonce的检查次数
+    rng:            Option<SecureRng>,  //密码学安全的随机数生成器
+    msg:            Option<Vec<u8>>,    //当前Websocket消息
+    queue:          VecDeque<Vec<u8>>,  //Websocket消息队列
+    context:        SocketContext,      //会话上下文
 }
 
 unsafe impl Send for WsSession {}
@@ -141,6 +149,9 @@ impl Default for WsSession {
         WsSession {
             status: WsStatus::HandShaking,
             r#type: WsFrameType::Undefined,
+            seed: 0,
+            nonce_count: 0,
+            rng: None,
             msg: Some(Vec::with_capacity(32)),
             queue: VecDeque::with_capacity(8),
             context: SocketContext::empty(),
@@ -149,6 +160,21 @@ impl Default for WsSession {
 }
 
 impl WsSession {
+    /// 用指定的种子构建一个Websocket会话
+    pub fn with_seed(seed: u64) -> Self {
+        let rng = SecureRng::with_seed(seed);
+        WsSession {
+            status: WsStatus::HandShaking,
+            r#type: WsFrameType::Undefined,
+            seed,
+            nonce_count: 0,
+            rng: Some(rng),
+            msg: Some(Vec::with_capacity(32)),
+            queue: VecDeque::with_capacity(8),
+            context: SocketContext::empty(),
+        }
+    }
+
     /// 判断是否已握手
     pub fn is_handshaked(&self) -> bool {
         match &self.status {
@@ -201,9 +227,42 @@ impl WsSession {
         self.r#type = frame_type.into();
     }
 
+    /// 获取当前会话的随机数种子
+    pub fn get_seed(&self) -> u64 {
+        self.seed
+    }
+
+    pub fn get_nonce_count(&self) -> u64 {
+        self.nonce_count
+    }
+
+    /// 检查对端发送的Nonce是否和会话的nonce匹配
+    pub fn check_nonce(&mut self, nonce: u32) -> bool {
+        if let Some(rng) = &mut self.rng {
+            self.nonce_count += 1;
+
+            if rng.get_u32() == nonce {
+                true
+            } else {
+                false
+            }
+        } else {
+            true
+        }
+    }
+
     /// 当前消息队列的长度
     pub fn len(&self) -> usize {
         self.queue.len()
+    }
+
+    /// 获取会话的首个消息的只读引用
+    pub fn as_first_msg(&self) -> &[u8] {
+        if self.queue.is_empty() {
+            self.as_msg()
+        } else {
+            self.queue[0].as_slice()
+        }
     }
 
     /// 获取当前消息的只读引用

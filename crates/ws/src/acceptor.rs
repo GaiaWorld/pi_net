@@ -2,6 +2,7 @@ use std::error;
 use std::sync::Arc;
 use std::net::Shutdown;
 use std::str::from_utf8;
+use std::time::SystemTime;
 use std::marker::PhantomData;
 use std::result::Result as GenResult;
 use std::io::{Error, Result, ErrorKind};
@@ -18,6 +19,7 @@ use http::{Result as HttpResult,
                     CONTENT_TYPE, CONTENT_LENGTH,
                     SEC_WEBSOCKET_VERSION, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_EXTENSIONS,
                     SEC_WEBSOCKET_PROTOCOL, SEC_WEBSOCKET_ACCEPT, HeaderValue}};
+use pi_rand::xor_encrypt_confusion;
 use base64;
 use log::warn;
 
@@ -26,8 +28,8 @@ use pi_atom::Atom;
 use pi_crypto::digest::{DigestAlgorithm, digest};
 
 use tcp::{Socket, SocketHandle};
-
-use crate::utils::{ChildProtocol, WsSession};
+use crate::connect::WsSocket;
+use crate::utils::{ChildProtocol, WsFrameType, WsSession};
 
 ///
 /// Websocket握手请求的响应序列化缓冲长度
@@ -64,6 +66,10 @@ pub const MAX_HANDSHAKE_HTTP_HEADER_LIMIT: usize = 56;
 /// 支持的Websocket连接升级
 ///
 pub const CONNECT_UPGRADE: &str = "websocket";
+
+// 用于加密随机数种子的密钥
+// 注意如需修改，则必须同时修改客户端
+const SAFE_SEED_KEY: u64 = 0xffabcdef0fedcba0;
 
 ///
 /// Websocket握手状态
@@ -161,7 +167,7 @@ impl<S: Socket> WsAcceptor<S> {
                             //将客户端需要的子协议名转换为全小写，并与服务器端支持的子协议进行对比
                             if protocols_len == 1 && (*p) == "" {
                                 //客户端没有指定子协议
-                                let resp = if let Err(e) = protocol.handshake_protocol(handle.clone(), &req) {
+                                let resp = if let Err(e) = protocol.handshake_protocol(handle.clone(), &req, &protocols) {
                                     //子协议处理握手失败，则立即中止握手
                                     warn!("Ws Handshake Failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                                         handle.get_token(),
@@ -176,7 +182,7 @@ impl<S: Socket> WsAcceptor<S> {
                                 return (resp.is_ok(), resp);
                             } else if protocol.protocol_name() == (*p).to_lowercase().as_str() {
                                 //客户端需要的子协议中有服务器端支持的子协议，则握手成功，将客户端需要，且服务器端支持的子协议名原样返回
-                                let resp = if let Err(e) = protocol.handshake_protocol(handle.clone(), &req) {
+                                let resp = if let Err(e) = protocol.handshake_protocol(handle.clone(), &req, &protocols) {
                                     //子协议处理握手失败，则立即中止握手
                                     warn!("Ws Handshake Failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                                         handle.get_token(),
@@ -222,6 +228,7 @@ impl<S: Socket> WsAcceptor<S> {
 impl<S: Socket> WsAcceptor<S> {
     /// 异步接受握手请求
     pub async fn accept<'h, 'b>(handle: SocketHandle<S>,
+                                window_bits: u8,
                                 acceptor: WsAcceptor<S>,
                                 support_protocol: Arc<dyn ChildProtocol<S>>) {
         let mut last_bin_len = 0; //初始化本地缓冲区上次长度
@@ -324,7 +331,14 @@ impl<S: Socket> WsAcceptor<S> {
                                 .copy_to_bytes(len) //消耗握手的请求数据
                         };
                     }
-                    unsafe { (&mut *handle.get_context().get()).set(WsSession::default()); } //握手前绑定Tcp连接上下文
+                    let ws_session = if support_protocol.is_strict() {
+                        let seed = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_micros() as u64;
+                        WsSession::with_seed(seed)
+                    } else {
+                        WsSession::default()
+                    };
+                    let seed = ws_session.get_seed();
+                    unsafe { (&mut *handle.get_context().get()).set(ws_session); } //握手前绑定Tcp连接上下文
                     match acceptor.handshake(handle.clone(), &support_protocol, req) {
                         (_, Err(e)) => {
                             //握手异常
@@ -344,6 +358,33 @@ impl<S: Socket> WsAcceptor<S> {
                                                                     handle.get_remote(),
                                                                     handle.get_local(),
                                                                     e))));
+                            }
+
+                            if support_protocol.is_strict() {
+                                //在握手回应后，向对端发送加密后的当前连接会话的随机数种子
+                                let safe_seed_bytes = match xor_encrypt_confusion(seed.to_le_bytes(), SAFE_SEED_KEY.to_le_bytes()) {
+                                    Err(e) => {
+                                        handle.close(Err(Error::new(ErrorKind::Other,
+                                                                    format!("WebSocket strict handshake error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                                                            handle.get_token(),
+                                                                            handle.get_remote(),
+                                                                            handle.get_local(),
+                                                                            e))));
+                                        return;
+                                    },
+                                    Ok(safe_seed) => safe_seed,
+                                };
+
+                                let ws_connect = WsSocket::new(handle, window_bits);
+                                if let Err(e) = ws_connect.send(WsFrameType::Binary, safe_seed_bytes) {
+                                    ws_connect.close(Err(Error::new(ErrorKind::Other,
+                                                                format!("WebSocket strict handshake write error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                                                        ws_connect.get_token(),
+                                                                        ws_connect.get_remote(),
+                                                                        ws_connect.get_local(),
+                                                                        e))));
+                                    return;
+                                }
                             }
                         },
                     }

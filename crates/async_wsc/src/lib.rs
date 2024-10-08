@@ -24,12 +24,19 @@ use rustls::{ClientConfig, RootCertStore, Certificate, ServerName, Error as TLSE
 use actix_rt::{self, System};
 use actix_codec::Framed;
 use actix_http::ws::{Codec, Item};
-use awc::{Client, Connector, BoxedSocket, ws::{self, Frame, Message, CloseCode, CloseReason}};
+use awc::{Client, Connector, BoxedSocket, ClientResponse,
+          ws::{self, Frame, Message, CloseCode, CloseReason}};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use bytestring::ByteString;
 use log::{info, warn, error};
 
 use pi_async_rt::rt::{TaskId, AsyncTaskPool, AsyncTaskPoolExt, AsyncRuntime, AsyncWaitResult};
+use async_lock::Mutex;
+use pi_rand::{SecureRng, xor_unencrypt_clarity};
+
+// 用于加密随机数种子的密钥
+// 注意如需修改，则必须同时修改客户端
+const SAFE_SEED_KEY: u64 = 0xffabcdef0fedcba0;
 
 /*
 * Websocket连接
@@ -158,6 +165,7 @@ async fn event_loop<
                     AsyncWebsocketCmd::Open(ws,
                                             task_id,
                                             is_strict,
+                                            is_sync_seed,
                                             timeout) => {
                         //建立指定url的连接
                         let url = ws.0.status.read().get_url().clone();
@@ -225,10 +233,163 @@ async fn event_loop<
                                 }
                                 current_connection = Some(connection); //更新当前连接
 
-                                *ws.0.status.write() = AsyncWebsocketStatus::Connected(url.clone(), protocols.clone()); //设置连接状态
-                                ws.0.handler.on_open(); //通知处理器连接成功
+                                if is_sync_seed {
+                                    //当前连接需要同步种子，则设置连接状态为同步种子中
+                                    *ws.0.status.write() = AsyncWebsocketStatus::SyncingSeed(url.clone(), protocols.clone());
+
+                                    let ws_copy = ws.clone();
+                                    sender.send_async(AsyncWebsocketCmd::ReceiveSeed(ws_copy,
+                                                                                     task_id,
+                                                                                     format!("{:?}", resp),
+                                                                                     None,
+                                                                                     5000)).await;
+                                } else {
+                                    //当前连接不需要同步种子，则设置连接状态为已连接
+                                    *ws.0.status.write() = AsyncWebsocketStatus::Connected(url.clone(), protocols.clone());
+                                    ws.0.handler.on_open(); //通知处理器连接成功
+                                    ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步打开连接的任务
+                                    info!("Open websocket ok, url: {}, protocols: {:?}, resp: {:?}", url, protocols, resp);
+                                }
+                            }
+                        }
+                    },
+                    AsyncWebsocketCmd::ReceiveSeed(ws,
+                                                   task_id,
+                                                   resp,
+                                                   mut received_message,
+                                                   receive_timeout) => {
+                        //需要和服务器端同步种子，则接收服务器端发送的种子
+                        if let Some(ws_con) = current_connection.as_mut() {
+                            //当前客户端有连接，则立即接收消息，如果当前缓冲区为空，则会挂起接收的异步任务
+                            if let Ok(r) = actix_rt::time::timeout(
+                                Duration::from_millis(receive_timeout),
+                                ws_con.next()
+                            ).await {
+                                if let Some(respone) = r {
+                                    match respone {
+                                        Err(e) => {
+                                            //接收消息帧失败，则立即退出本次消息接收
+                                            let url = ws.0.status.read().get_url().clone();
+                                            let protocols = ws.0.status.read().get_protocols().to_vec();
+                                            let reason = format!("Websocket receive seed failed, url: {}, reason: {:?}", url, e);
+                                            *ws.0.status.write() = AsyncWebsocketStatus::Error(url, protocols, None, Some(Error::new(ErrorKind::ConnectionAborted, reason.clone()))); //设置连接状态
+                                            ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
+                                            ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步打开连接的任务
+                                            error!("{}", reason);
+                                        },
+                                        Ok(frame) => {
+                                            //接收消息帧成功
+                                            received_message = Some(receive_frames(received_message, frame));
+                                            if let Some(ReceivedMessage::Discomplete(_, _)) = &received_message {
+                                                //接收消息不完整，则通过消息队列投递继续接收种子的任务，继续接收种子的后续帧，并立即结束当前接收，避免接收长时间独占Websocket连接的运行时
+                                                let ws_copy = ws.clone();
+                                                sender.send_async(AsyncWebsocketCmd::ReceiveSeed(
+                                                    ws_copy,
+                                                    task_id,
+                                                    resp,
+                                                    received_message,
+                                                    receive_timeout)).await;
+                                            } else {
+                                                match received_message {
+                                                    Some(ReceivedMessage::Err(e)) => {
+                                                        //接收消息帧失败，则立即退出本次消息接收
+                                                        let url = ws.0.status.read().get_url().clone();
+                                                        let protocols = ws.0.status.read().get_protocols().to_vec();
+                                                        let reason = format!("Websocket receive seed failed, url: {}, reason: {:?}", url, e);
+                                                        *ws.0.status.write() = AsyncWebsocketStatus::Error(url, protocols, None, Some(Error::new(ErrorKind::ConnectionAborted, reason.clone()))); //设置连接状态
+                                                        ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
+                                                        ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步打开连接的任务
+                                                        error!("{}", reason);
+                                                    },
+                                                    Some(ReceivedMessage::Completed(msg)) => {
+                                                        //接收消息完整
+                                                        match msg {
+                                                            Message::Close(None) => {
+                                                                //接收到关闭消息
+                                                                ws.0.handler.on_close(CloseCode::Normal, "");
+                                                            },
+                                                            Message::Close(Some(reason)) => {
+                                                                //接收到关闭消息
+                                                                let url = ws.0.status.read().get_url().clone();
+                                                                let protocols = ws.0.status.read().get_protocols().to_vec();
+                                                                *ws.0.status.write() = AsyncWebsocketStatus::Closed(url, protocols, Some(reason.code)); //设置连接状态
+                                                                if let Some(desc) = reason.description {
+                                                                    //有关闭的原因
+                                                                    ws.0.handler.on_close(reason.code, desc.as_str());
+                                                                } else {
+                                                                    ws.0.handler.on_close(reason.code, "");
+                                                                }
+                                                            },
+                                                            Message::Binary(bin) => {
+                                                                //接收到种子
+                                                                match xor_unencrypt_clarity(bin, SAFE_SEED_KEY.to_le_bytes()) {
+                                                                    Err(e) => {
+                                                                        //无效的种子
+                                                                        let url = ws.0.status.read().get_url().clone();
+                                                                        let protocols = ws.0.status.read().get_protocols().to_vec();
+                                                                        let reason = format!("Websocket receive seed failed, url: {}, reason: {:?}", url, e);
+                                                                        *ws.0.status.write() = AsyncWebsocketStatus::Error(url, protocols, None, Some(Error::new(ErrorKind::ConnectionAborted, reason.clone()))); //设置连接状态
+                                                                        ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
+                                                                        ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步打开连接的任务
+                                                                        error!("{}", reason);
+                                                                    },
+                                                                    Ok(vec) => {
+                                                                        let seed = u64::from_le_bytes(vec.as_slice().try_into().unwrap());
+                                                                        let rng = SecureRng::with_seed(seed);
+                                                                        *ws.0.rng.lock().await = Some(rng); //设置随机数生成器
+
+                                                                        let url = ws.0.status.read().get_url().clone();
+                                                                        let protocols = ws.0.status.read().get_protocols().to_vec();
+                                                                        *ws.0.status.write() = AsyncWebsocketStatus::Connected(url.clone(), protocols.clone());
+                                                                        ws.0.handler.on_open(); //通知处理器连接成功
+                                                                        ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步打开连接的任务
+                                                                        info!("Open websocket ok, url: {}, protocols: {:?}, resp: {:?}", url, protocols, resp);
+                                                                    },
+                                                                }
+                                                            },
+                                                            msg => {
+                                                                //接收到其它非法消息
+                                                                let url = ws.0.status.read().get_url().clone();
+                                                                let protocols = ws.0.status.read().get_protocols().to_vec();
+                                                                let reason = format!("Websocket receive seed failed, url: {}, msg: {:?}, reason: invalid msg", url, msg);
+                                                                *ws.0.status.write() = AsyncWebsocketStatus::Error(url, protocols, None, Some(Error::new(ErrorKind::ConnectionAborted, reason.clone()))); //设置连接状态
+                                                                ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
+                                                                ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步打开连接的任务
+                                                                error!("{}", reason);
+                                                            },
+                                                        }
+                                                    },
+                                                    _ => {
+                                                        //接收消息帧失败，不应该进入此分支，则立即退出本次种子接收
+                                                        let url = ws.0.status.read().get_url().clone();
+                                                        let protocols = ws.0.status.read().get_protocols().to_vec();
+                                                        let reason = format!("Websocket receive seed failed, url: {}, reason: unknow", url);
+                                                        *ws.0.status.write() = AsyncWebsocketStatus::Error(url, protocols, None, Some(Error::new(ErrorKind::ConnectionAborted, reason.clone()))); //设置连接状态
+                                                        ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
+                                                        ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步打开连接的任务
+                                                        error!("{}", reason);
+                                                    },
+                                                }
+                                            }
+                                        },
+                                    }
+                                } else {
+                                    //有本次接收的最大消息数限制或无本次接收的最大消息限制，当连接流结束时立即退出本次消息接收
+                                    let url = ws.0.status.read().get_url().clone();
+                                    let protocols = ws.0.status.read().get_protocols().to_vec();
+                                    let reason = format!("Websocket receive seed failed, url: {}, reason: receive EOF", url);
+                                    *ws.0.status.write() = AsyncWebsocketStatus::Error(url, protocols, None, Some(Error::new(ErrorKind::ConnectionAborted, reason.clone()))); //设置连接状态
+                                    ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
+                                    ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步打开连接的任务
+                                }
+                            } else {
+                                //当接收超时，则立即退出本次消息接收
+                                let url = ws.0.status.read().get_url().clone();
+                                let protocols = ws.0.status.read().get_protocols().to_vec();
+                                let reason = format!("Websocket receive seed failed, url: {}, reason: Timeout", url);
+                                *ws.0.status.write() = AsyncWebsocketStatus::Error(url, protocols, None, Some(Error::new(ErrorKind::ConnectionAborted, reason.clone()))); //设置连接状态
+                                ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
                                 ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步打开连接的任务
-                                info!("Open websocket ok, url: {}, protocols: {:?}, resp: {:?}", url, protocols, resp);
                             }
                         }
                     },
@@ -312,7 +473,6 @@ async fn event_loop<
                                                 Err(e) => {
                                                     //接收消息帧失败，则立即退出本次消息接收
                                                     let url = ws.0.status.read().get_url().clone();
-                                                    ws.0.handler.on_error(format!("Websocket receive failed, url: {}, reason: {:?}", url, e));
                                                     let reason = format!("Websocket receive failed, url: {}, reason: {:?}", url, e);
                                                     let error = Error::new(ErrorKind::Other, reason.clone());
                                                     *result.0.borrow_mut() = Some(Err(error)); //设置接收消息的结果
@@ -473,7 +633,8 @@ enum AsyncWebsocketCmd<
     P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>,
     RT: AsyncRuntime<(), Pool = P>,
 > {
-    Open(AsyncWebsocket<P, RT>, TaskId, bool, u64),
+    Open(AsyncWebsocket<P, RT>, TaskId, bool, bool, u64),
+    ReceiveSeed(AsyncWebsocket<P, RT>, TaskId, String, Option<ReceivedMessage>, u64),
     Send(AsyncWebsocket<P, RT>, TaskId, Message, AsyncWaitResult<()>),
     Receive(AsyncWebsocket<P, RT>, TaskId, Option<usize>, usize, Option<ReceivedMessage>, u64, AsyncWaitResult<()>),
     Close(AsyncWebsocket<P, RT>, TaskId, Option<CloseCode>, AsyncWaitResult<()>),
@@ -486,7 +647,8 @@ impl<
 > Debug for AsyncWebsocketCmd<P, RT> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AsyncWebsocketCmd::Open(_, _, _, _) => write!(f, "AsyncWebsocketCmd::Open"),
+            AsyncWebsocketCmd::Open(_, _, _, _, _) => write!(f, "AsyncWebsocketCmd::Open"),
+            AsyncWebsocketCmd::ReceiveSeed(_, _, _, _, _) => write!(f, "AsyncWebsocketCmd::ReceiveSeed"),
             AsyncWebsocketCmd::Send(_, _, _, _) => write!(f, "AsyncWebsocketCmd::Send"),
             AsyncWebsocketCmd::Receive(_, _, _, _, _, _, _) => write!(f, "AsyncWebsocketCmd::Receive"),
             AsyncWebsocketCmd::Close(_, _, _, _) => write!(f, "AsyncWebsocketCmd::Close"),
@@ -502,6 +664,7 @@ impl<
 pub enum AsyncWebsocketStatus {
     Connecting(Url, Vec<String>),                               //连接中
     Connected(Url, Vec<String>),                                //已连接
+    SyncingSeed(Url, Vec<String>),                              //同步种子中
     Closing(Url, Vec<String>, Option<CloseCode>),               //关闭中
     Closed(Url, Vec<String>, Option<CloseCode>),                //已关闭
     Error(Url, Vec<String>, Option<CloseCode>, Option<Error>),  //错误
@@ -569,6 +732,7 @@ impl AsyncWebsocketStatus {
     pub fn get_url(&self) -> &Url {
         match self {
             AsyncWebsocketStatus::Connecting(url, _) => url,
+            AsyncWebsocketStatus::SyncingSeed(url, _) => url,
             AsyncWebsocketStatus::Connected(url, _) => url,
             AsyncWebsocketStatus::Closing(url, _, _) => url,
             AsyncWebsocketStatus::Closed(url, _, _) => url,
@@ -580,6 +744,7 @@ impl AsyncWebsocketStatus {
     pub fn get_protocols(&self) -> &[String] {
         match self {
             AsyncWebsocketStatus::Connecting(_, protocols) => protocols.as_slice(),
+            AsyncWebsocketStatus::SyncingSeed(_, protocols) => protocols.as_slice(),
             AsyncWebsocketStatus::Connected(_, protocols) => protocols.as_slice(),
             AsyncWebsocketStatus::Closing(_, protocols, _) => protocols.as_slice(),
             AsyncWebsocketStatus::Closed(_, protocols, _) => protocols.as_slice(),
@@ -594,6 +759,7 @@ impl AsyncWebsocketStatus {
             AsyncWebsocketStatus::Connected(_, _) => 1,
             AsyncWebsocketStatus::Closing(_, _, _) => 2,
             AsyncWebsocketStatus::Closed(_, _, _) => 3,
+            AsyncWebsocketStatus::SyncingSeed(_, _) => 10,
             AsyncWebsocketStatus::Error(_, _, _, _) => -1,
         }
     }
@@ -649,6 +815,7 @@ impl<
             recv_size: RwLock::new(None),
             masking_strict: RwLock::new(false),
             is_nodelay: RwLock::new(false),
+            rng: Mutex::new(None),
         };
 
         AsyncWebsocket(Arc::new(inner))
@@ -736,6 +903,7 @@ impl<
     //打开异步Websocket连接
     pub async fn open(&self,
                       is_strict: bool,
+                      is_sync_seed: bool,
                       timeout: u64) -> Result<()> {
         let rt = self.0.rt.clone();
         let url = self.0.status.read().get_url().clone();
@@ -749,6 +917,7 @@ impl<
                                                task_id,
                                                ws,
                                                is_strict,
+                                               is_sync_seed,
                                                timeout).boxed());
         wait_any.spawn(rt.clone(),
                        async move {
@@ -764,7 +933,37 @@ impl<
         let ws = self.clone();
         let task_id = rt.alloc::<()>();
 
-        AsyncWebsocketSend::new(rt, task_id, ws, msg).await
+        let message = match &msg {
+            Message::Text(bin) => {
+                if let Some(rng) = &mut *self.0.rng.lock().await {
+                    //设置了随机数生成器，则分配一个消息id
+                    let id = rng.get_u32();
+                    let mut buf = BytesMut::with_capacity(bin.len() + 4);
+                    buf.put_u32_le(id);
+                    let bytes = bin.as_bytes();
+                    buf.put_slice(&bytes);
+                    unsafe { Message::Text(ByteString::from_bytes_unchecked(buf.freeze())) }
+                }
+                else {
+                    msg
+                }
+            },
+            Message::Binary(bin) => {
+                if let Some(rng) = &mut *self.0.rng.lock().await {
+                    //设置了随机数生成器，则分配一个消息id
+                    let id = rng.get_u32();
+                    let mut buf = BytesMut::with_capacity(bin.len() + 4);
+                    buf.put_u32_le(id);
+                    buf.put_slice(bin);
+                    Message::Binary(buf.freeze())
+                } else {
+                    msg
+                }
+            },
+            _ => msg,
+        };
+
+        AsyncWebsocketSend::new(rt, task_id, ws, message).await
     }
 
     //接收一次消息，可以限制一次最多接收多少消息，None表示将接收缓冲区中所有的消息
@@ -820,6 +1019,7 @@ struct InnerWebsocket<
     recv_size:      RwLock<Option<usize>>,              //最大接收帧大小，超过则错误，单位字节
     masking_strict: RwLock<bool>,                       //是否严格的掩码处理
     is_nodelay:     RwLock<bool>,                       //是否立即刷新连接
+    rng:            Mutex<Option<SecureRng>>,           //随机数生成器
 }
 
 unsafe impl<
@@ -1049,11 +1249,12 @@ pub struct AsyncOpenWebsocket<
     P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>,
     RT: AsyncRuntime<(), Pool = P>,
 > {
-    rt:         RT,                     //异步运行时
-    task_id:    TaskId,                 //异步任务id
-    ws:         AsyncWebsocket<P, RT>,  //连接
-    is_strict:  bool,                   //是否严格模式
-    timeout:    u64,                    //连接超时时长
+    rt:             RT,                     //异步运行时
+    task_id:        TaskId,                 //异步任务id
+    ws:             AsyncWebsocket<P, RT>,  //连接
+    is_strict:      bool,                   //是否严格模式
+    is_sync_seed:   bool,                   //是否同步种子
+    timeout:        u64,                    //连接超时时长
 }
 
 unsafe impl<
@@ -1085,10 +1286,12 @@ impl<
         let task_id = self.task_id.clone();
         let ws = self.ws.clone();
         let is_strict = self.is_strict;
+        let is_sync_seed = self.is_sync_seed;
         let timeout = self.timeout;
         let cmd = AsyncWebsocketCmd::Open(ws.clone(),
                                           task_id,
                                           is_strict,
+                                          is_sync_seed,
                                           timeout);
 
         //挂起打开连接的异步任务
@@ -1114,12 +1317,14 @@ impl<
                task_id: TaskId,
                ws: AsyncWebsocket<P, RT>,
                is_strict: bool,
+               is_sync_seed: bool,
                timeout: u64) -> Self {
         AsyncOpenWebsocket {
             rt,
             task_id,
             ws,
             is_strict,
+            is_sync_seed,
             timeout,
         }
     }

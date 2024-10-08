@@ -262,10 +262,12 @@ impl WsMqttBrokerFactory {
     /// 构建指定的基于Websocket的Mqtt代理工厂
     pub fn new(protocol_name: &str,
                broker_name: &str,
-               broker_port: u16) -> Self {
+               broker_port: u16,
+               is_strict: bool) -> Self {
         let broker = Arc::new(WsMqtt311::with_name(protocol_name,
                                                    broker_name,
-                                                   WsMqtt311::MAX_QOS));
+                                                   WsMqtt311::MAX_QOS,
+                                                   is_strict));
 
         //注册代理
         MQTT_BROKERS
@@ -283,7 +285,7 @@ impl WsMqttBrokerFactory {
     }
 
     /// 构建一个Websocket子协议处理器
-    pub fn new_child_protocol(&self) -> Arc<dyn ChildProtocol<TcpSocket>> {
+    pub fn new_child_protocol(&self, is_strict: bool) -> Arc<dyn ChildProtocol<TcpSocket>> {
         if let Some(item) = MQTT_BROKERS.get(&self.broker_name) {
             if let MqttBrokerProtocol::WsMqtt311(broker) = item.value() {
                 //已存在指定名称的代理，则返回
@@ -295,7 +297,8 @@ impl WsMqttBrokerFactory {
         let broker = Arc::new(
             WsMqtt311::with_name(&self.protocol_name,
                                  &self.broker_name,
-                                 WsMqtt311::MAX_QOS)
+                                 WsMqtt311::MAX_QOS,
+                                 is_strict)
         );
 
         //注册代理
@@ -324,11 +327,13 @@ impl WssMqttBrokerFactory {
     /// 构建指定的基于Tls Websocket的Mqtt代理工厂
     pub fn new(protocol_name: &str,
                broker_name: &str,
-               broker_port: u16) -> Self {
+               broker_port: u16,
+               is_strict: bool) -> Self {
         let broker = Arc::new(
             WssMqtt311::with_name(protocol_name,
                                   broker_name,
-                                  WsMqtt311::MAX_QOS)
+                                  WsMqtt311::MAX_QOS,
+                                  is_strict)
         );
 
         //注册代理
@@ -346,7 +351,7 @@ impl WssMqttBrokerFactory {
     }
 
     /// 构建一个Websocket子协议处理器
-    pub fn new_child_protocol(&self) -> Arc<dyn ChildProtocol<TlsSocket>> {
+    pub fn new_child_protocol(&self, is_strict: bool) -> Arc<dyn ChildProtocol<TlsSocket>> {
         if let Some(item) = MQTT_BROKERS.get(&self.broker_name) {
             if let MqttBrokerProtocol::WssMqtt311(broker) = item.value() {
                 //已存在指定名称的代理，则返回
@@ -355,7 +360,7 @@ impl WssMqttBrokerFactory {
         }
 
         //不存在指定名称的代理，创建代理
-        let broker = Arc::new(WssMqtt311::with_name(&self.protocol_name, &self.broker_name, WsMqtt311::MAX_QOS));
+        let broker = Arc::new(WssMqtt311::with_name(&self.protocol_name, &self.broker_name, WsMqtt311::MAX_QOS, is_strict));
 
         //注册代理
         MQTT_BROKERS

@@ -3,11 +3,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::cell::RefCell;
 use std::time::Duration;
+use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
 use std::io::{ErrorKind, Result, Error};
 
 use futures::future::{FutureExt, BoxFuture};
 use futures_util::{sink::SinkExt, stream::StreamExt};
+use httparse::Request as HttpRequest;
 use actix_rt::System;
 use actix_codec::Framed;
 use actix_http::ws::Codec;
@@ -17,7 +19,7 @@ use bytes::Bytes;
 use bytestring::ByteString;
 use futures_util::future::LocalBoxFuture;
 
-use pi_async_rt::rt::{AsyncRuntime,
+use pi_async_rt::rt::{AsyncRuntime, startup_global_time_loop,
                       serial::AsyncRuntimeBuilder,
                       multi_thread::{StealableTaskPool, MultiTaskRuntimeBuilder, MultiTaskRuntime}};
 use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
@@ -31,17 +33,44 @@ use wss::{server::WebsocketListener,
 
 use pi_async_wsc::{AsyncWebsocketClient, AsyncWebsocket, AsyncWebsocketHandler, AsyncWebsocketMessage, AsyncWebsocketCloseCode};
 
-struct TestChildProtocol;
+struct TestChildProtocol<S: Socket>(PhantomData<S>);
 
-impl<S: Socket> ChildProtocol<S> for TestChildProtocol {
+unsafe impl<S: Socket> Send for TestChildProtocol<S> {}
+unsafe impl<S: Socket> Sync for TestChildProtocol<S> {}
+
+impl<S: Socket> ChildProtocol<S> for TestChildProtocol<S> {
     fn protocol_name(&self) -> &str {
         "echo"
+    }
+
+    fn handshake_protocol(&self,
+                          _handle: SocketHandle<S>,
+                          _request: &HttpRequest,
+                          protocols: &Vec<&str>) -> Result<()> {
+        if protocols.len() == 0 {
+            Err(Error::new(ErrorKind::Interrupted, format!("Handshake failed by strict")))
+        } else {
+            if self.protocol_name() != protocols[0] {
+                Err(Error::new(ErrorKind::Interrupted, format!("Invalid handshake protocol")))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn decode_protocol(&self,
                        connect: WsSocket<S>,
                        context: &mut WsSession) -> LocalBoxFuture<'static, Result<()>> {
-        let msg = context.pop_msg();
+        let packet = context.pop_msg();
+        let mut msg = if self.is_strict() {
+            (&packet[4..packet.len()]).to_vec()
+        } else {
+            packet.as_slice().to_vec()
+        };
         let msg_type = context.get_type();
         println!("!!!!!!receive ok, msg: {:?}", String::from_utf8(msg.clone()));
 
@@ -104,7 +133,7 @@ fn test_awc() {
 
     let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(38080,
-                 Box::new(WebsocketListener::with_protocol(Arc::new(TestChildProtocol))));
+                 Box::new(WebsocketListener::with_protocol(Arc::new(TestChildProtocol::<TcpSocket>(PhantomData)))));
     let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
 
@@ -255,6 +284,8 @@ fn test_wsc() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
+    let _handle = startup_global_time_loop(100);
+
     let rt0 = AsyncRuntimeBuilder::default_local_thread(None, None);
     let rt1 = AsyncRuntimeBuilder::default_local_thread(None, None);
     let rt2 = AsyncRuntimeBuilder::default_local_thread(None, None);
@@ -266,7 +297,7 @@ fn test_wsc() {
 
     let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(38080,
-                 Box::new(WebsocketListener::with_protocol(Arc::new(TestChildProtocol))));
+                 Box::new(WebsocketListener::with_protocol(Arc::new(TestChildProtocol::<TcpSocket>(PhantomData)))));
     let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
 
@@ -319,7 +350,10 @@ fn test_wsc() {
     }));
 
     //创建连接
-    let ws = client.build("ws://127.0.0.1:38080", vec!["echo".to_string()], handler).unwrap();
+    let ws = client
+        .build("ws://127.0.0.1:38080",
+               vec!["echo".to_string()],
+               handler).unwrap();
 
     //开始连接，并获取连接的发送器
     let rt_copy = rt.clone();
@@ -328,7 +362,7 @@ fn test_wsc() {
     ws.set_send_frame_limit(127);
     rt.spawn(async move {
         println!("!!!!!!Websocket status: {:?}", ws.get_status());
-        match ws.open(true, 5000).await {
+        match ws.open(true, true, 5000).await {
             Err(e) => {
                 println!("!!!!!!Test open websocket failed, reason: {:?}", e);
             },
@@ -452,7 +486,7 @@ fn test_tls_wsc() {
         rt.spawn(async move {
             println!("!!!!!!Websocket status: {:?}", ws_copy.get_status());
             let now = std::time::Instant::now();
-            match ws_copy.open(true, 30000).await {
+            match ws_copy.open(true, true, 30000).await {
                 Err(e) => {
                     err_count_copy.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     println!("!!!!!!Test open websocket failed, time: {:?}, reason: {:?}", now.elapsed(), e);

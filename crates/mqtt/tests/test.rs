@@ -181,14 +181,15 @@ fn test_mqtt_311() {
     //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
     let broker_factory = Arc::new(WsMqttBrokerFactory::new(protocol_name,
                                                            broker_name,
-                                                           port));
+                                                           port,
+                                                           false));
     let service = Arc::new(TestBrokerService);
     register_mqtt_listener(broker_name, service.clone());
     register_mqtt_service(broker_name, service);
 
     let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(port,
-                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol())));
+                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol(true))));
     let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
 
@@ -225,14 +226,14 @@ fn test_tls_mqtt_311() {
     let port = 38080;
 
     //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
-    let broker_factory = Arc::new(WssMqttBrokerFactory::new(protocol_name, broker_name, port));
+    let broker_factory = Arc::new(WssMqttBrokerFactory::new(protocol_name, broker_name, port, false));
     let service = Arc::new(TestBrokerService);
     register_mqtts_listener(broker_name, service.clone());
     register_mqtts_service(broker_name, service);
 
     let mut factory = PortsAdapterFactory::<TlsSocket>::new();
     factory.bind(port,
-                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol())));
+                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol(true))));
     let tls_config = TlsConfig::new_server("",
                                            false,
                                            "./tests/7285407__17youx.cn.pem",
@@ -506,14 +507,14 @@ fn test_mqtt_311_passive() {
     let port = 38080;
 
     //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
-    let broker_factory = Arc::new(WsMqttBrokerFactory::new(protocol_name, broker_name, port));
+    let broker_factory = Arc::new(WsMqttBrokerFactory::new(protocol_name, broker_name, port, false));
     let service = Arc::new(TestPassiveBrokerService);
     register_mqtt_listener(broker_name, service.clone());
     register_mqtt_service(broker_name, service);
 
     let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(port,
-                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol())));
+                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol(true))));
     let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
 
@@ -550,14 +551,14 @@ fn test_tls_mqtt_311_passive() {
     let port = 38080;
 
     //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
-    let broker_factory = Arc::new(WssMqttBrokerFactory::new(protocol_name, broker_name, port));
+    let broker_factory = Arc::new(WssMqttBrokerFactory::new(protocol_name, broker_name, port, false));
     let service = Arc::new(TestPassiveBrokerService);
     register_mqtts_listener(broker_name, service.clone());
     register_mqtts_service(broker_name, service);
 
     let mut factory = PortsAdapterFactory::<TlsSocket>::new();
     factory.bind(port,
-                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol())));
+                 Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol(true))));
     let tls_config = TlsConfig::new_server("",
                                            false,
                                            "./tests/7285407__17youx.cn.pem",

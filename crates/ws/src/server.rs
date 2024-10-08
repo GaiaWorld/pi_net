@@ -66,9 +66,11 @@ impl<S: Socket> AsyncService<S> for WebsocketListener<S> {
             //当前Websocket连接还未握手，则开始Websocket连接握手
             let support_protocol = self.protocol.clone();
             let acceptor = self.acceptor.clone();
+            let window_bits = self.acceptor.window_bits();
 
             async move {
                 WsAcceptor::<S>::accept(handle.clone(),
+                                        window_bits,
                                         acceptor,
                                         support_protocol).await;
             }.boxed_local()

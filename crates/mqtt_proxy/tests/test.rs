@@ -240,7 +240,7 @@ fn test_tls_mqtt_proxy_service() {
     let port = 38080;
 
     //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
-    let broker_factory = Arc::new(WssMqttBrokerFactory::new(protocol_name, broker_name, port));
+    let broker_factory = Arc::new(WssMqttBrokerFactory::new(protocol_name, broker_name, port, false));
     let event_handler = Arc::new(TestMqttConnectHandler::<TlsSocket>::new());
     let rpc_handler = Arc::new(TestMqttRequestHandler::<TlsSocket>::new());
     let listener = Arc::new(MqttProxyListener::with_handler(Some(event_handler)));
@@ -415,7 +415,8 @@ fn test_mqtt_sub_and_unsub() {
     //构建Mqtt Broker，并注册Mqtt全局监听器和全局服务
     let broker_factory = Arc::new(WsMqttBrokerFactory::new(protocol_name,
                                                            broker_name,
-                                                           port));
+                                                           port,
+                                                           false));
     let event_handler = Arc::new(TestMqttConnectHandler::<TcpSocket>::new());
     let rpc_handler = Arc::new(TestMqttSubUnsubRequestHandler::<MultiTaskRuntime, TcpSocket>::new(rt_worker));
     let listener = Arc::new(MqttProxyListener::with_handler(Some(event_handler)));

@@ -224,6 +224,25 @@ impl<S: Socket> WsSocket<S> {
                 let head = frame.get_head();
                 if head.is_single() {
                     //数据帧，且只有单帧，则设置帧类型，并开始消息处理
+                    if protocol.is_strict() {
+                        //需要检查对端的消息Nonce
+                        let nonce = u32::from_le_bytes((&context.as_msg()[0..4]).try_into().unwrap());
+                        if !context.check_nonce(nonce) {
+                            //无效的对端消息Nonce，则立即关闭Ws连接
+                            let seed = context.get_seed();
+                            let nonce_count = context.get_nonce_count();
+                            close::<S>(handle, Err(Error::new(ErrorKind::Other,
+                                                              format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, nonce: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid writable context",
+                                                                      handle.get_token(),
+                                                                      handle.get_remote(),
+                                                                      handle.get_local(),
+                                                                      nonce,
+                                                                      seed,
+                                                                      nonce_count))));
+                            continue;
+                        }
+                    }
+
                     context.set_type(head.get_type());
                     context.finish_msg();
 
@@ -246,6 +265,25 @@ impl<S: Socket> WsSocket<S> {
                     continue;
                 } else if head.is_finish() {
                     //数据帧，当前是结束帧，则开始消息处理
+                    if protocol.is_strict() {
+                        //需要检查对端的消息Nonce
+                        let nonce = u32::from_le_bytes((&context.as_first_msg()[0..4]).try_into().unwrap());
+                        if !context.check_nonce(nonce) {
+                            //无效的对端消息Nonce，则立即关闭Ws连接
+                            let seed = context.get_seed();
+                            let nonce_count = context.get_nonce_count();
+                            close::<S>(handle, Err(Error::new(ErrorKind::Other,
+                                                              format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, nonce: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid writable context",
+                                                                      handle.get_token(),
+                                                                      handle.get_remote(),
+                                                                      handle.get_local(),
+                                                                      nonce,
+                                                                      seed,
+                                                                      nonce_count))));
+                            continue;
+                        }
+                    }
+
                     context.finish_msg();
 
                     if let Err(e) = protocol

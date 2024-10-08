@@ -1,6 +1,6 @@
 [package]
 name = "pi_mqtt"
-version = "0.2.7"
+version = "0.3.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_mqtt"
@@ -21,10 +21,11 @@ tcp = {version = "0.3", path = "../tcp", package = "pi_tcp" }
 ws = {version = "0.3", path = "../ws", package = "pi_ws" }
 udp = {version = "0.2", path = "../blocking_udp", package = "pi_blocking_udp"}
 quic = {version = "0.6", path = "../quic", package = "pi_quic" }
+pi_atom = "0.5"
 quinn-proto = "0.8"
+httparse = "=1.7.1"
 bytes = "~1.6"
 log = "0.4"
-pi_atom = "0.5"
 
 [dev-dependencies]
 pi-async-rt = "0.1"
