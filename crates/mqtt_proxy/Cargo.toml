@@ -1,6 +1,6 @@
 [package]
 name = "pi_mqtt_proxy"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_mqtt_proxy"
@@ -20,7 +20,7 @@ pi_atom = "0.5"
 log = "0.4"
 
 [dev-dependencies]
-ws = {version = "0.3", path = "../ws", package = "pi_ws" }
+ws = {version = "0.5", path = "../ws", package = "pi_ws" }
 env_logger = "0.9"
 udp = {version = "0.2", path = "../blocking_udp", package = "pi_blocking_udp" }
 quinn-proto = "0.8"
