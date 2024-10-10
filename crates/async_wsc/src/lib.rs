@@ -322,6 +322,18 @@ async fn event_loop<
                                                             },
                                                             Message::Binary(bin) => {
                                                                 //接收到种子
+                                                                if bin.len() == 4 {
+                                                                    //无效的种子
+                                                                    let url = ws.0.status.read().get_url().clone();
+                                                                    let protocols = ws.0.status.read().get_protocols().to_vec();
+                                                                    let reason = format!("Websocket receive seed failed, url: {}, reason: invalid seed length", url);
+                                                                    *ws.0.status.write() = AsyncWebsocketStatus::Error(url, protocols, None, Some(Error::new(ErrorKind::ConnectionAborted, reason.clone()))); //设置连接状态
+                                                                    ws.0.handler.on_error(reason.clone()); //通知处理器连接错误
+                                                                    ws.0.rt.wakeup::<()>(&task_id); //唤醒外部运行时的异步打开连接的任务
+                                                                    error!("{}", reason);
+                                                                    continue;
+                                                                }
+
                                                                 match xor_unencrypt_clarity(bin, SAFE_SEED_KEY.to_le_bytes()) {
                                                                     Err(e) => {
                                                                         //无效的种子

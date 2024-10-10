@@ -1,6 +1,6 @@
 [package]
 name = "pi_async_wsc"
-version = "0.3.2"
+version = "0.3.3"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_async_wsc"

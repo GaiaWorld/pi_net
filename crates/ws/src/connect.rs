@@ -226,13 +226,27 @@ impl<S: Socket> WsSocket<S> {
                     //数据帧，且只有单帧，则设置帧类型，并开始消息处理
                     if protocol.is_strict() {
                         //需要检查对端的消息Nonce
+                        if context.as_msg().len() < 4 {
+                            //无效的对端消息Nonce长度，则立即关闭Ws连接
+                            let seed = context.get_seed();
+                            let nonce_count = context.get_nonce_count();
+                            close::<S>(handle, Err(Error::new(ErrorKind::Other,
+                                                              format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid message nonce length",
+                                                                      handle.get_token(),
+                                                                      handle.get_remote(),
+                                                                      handle.get_local(),
+                                                                      seed,
+                                                                      nonce_count))));
+                            continue;
+                        }
+
                         let nonce = u32::from_le_bytes((&context.as_msg()[0..4]).try_into().unwrap());
                         if !context.check_nonce(nonce) {
                             //无效的对端消息Nonce，则立即关闭Ws连接
                             let seed = context.get_seed();
                             let nonce_count = context.get_nonce_count();
                             close::<S>(handle, Err(Error::new(ErrorKind::Other,
-                                                              format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, nonce: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid writable context",
+                                                              format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, nonce: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid message nonce",
                                                                       handle.get_token(),
                                                                       handle.get_remote(),
                                                                       handle.get_local(),
@@ -267,13 +281,27 @@ impl<S: Socket> WsSocket<S> {
                     //数据帧，当前是结束帧，则开始消息处理
                     if protocol.is_strict() {
                         //需要检查对端的消息Nonce
+                        if context.as_first_msg().len() < 4 {
+                            //无效的对端消息Nonce长度，则立即关闭Ws连接
+                            let seed = context.get_seed();
+                            let nonce_count = context.get_nonce_count();
+                            close::<S>(handle, Err(Error::new(ErrorKind::Other,
+                                                              format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid message nonce length",
+                                                                      handle.get_token(),
+                                                                      handle.get_remote(),
+                                                                      handle.get_local(),
+                                                                      seed,
+                                                                      nonce_count))));
+                            continue;
+                        }
+
                         let nonce = u32::from_le_bytes((&context.as_first_msg()[0..4]).try_into().unwrap());
                         if !context.check_nonce(nonce) {
                             //无效的对端消息Nonce，则立即关闭Ws连接
                             let seed = context.get_seed();
                             let nonce_count = context.get_nonce_count();
                             close::<S>(handle, Err(Error::new(ErrorKind::Other,
-                                                              format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, nonce: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid writable context",
+                                                              format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, nonce: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid message nonce",
                                                                       handle.get_token(),
                                                                       handle.get_remote(),
                                                                       handle.get_local(),
