@@ -1,17 +1,126 @@
-use std::fmt::Formatter;
-use std::sync::Arc;
 use std::str::FromStr;
+use std::fmt::Formatter;
+use std::sync::{Arc, OnceLock};
 use std::io::{Error, Result, ErrorKind};
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::ops::Deref;
+use pi_async_rt::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder},
+                      serial_local_thread::LocalTaskRuntime};
+use dashmap::DashMap;
 use hickory_proto::{rr::RecordType,
                     op::Query};
 use hickory_resolver::{Name, Hosts, Resolver,
                        config::{ResolverConfig, ResolverOpts},
                        lookup::Lookup};
 
+// DNS解析器运行时
+struct DNSResolverRuntime(LocalTaskRuntime<()>);
+
+unsafe impl Sync for DNSResolverRuntime {}
+
+impl Deref for DNSResolverRuntime {
+    type Target = LocalTaskRuntime<()>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DNSResolverRuntime {
+    /// 关闭DNS解析器运行时
+    pub fn close(self) {
+        self.0.close();
+    }
+}
+
+///
+/// 默认的DNS解析器名
+///
+pub const DEFAULT_DNS_RESOLVER_NAME: String = String::new();
+
+// 全局域名解析服务列表
+static GLOBAL_DNS_RESOLVE_SERVICES: OnceLock<DashMap<String, (DNSResolverRuntime, DNSResolver)>> = OnceLock::new();
+
+///
+/// 初始化全局DNS域名解析服务，并提供一个默认的全局DNS解析器
+///
+pub fn init_global_dns_resolve_service() {
+    let _ = GLOBAL_DNS_RESOLVE_SERVICES.get_or_init(|| {
+        DashMap::new()
+    });
+
+    join_dns_resolver(DEFAULT_DNS_RESOLVER_NAME,
+                      DNSResolver::with_system_conf().unwrap());
+}
+
+///
+/// 加入一个全局DNS解析器，每个解析器由一个异步运行时推动
+///
+pub fn join_dns_resolver<N: AsRef<str>>(name: N,
+                                        resolver: DNSResolver) {
+    if let Some(map) = GLOBAL_DNS_RESOLVE_SERVICES.get() {
+        let rt = AsyncRuntimeBuilder
+        ::default_local_thread(Some(("DNS-Resolver-".to_string() + name.as_ref()).as_str()),
+                               None);
+
+        if let Some((last_rt, _last_resolver)) = map
+            .insert(name.as_ref().to_string(),
+                    (DNSResolverRuntime(rt), resolver))
+        {
+            last_rt.close();
+        }
+    }
+}
+
+///
+/// 异步用指定DNS解析器解析指定的域名的ip，不会阻塞当前线程
+///
+pub fn async_resolve_ip<N, F>(name: Option<N>,
+                              host_name: N,
+                              callback: F) -> Result<()>
+where N: AsRef<str> + 'static,
+      F: FnOnce(Result<Vec<SocketAddr>>) + 'static
+{
+    let resolver_name = if let Some(name) = name {
+        //指定了DNS解析器
+        name.as_ref().to_string()
+    } else {
+        //未指定DNS解析器
+        DEFAULT_DNS_RESOLVER_NAME
+    };
+
+    if let Some(map) = GLOBAL_DNS_RESOLVE_SERVICES.get() {
+        if let Some(item) = map.get(&resolver_name) {
+            let (rt, resolver) = item.value();
+            let resolver_copy = resolver.clone();
+            rt.send(async move {
+                let result = resolver_copy.lookup_ip(host_name);
+                callback(result);
+            });
+        }
+
+        Ok(())
+    } else {
+        Err(Error::new(ErrorKind::BrokenPipe,
+                       format!("Async resolve ip failed, name: {:?}, reason: resolver not exist",
+                               resolver_name)))
+    }
+}
+
 pub type DNSResolverConfig = ResolverConfig;
 pub type DNSResolverOpts = ResolverOpts;
 pub type DNSResolverRecordType = RecordType;
+
+///
+/// 获取本地域名
+///
+pub fn local_domain() -> Option<Name> {
+    if let Some(domain) = ResolverConfig::default().domain() {
+        Some(domain.clone())
+    } else {
+        None
+    }
+}
 
 ///
 /// DNS解析器
