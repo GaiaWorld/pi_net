@@ -17,7 +17,7 @@ use brotli::{CompressorReader, Decompressor};
 use twoway::{find_bytes, rfind_bytes};
 use env_logger;
 
-use pi_async_rt::rt::{AsyncRuntime,
+use pi_async_rt::rt::{AsyncRuntime, startup_global_time_loop,
                       multi_thread::MultiTaskRuntimeBuilder,
                       serial::AsyncRuntimeBuilder};
 use pi_hash::XHashMap;
@@ -413,6 +413,7 @@ fn test_http_hosts() {
     env_logger::builder().format_timestamp_millis().init();
 
     //启动文件异步运行时
+    let _handle = startup_global_time_loop(100);
     let mut builder = MultiTaskRuntimeBuilder::default();
     let file_rt = builder.build();
 
@@ -562,6 +563,7 @@ fn test_https_hosts() {
     env_logger::builder().format_timestamp_millis().init();
 
     //启动文件异步运行时
+    let _handle = startup_global_time_loop(100);
     let mut builder = MultiTaskRuntimeBuilder::default();
     let file_rt = builder.build();
 
@@ -674,8 +676,8 @@ fn test_https_hosts() {
                  HttpListenerFactory::<TlsSocket, _>::with_hosts(hosts, 10000).new_service());
     let tls_config = TlsConfig::new_server("",
                                            false,
-                                           "./tests/7285407__17youx.cn.pem",
-                                           "./tests/7285407__17youx.cn.key",
+                                           "./tests/17youx.cn.pem",
+                                           "./tests/17youx.cn.key",
                                            "",
                                            "",
                                            "",

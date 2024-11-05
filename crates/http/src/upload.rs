@@ -12,6 +12,8 @@ use pi_handler::SGenType;
 use log::warn;
 use pi_async_rt::rt::{AsyncRuntime, multi_thread::MultiTaskRuntime};
 use tcp::Socket;
+use serde_json::{self, Value};
+use pi_hash::XHashMap;
 
 use crate::{
     gateway::GatewayContext,
@@ -53,7 +55,31 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
             let mut file = String::from("");
             let mut content = vec![];
 
-            let map = context.as_mut_parts();
+            let mut json_map = None;
+            if !context.as_mut_parts().contains_key("method")
+                && !context.as_mut_parts().contains_key("file_name")
+                && !context.as_mut_parts().contains_key("filename")
+                && !context.as_mut_parts().contains_key("content") {
+                if let Some(SGenType::Str(str)) = context.as_params().borrow().get("") {
+                    if let Ok(value) = serde_json::from_str::<Value>(str) {
+                        let mut map = XHashMap::default();
+                        for (key, value) in value.as_object().unwrap() {
+                            if value.is_string() {
+                                map
+                                    .insert(key.to_string(),
+                                            SGenType::Str(value.as_str().unwrap().to_string()));
+                            }
+                        }
+                        json_map = Some(map);
+                    }
+                }
+            }
+            let map = if let Some(map) = &mut json_map {
+                map
+            } else {
+                context.as_mut_parts()
+            };
+
             if let Some(SGenType::Str(method)) = map.get("method") {
                 if method == FILE_REMOVE_METHOD {
                     //文件移除
