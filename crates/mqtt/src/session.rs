@@ -87,6 +87,9 @@ pub trait MqttSession: Debug + Send + Sync + 'static {
 /// Mqtt连接
 ///
 pub trait MqttConnect<S: Socket>: Debug + Send + Sync + 'static {
+    /// 判断当前连接是否已关闭
+    fn is_closed(&self) -> bool;
+
     /// 获取连接的令牌
     fn get_token(&self) -> Option<usize>;
 
@@ -289,6 +292,14 @@ impl<S: Socket> MqttSession for QosZeroSession<S> {
 }
 
 impl<S: Socket> MqttConnect<S> for QosZeroSession<S> {
+    fn is_closed(&self) -> bool {
+        if let Some(connect) = &self.connect {
+            return connect.is_closed();
+        }
+
+        true
+    }
+
     fn get_token(&self) -> Option<usize> {
         if let Some(connect) = &self.connect {
             return Some(connect.get_token().0);

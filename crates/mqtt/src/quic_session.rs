@@ -84,6 +84,9 @@ pub trait MqttSession: Debug + Send + Sync + 'static {
 /// Mqtt连接
 ///
 pub trait MqttConnect: Debug + Send + Sync + 'static {
+    /// 判断当前连接是否已关闭
+    fn is_closed(&self) -> bool;
+
     /// 获取Tcp连接唯一id
     fn get_uid(&self) -> Option<usize>;
 
@@ -285,6 +288,14 @@ impl MqttSession for QosZeroSession {
 }
 
 impl MqttConnect for QosZeroSession {
+    fn is_closed(&self) -> bool {
+        if let Some(connect) = &self.connect {
+            return connect.is_closed();
+        }
+
+        true
+    }
+
     fn get_uid(&self) -> Option<usize> {
         if let Some(connect) = &self.connect {
             return Some(connect.get_uid());

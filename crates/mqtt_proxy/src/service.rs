@@ -420,6 +420,13 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
                  protocol: MqttBrokerProtocol,
                  connect: Arc<dyn MqttConnect<S>>,
                  topics: Vec<(String, u8)>) -> LocalBoxFuture<'static, Result<()>> {
+        if connect.is_closed() {
+            //连接已关闭，则忽略订阅
+            return async move {
+                Ok(())
+            }.boxed_local();
+        }
+
         //Mqtt订阅主题
         if let Some(handler) = &self.request_handler {
             let handler = handler.clone();
@@ -462,6 +469,13 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
                    protocol: MqttBrokerProtocol,
                    connect: Arc<dyn MqttConnect<S>>,
                    topics: Vec<String>) -> LocalBoxFuture<'static, Result<()>> {
+        if connect.is_closed() {
+            //连接已关闭，则忽略退订
+            return async move {
+                Ok(())
+            }.boxed_local();
+        }
+
         if let Some(mut handle) = connect.get_session() {
             if let Some(session) = handle.as_mut() {
                 if let Some(handler) = &self.request_handler {
@@ -503,6 +517,13 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
                connect: Arc<dyn MqttConnect<S>>,
                topic: String,
                payload: Arc<Vec<u8>>) -> LocalBoxFuture<'static, Result<()>> {
+        if connect.is_closed() {
+            //连接已关闭，则忽略发布
+            return async move {
+                Ok(())
+            }.boxed_local();
+        }
+
         if let Some(mut handle) = connect.get_session() {
             if let Some(session) = handle.as_mut() {
                 if let Some(handler) = &self.request_handler {
