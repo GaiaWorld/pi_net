@@ -143,6 +143,7 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
         let acceptor = self;
         let rt_copy = rt.clone();
         rt.spawn(async move {
+            let acceptor_name = acceptor.name.clone();
             listen_loop(rt_copy,
                         acceptor,
                         event_size,
@@ -150,6 +151,9 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> Acceptor<S, A> {
                         readed_read_size_limit,
                         readed_write_size_limit,
                         timeout).await;
+            warn!("Listen tcp port exited, thread: {:?}, ports: {:?}",
+                thread::current(),
+                acceptor_name);
         });
 
         Ok(controller)
@@ -297,7 +301,13 @@ async fn listen_loop<S: Socket + Stream, A: SocketAdapter<Connect = S>>(rt: Work
                                 e);
                         }
 
-                        (&mut acceptor.listeners).remove(addr);
+                        if let Some(_) = (&mut acceptor.listeners).remove(addr) {
+                            //从监听器列表中删除指定绑定地址的监听器成功
+                            warn!("Unregister tcp listener successful, thread: {:?}, address: {:?}, ports: {:?}",
+                                thread::current(),
+                                addr,
+                                acceptor.name);
+                        }
                     }
                 }
             }
