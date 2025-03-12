@@ -4,7 +4,7 @@ use std::sync::{Arc, OnceLock};
 use std::io::{Error, Result, ErrorKind};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::Deref;
-use pi_async_rt::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder},
+use pi_async_rt::rt::{serial::AsyncRuntimeBuilder,
                       serial_local_thread::LocalTaskRuntime};
 use dashmap::DashMap;
 use hickory_proto::{rr::RecordType,

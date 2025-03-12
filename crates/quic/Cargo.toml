@@ -1,6 +1,6 @@
 [package]
 name = "pi_quic"
-version = "0.6.6"
+version = "0.7.0"
 authors = ["vmos <vmosone007@gmail.com>"]
 edition = "2021"
 description = "Quic client/server"
@@ -12,30 +12,26 @@ keywords = ["pi", "quic"]
 futures = "0.3"
 parking_lot = "0.12"
 quinn-proto = "0.8"
-pi-async-rt = "0.1"
+pi-async-rt = "0.2"
 rustls = { version = "0.20", features = ["dangerous_configuration"] }
 rustls-pemfile = "1.0"
-bytes = "~1.6"
+bytes = "~1.10"
 crossbeam-channel = "0.5"
 crossbeam-utils = "0.8"
 pi_hash = "0.1"
-dashmap = "5.5"
+dashmap = "6.1"
 log = "0.4"
 pi_cancel_timer = "0.2"
 slotmap = "1.0"
-flume = "0.10"
 tracing = "0.1"
-udp = {version = "0.2", path = "../blocking_udp", package = "pi_blocking_udp" }
+udp = { version = "0.3", path = "../blocking_udp", package = "pi_blocking_udp" }
 
 [dev-dependencies]
-rcgen = "0.10"
 tokio = { version = "1.21", features = ["full"] }
 quinn = "0.8"
-ed25519-dalek = "1.0"
 x509-parser = { version = "0.15", features = ["verify"] }
 pem = "2.0"
 der-parser = "8.2"
 env_logger = "0.9"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-tracing-chrome = "0.7"

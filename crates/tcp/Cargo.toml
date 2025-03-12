@@ -1,6 +1,6 @@
 [package]
 name = "pi_tcp"
-version = "0.3.10"
+version = "0.5.0"
 edition = "2021"
 description = "pi_tcp"
 repository = "https://github.com/GaiaWorld/pi_net/tree/crateio"
@@ -10,9 +10,9 @@ keywords = ["pi",  "tcp"]
 [dependencies]
 futures = "0.3"
 mio = { version = "0.8", features = ["net", "os-poll"] }
-dashmap = "5.5"
-lazy_static = "1.4"
-bytes = "~1.6"
+dashmap = "6.1"
+lazy_static = "1.5"
+bytes = "~1.10"
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
 fnv = "1.0"
@@ -22,12 +22,11 @@ rustls-pemfile = "1.0"
 slotmap = "1.0"
 spin_sleep_util = "~0.1"
 log = "0.4"
-pi-async-rt = "0.1"
-pi_async_buffer = "0.7"
+pi-async-rt = "0.2"
+pi_async_buffer = "0.8"
 pi_hash = { version = "0.1", features = ["xxhash"] }
-pi_atom = "0.5"
 pi_cancel_timer = "0.2"
-pi_slotmap = "0.1"
+pi_slotmap = "0.2"
 
 [dev-dependencies]
-env_logger = "0.9"
+env_logger = "0.11"

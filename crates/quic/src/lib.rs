@@ -1,5 +1,4 @@
 use std::ptr;
-use std::any::Any;
 use std::sync::Arc;
 use std::task::Waker;
 use std::time::Duration;
@@ -15,7 +14,7 @@ use crossbeam_channel::Sender;
 use crossbeam_utils::atomic::AtomicCell;
 use bytes::BytesMut;
 use pi_async_rt::{lock::spin_lock::SpinLock,
-                  rt::{AsyncValueNonBlocking,
+                  rt::{AsyncValue,
                        serial_local_thread::LocalTaskRuntime}};
 
 use udp::SocketHandle as UdpSocketHandle;
@@ -281,7 +280,7 @@ impl SocketHandle {
     /// 通知连接的指定流读就绪
     pub fn read_ready(&self,
                       stream_id: &StreamId,
-                      adjust: usize) -> GenResult<AsyncValueNonBlocking<usize>, usize> {
+                      adjust: usize) -> GenResult<AsyncValue<usize>, usize> {
         unsafe {
             (&mut *self.0.inner.get()).read_ready(stream_id, adjust)
         }
@@ -475,7 +474,7 @@ pub enum QuicEvent {
     Accepted(QuicSocket),                                                       //Quic已接受连接
     ConnectionReceived(ConnectionHandle, ConnectionEvent),                      //Quic连接接收数据
     ConnectionSend(ConnectionHandle, Transmit),                                 //Quic连接发送数据
-    StreamOpen(ConnectionHandle, Dir, AsyncValueNonBlocking<Result<StreamId>>), //Quic流打开
+    StreamOpen(ConnectionHandle, Dir, AsyncValue<Result<StreamId>>), //Quic流打开
     StreamReady(ConnectionHandle, StreamId, QuicSocketReady),                   //Quic流就绪
     StreamWrite(ConnectionHandle, StreamId, Vec<u8>),                           //Quic流写数据
     RebindUdp(UdpSocketHandle),                                                 //Quic重绑定Udp连接句柄

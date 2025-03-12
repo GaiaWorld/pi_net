@@ -1,6 +1,6 @@
 [package]
 name = "pi_async_httpc"
-version = "0.5.6"
+version = "0.6.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_async_httpc"
@@ -18,19 +18,19 @@ not_compression_frontend = ["reqwest/native-tls", "reqwest/native-tls-alpn", "re
 tokio = { version = "1", features = ["full"] }
 percent-encoding = "2.1"
 reqwest = { version = "0.11", optional = true }
-bytes = { version = "~1.6", features = ["serde"]}
-flume = "0.10"
-lazy_static = "1.4"
+bytes = { version = "~1.10", features = ["serde"] }
+flume = "0.11"
+lazy_static = "1.5"
 pi_hash = "0.1"
 
 [dev-dependencies]
-pi-async-rt = "0.1"
-env_logger = "0.7"
+pi-async-rt = "0.2"
+env_logger = "0.11"
 futures = "0.3"
-new_tcp = { package = "pi_tcp", version = "0.3", path = "../tcp" }
-http = { package = "pi_http", version = "0.2", path = "../http" }
+new_tcp = { package = "pi_tcp", version = "0.5", path = "../tcp" }
+http = { package = "pi_http", version = "0.3", path = "../http" }
 https = { package = "http", version = "0.2" }
-pi_handler = "0.1"
+pi_handler = "0.2"
 pi_hash = "0.1"
 pi_gray = "0.1"
-pi_atom = "0.5"
+pi_atom = "0.6"

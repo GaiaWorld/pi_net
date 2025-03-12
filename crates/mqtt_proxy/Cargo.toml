@@ -1,6 +1,6 @@
 [package]
 name = "pi_mqtt_proxy"
-version = "0.3.2"
+version = "0.5.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_mqtt_proxy"
@@ -10,17 +10,17 @@ keywords = ["pi", "mqtt_proxy"]
 
 [dependencies]
 futures = "0.3"
-tcp = {version = "0.3", path = "../tcp", package = "pi_tcp" }
-quic = {version = "0.6", path = "../quic", package = "pi_quic" }
-mqtt = {version = "0.3", path = "../mqtt", package = "pi_mqtt" }
-pi-async-rt = "0.1"
-pi_handler = "0.1"
+tcp = { version = "0.5", path = "../tcp", package = "pi_tcp" }
+quic = { version = "0.7", path = "../quic", package = "pi_quic" }
+mqtt = { version = "0.5", path = "../mqtt", package = "pi_mqtt" }
+pi-async-rt = "0.2"
+pi_handler = "0.2"
 pi_gray = "0.1"
-pi_atom = "0.5"
+pi_atom = "0.6"
 log = "0.4"
 
 [dev-dependencies]
-ws = {version = "0.5", path = "../ws", package = "pi_ws" }
-env_logger = "0.9"
-udp = {version = "0.2", path = "../blocking_udp", package = "pi_blocking_udp" }
+ws = {version = "0.6", path = "../ws", package = "pi_ws" }
+env_logger = "0.11"
+udp = {version = "0.3", path = "../blocking_udp", package = "pi_blocking_udp" }
 quinn-proto = "0.8"

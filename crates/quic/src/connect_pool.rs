@@ -13,7 +13,7 @@ use slotmap::{Key, KeyData};
 use bytes::BufMut;
 use log::{debug, error};
 
-use pi_async_rt::rt::{AsyncValueNonBlocking,
+use pi_async_rt::rt::{AsyncValue,
                    serial::AsyncRuntime,
                    serial_local_thread::LocalTaskRuntime};
 use pi_cancel_timer::Timer;
@@ -551,7 +551,7 @@ fn handle_stream_write_event<P: EndPointPoller>(pool: &mut QuicSocketPool<P>,
 fn handle_local_stream_open<P: EndPointPoller>(pool: &mut QuicSocketPool<P>,
                                                connction_handle: ConnectionHandle,
                                                stream_type: Dir,
-                                               result: AsyncValueNonBlocking<Result<StreamId>>) {
+                                               result: AsyncValue<Result<StreamId>>) {
     if let Some(item) = pool.sockets.get(&connction_handle.0) {
         //指定的连接存在
         let socket = item.value();

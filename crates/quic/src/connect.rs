@@ -16,7 +16,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::future::{FutureExt, LocalBoxFuture};
 
 use pi_async_rt::{lock::spin_lock::SpinLock,
-                  rt::{AsyncValueNonBlocking,
+                  rt::{AsyncValue,
                        serial_local_thread::LocalTaskRuntime}};
 
 use udp::SocketHandle;
@@ -301,7 +301,7 @@ impl QuicSocket {
     pub async fn open_expanding_stream(&self,
                                        stream_type: Dir) -> Result<StreamId> {
         if let Some(sender) = &self.event_send {
-            let result = AsyncValueNonBlocking::new();
+            let result = AsyncValue::new();
             let result_copy = result.clone();
             if let Err(e) = sender.send(QuicEvent::StreamOpen(self.handle,
                                                               stream_type,
@@ -807,7 +807,7 @@ impl QuicSocket {
         result
     }
 
-    /// 通知连接的指定流读就绪，可以开始接收指定字节数的数据，如果当前需要等待接收则返回AsyncValueNonBlocking, 否则返回接收缓冲区中已有数据的字节数
+    /// 通知连接的指定流读就绪，可以开始接收指定字节数的数据，如果当前需要等待接收则返回AsyncValue, 否则返回接收缓冲区中已有数据的字节数
     /// 设置准备读取的字节大小为0，则表示准备接收任意数量的字节，直到当前连接的流没有可接收的数据
     /// 设置准备读取的字节大小大于0，则表示至少需要接收指定数量的字节，如果还未接收到指定数量的字节，则继续从流中接收
     /// 异步阻塞读取读缓冲前应该保证调用此函数对读缓冲进行填充，避免异步读取被异步阻塞
@@ -815,7 +815,7 @@ impl QuicSocket {
     /// 注意调用此方法，在保持连接的前提下，必须保证后续一定还可以接收到数据，否则会导致无法唤醒当前异步准备读取器
     pub fn read_ready(&mut self,
                       stream_id: &StreamId,
-                      adjust: usize) -> GenResult<AsyncValueNonBlocking<usize>, usize> {
+                      adjust: usize) -> GenResult<AsyncValue<usize>, usize> {
         if self.is_closed() {
             //连接已关闭，则忽略，并立即返回
             return Err(0);
@@ -841,7 +841,7 @@ impl QuicSocket {
             }
 
             //流当前读缓冲区没有足够的数据，则只读需要的字节数
-            let value = AsyncValueNonBlocking::new();
+            let value = AsyncValue::new();
             let value_copy = value.clone();
             *stream.ready_reader.lock() = Some(value); //设置当前流的异步准备读取器
             unsafe { (*stream.wait_ready_len.get()) = adjust - remaining; } //设置本次异步准备读取实际需要的字节数
@@ -1397,7 +1397,7 @@ pub struct QuicStream {
     read_buf:           Arc<SpinLock<Option<BytesMut>>>,                    //流读缓冲
     wait_ready_len:     UnsafeCell<usize>,                                  //流异步准备读取的字节数
     ready_len:          UnsafeCell<usize>,                                  //流异步准备读取已就绪的字节数
-    ready_reader:       SpinLock<Option<AsyncValueNonBlocking<usize>>>,     //异步准备读取器
+    ready_reader:       SpinLock<Option<AsyncValue<usize>>>,     //异步准备读取器
     wait_sent_len:      AtomicUsize,                                        //流需要发送的字节数
     sent_len:           UnsafeCell<usize>,                                  //流已发送的字节数
     write_len:          Arc<AtomicUsize>,                                   //流写入块大小

@@ -24,7 +24,7 @@ use log::error;
 use pi_hash::XHashMap;
 use pi_cancel_timer::Timer;
 use pi_async_rt::{lock::spin_lock::SpinLock,
-               rt::{AsyncRuntime, serial::AsyncValueNonBlocking,
+               rt::{AsyncRuntime, serial::AsyncValue,
                     serial_local_thread::LocalTaskRuntime}};
 use udp::{Socket, AsyncService, SocketHandle, TaskResult,
           terminal::UdpTerminal};
@@ -601,7 +601,7 @@ impl QuicClient {
         let now = Instant::now();
         let client = self.clone();
         let hostname = hostname.to_string();
-        let connect_value = AsyncValueNonBlocking::new();
+        let connect_value = AsyncValue::new();
         let connect_value_copy = connect_value.clone();
         let _ = self
             .0
@@ -696,7 +696,7 @@ impl QuicClient {
         let uid = connection_handle.0;
         if let Some((uid, connection)) = self.0.connections.remove(&uid) {
             //指定唯一id的Udp连接存在，则开始关闭
-            let value = AsyncValueNonBlocking::new();
+            let value = AsyncValue::new();
             self.0.close_events.insert(uid, value.clone()); //注册指定连接的关闭事件监听器
 
             if let Err(e) = connection.0.handle.close(code, reason) {
@@ -789,9 +789,9 @@ struct InnerQuicClient {
     //Quic连接路由器
     router:                     Vec<Sender<QuicEvent>>,
     //Quic连接事件表
-    connect_events:             DashMap<usize, (usize, AsyncValueNonBlocking<Result<QuicSocketHandle>>)>,
+    connect_events:             DashMap<usize, (usize, AsyncValue<Result<QuicSocketHandle>>)>,
     //Quic关闭事件表
-    close_events:               DashMap<usize, AsyncValueNonBlocking<Result<()>>>,
+    close_events:               DashMap<usize, AsyncValue<Result<()>>>,
     //Quic客户端事件监听器
     listener:                   Option<Arc<dyn QuicAsyncService>>,
     //定时器
