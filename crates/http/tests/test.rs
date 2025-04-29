@@ -15,6 +15,8 @@ use futures::future::{FutureExt, LocalBoxFuture};
 use flate2::{Compression, FlushCompress, Compress, Status};
 use brotli::{CompressorReader, Decompressor};
 use twoway::{find_bytes, rfind_bytes};
+use isahc::{HttpClient, Request,
+            prelude::*};
 use env_logger;
 
 use pi_async_rt::rt::{AsyncRuntime, startup_global_time_loop,
@@ -388,11 +390,13 @@ fn handle<R: AsyncRuntime>(rt: R,
     let msg = WrapMsg(msg);
     let resp_handler = Arc::new(handler);
 
+    let rt_copy = rt.clone();
     rt.spawn(async move {
         // println!("!!!!!!http gateway handle, topic: {:?}", topic);
         // println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
         // println!("!!!!!!http gateway handle, headers: {:?}", headers);
         // println!("!!!!!!http gateway handle, msg: {:?}", msg.0.borrow());
+        rt_copy.timeout(15000).await;
 
         //处理Http响应
         resp_handler.status(200);
@@ -403,7 +407,7 @@ fn handle<R: AsyncRuntime>(rt: R,
         }
 
         resp_handler.finish().await;
-        // println!("!!!!!!http gateway handle ok");
+        println!("!!!!!!http gateway handle ok, topic: {:?}, addr: {:?}", topic.as_str(), addr);
     });
 }
 
@@ -532,7 +536,7 @@ fn test_http_hosts() {
 
     let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(80,
-                 HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 10000).new_service());
+                 HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 60000).new_service());
     let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
 
@@ -551,6 +555,38 @@ fn test_http_hosts() {
         },
         Ok(driver) => {
             println!("===> Http Listener Bind Ok");
+            let client = HttpClient::builder()
+                .max_connections_per_host(1)
+                .tcp_keepalive(Duration::from_millis(60000))
+                .connect_timeout(Duration::from_millis(5000))
+                .timeout(Duration::from_millis(30000))
+                .low_speed_timeout(1024, Duration::from_millis(30000))
+                .build()
+                .unwrap();
+
+            let rt_copy = file_rt.clone();
+            let client_copy = client.clone();
+            let _ = file_rt.spawn(async move {
+                let url = "http://127.0.0.1/port/test0";
+                let request = Request::get(url).body(()).unwrap();
+                match client_copy.send_async(request).await {
+                    Err(e) => {
+                        println!("Request failed, url: {:?}, reason: {:?}", url, e);
+                    },
+                    Ok(resp) => {
+                        println!("Request ok, url: {:?}, resp: {:?}", url, resp);
+
+                        let _ = rt_copy.spawn(async move {
+                            let url = "http://127.0.0.1/port/test1";
+                            let request = Request::get(url).timeout(Duration::from_millis(1)).body(()).unwrap();
+                            let now = Instant::now();
+                            let resp = client_copy.send_async(request).await;
+                            drop(resp);
+                            println!("Request closed, url: {:?}, time: {:?}", url, now.elapsed());
+                        });
+                    },
+                }
+            });
         }
     }
 

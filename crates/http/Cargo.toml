@@ -1,6 +1,6 @@
 [package]
 name = "pi_http"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_http"
@@ -40,4 +40,5 @@ tcp = { version = "0.5", package="pi_tcp", path = "../tcp" }
 
 [dev-dependencies]
 route-recognizer = "0.3"
+isahc = "1.7"
 env_logger = "0.11"
