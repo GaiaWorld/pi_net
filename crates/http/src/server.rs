@@ -94,6 +94,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
 
                 //解析上行请求
                 if let Some(connect) = context.as_mut() {
+                    println!("!!!!!!Create http connect, closed: {:?}, peer: {:?}", connect.handle.is_closed(), connect.handle.get_remote());
                     let mut http_request_result = None;
                     let mut buf: &[u8] = &[]; //初始化本地缓冲区
                     let mut last_bin_len = 0; //初始化本地缓冲区上次长度

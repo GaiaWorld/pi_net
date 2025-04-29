@@ -137,6 +137,7 @@ impl<S: Socket> HttpAcceptor<S> {
                                 let mut connect = HttpConnect::new(handle.clone(),
                                                                    host.new_service(),
                                                                    keep_alive);
+                                println!("!!!!!!Create http connect, closed: {:?}, peer: {:?}", handle.is_closed(), handle.get_remote());
                                 if let &Some(method) = &req.method {
                                     if let &Some(path) = &req.path {
                                         //构建本次Http连接请求
