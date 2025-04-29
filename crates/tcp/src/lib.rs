@@ -724,6 +724,18 @@ impl<S: Socket> Clone for SocketHandle<S> {
     }
 }
 
+impl<S: Socket> Drop for SocketHandle<S> {
+    fn drop(&mut self) {
+        debug!("Drop socket handle, token: {:?}, uid: {:?}, remote: {:?}, local: {:?}, closed: {:?}, socket image shared: {:?}",
+            self.0.token,
+            self.0.uid,
+            self.0.remote,
+            self.0.local,
+            self.0.closed.load(Ordering::Relaxed),
+            Arc::strong_count(&self.0));
+    }
+}
+
 impl<S: Socket> SocketHandle<S> {
     /// 构建Tcp连接句柄
     pub fn new(image: SocketImage<S>) -> Self {
@@ -879,12 +891,12 @@ unsafe impl<S: Socket> Sync for SocketImage<S> {}
 
 impl<S: Socket> Drop for SocketImage<S> {
     fn drop(&mut self) {
-        debug!("Drop socket image, token: {:?}, uid: {:?}, remote: {:?}, local: {:?}, closed: {:?}, socket shared: {:?}", 
-            self.token, 
-            self.uid, 
-            self.remote, 
-            self.local, 
-            self.closed.load(Ordering::Relaxed), 
+        debug!("Drop socket image, token: {:?}, uid: {:?}, remote: {:?}, local: {:?}, closed: {:?}, socket shared: {:?}",
+            self.token,
+            self.uid,
+            self.remote,
+            self.local,
+            self.closed.load(Ordering::Relaxed),
             Arc::strong_count(&self.inner));
     }
 }
