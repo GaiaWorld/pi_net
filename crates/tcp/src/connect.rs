@@ -15,7 +15,7 @@ use crossbeam_channel::Sender;
 use futures::{sink::SinkExt,
               future::{FutureExt, LocalBoxFuture}};
 use bytes::{Buf, BufMut, BytesMut};
-
+use log::debug;
 use pi_async_rt::{lock::spin_lock::SpinLock,
                   rt::{serial::AsyncValue,
                        serial_local_thread::LocalTaskRuntime}};
@@ -89,6 +89,17 @@ pub struct TcpSocket {
 
 unsafe impl Send for TcpSocket {}
 unsafe impl Sync for TcpSocket {}
+
+impl Drop for TcpSocket {
+    fn drop(&mut self) {
+        debug!("Drop tcp socket, token: {:?}, uid: {:?}, remote: {:?}, local: {:?}, closed: {:?}",
+            self.token,
+            self.uid,
+            self.remote,
+            self.local,
+            self.closed.load(Ordering::Relaxed));
+    }
+}
 
 impl Stream for TcpSocket {
     fn new(local: &SocketAddr,

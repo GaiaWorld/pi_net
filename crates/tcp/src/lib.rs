@@ -19,6 +19,7 @@ use crossbeam_channel::Sender;
 use mio::{Token, Interest, Poll,
           net::TcpStream};
 use bytes::BytesMut;
+use log::debug;
 
 use pi_async_rt::rt::{serial::AsyncValue,
                       serial_local_thread::LocalTaskRuntime};
@@ -875,6 +876,18 @@ pub struct SocketImage<S: Socket> {
 
 unsafe impl<S: Socket> Send for SocketImage<S> {}
 unsafe impl<S: Socket> Sync for SocketImage<S> {}
+
+impl<S: Socket> Drop for SocketImage<S> {
+    fn drop(&mut self) {
+        debug!("Drop socket image, token: {:?}, uid: {:?}, remote: {:?}, local: {:?}, closed: {:?}, socket shared: {:?}", 
+            self.token, 
+            self.uid, 
+            self.remote, 
+            self.local, 
+            self.closed.load(Ordering::Relaxed), 
+            Arc::strong_count(&self.inner));
+    }
+}
 
 impl<S: Socket> SocketImage<S> {
     /// 构建Tcp连接镜像
