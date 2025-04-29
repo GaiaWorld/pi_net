@@ -19,8 +19,7 @@ use crate::{service::HttpService,
 pub struct HttpConnect<S: Socket, HS: HttpService<S>> {
     handle:         SocketHandle<S>,        //当前连接的Tcp连接句柄
     service:        HS,                     //当前连接的服务
-
-    keep_alive:     usize,                  //连接保持时
+    keep_alive:     usize,                  //连接保持时间
 }
 
 unsafe impl<S: Socket, HS: HttpService<S, >> Send for HttpConnect<S, HS> {}

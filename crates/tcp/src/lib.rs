@@ -813,6 +813,7 @@ impl<S: Socket> SocketHandle<S> {
     pub fn write_ready<B>(&self, buf: B) -> Result<()>
         where B: AsRef<[u8]> + 'static {
         unsafe {
+            debug!("Write ready, thread: {:?}, shared: {:?}, buf: {:?}", std::thread::current(), Arc::strong_count(&self.0.inner), buf.as_ref());
             (&mut *self.0.inner.get()).write_ready(buf)
         }
     }
