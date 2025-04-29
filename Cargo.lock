@@ -2891,7 +2891,7 @@ dependencies = [
 
 [[package]]
 name = "pi_http"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "base64 0.13.1",
  "brotli 3.5.0",
@@ -3098,7 +3098,7 @@ dependencies = [
 
 [[package]]
 name = "pi_tcp"
-version = "0.5.3"
+version = "0.5.5"
 dependencies = [
  "bytes",
  "crossbeam-channel",

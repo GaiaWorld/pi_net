@@ -7,6 +7,7 @@ use bytes::BufMut;
 
 use tcp::{Socket, SocketHandle, SocketEvent,
           utils::{SocketContext, Ready}};
+use log::debug;
 
 use crate::{service::HttpService,
             request::HttpRequest,
@@ -24,6 +25,17 @@ pub struct HttpConnect<S: Socket, HS: HttpService<S>> {
 
 unsafe impl<S: Socket, HS: HttpService<S, >> Send for HttpConnect<S, HS> {}
 unsafe impl<S: Socket, HS: HttpService<S>> Sync for HttpConnect<S, HS> {}
+
+impl<S: Socket, HS: HttpService<S>> Drop for HttpConnect<S, HS> {
+    fn drop(&mut self) {
+        debug!("Drop http connect, token: {:?}, uid: {:?}, remote: {:?}, local: {:?}, closed: {:?}",
+            self.handle.get_token(),
+            self.handle.get_uid(),
+            self.handle.get_remote(),
+            self.handle.get_local(),
+            self.handle.is_closed());
+    }
+}
 
 /*
 * Http连接同步方法
@@ -44,11 +56,6 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
     pub fn reply<B>(&self, buf: B) -> Result<()>
         where B: AsRef<[u8]> + Send + 'static {
         //首先回应本次Http请求
-        if self.handle.is_closed() {
-            //连接已关闭，则忽略抛出错误
-            return Ok(());
-        }
-        
         self.handle.write_ready(buf)
     }
 
