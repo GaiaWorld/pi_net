@@ -567,7 +567,7 @@ fn test_http_hosts() {
             let rt_copy = file_rt.clone();
             let client_copy = client.clone();
             let _ = file_rt.spawn(async move {
-                let url = "http://127.0.0.1/port/test0";
+                let url = "http://192.168.35.50/port/test/sleep";
                 let request = Request::get(url).body(()).unwrap();
                 match client_copy.send_async(request).await {
                     Err(e) => {
@@ -577,7 +577,7 @@ fn test_http_hosts() {
                         println!("Request ok, url: {:?}, resp: {:?}", url, resp);
 
                         let _ = rt_copy.spawn(async move {
-                            let url = "http://127.0.0.1/port/test1";
+                            let url = "http://192.168.35.50/port/test/sleep2";
                             let request = Request::get(url).timeout(Duration::from_millis(1)).body(()).unwrap();
                             let now = Instant::now();
                             let resp = client_copy.send_async(request).await;

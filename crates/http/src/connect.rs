@@ -44,6 +44,11 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
     pub fn reply<B>(&self, buf: B) -> Result<()>
         where B: AsRef<[u8]> + Send + 'static {
         //首先回应本次Http请求
+        if self.handle.is_closed() {
+            //连接已关闭，则忽略抛出错误
+            return Ok(());
+        }
+        
         self.handle.write_ready(buf)
     }
 
