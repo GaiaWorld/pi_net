@@ -2891,7 +2891,7 @@ dependencies = [
 
 [[package]]
 name = "pi_http"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "base64 0.13.1",
  "brotli 3.5.0",

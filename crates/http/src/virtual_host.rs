@@ -86,18 +86,14 @@ impl<S: Socket, H: Middleware<S, GatewayContext>> VirtualHostTab<S, H> {
 ///
 /// 虚拟主机，即Http网关工厂
 ///
-pub struct VirtualHost<S: Socket, H: Middleware<S, GatewayContext>> {
-    router_tab: RouterTab<S, GatewayContext, H>, //路由器表
-}
+pub struct VirtualHost<S: Socket, H: Middleware<S, GatewayContext>>(Arc<RouterTab<S, GatewayContext, H>>);
 
 unsafe impl<S: Socket, H: Middleware<S, GatewayContext>> Send for VirtualHost<S, H> {}
 unsafe impl<S: Socket, H: Middleware<S, GatewayContext>> Sync for VirtualHost<S, H> {}
 
 impl<S: Socket, H: Middleware<S, GatewayContext>> Clone for VirtualHost<S, H> {
     fn clone(&self) -> Self {
-        VirtualHost {
-            router_tab: self.router_tab.clone(),
-        }
+        VirtualHost(self.0.clone())
     }
 }
 
@@ -105,15 +101,13 @@ impl<S: Socket, H: Middleware<S, GatewayContext>> ServiceFactory<S> for VirtualH
     type Service = HttpGateway<S, H>;
 
     fn new_service(&self) -> Self::Service {
-        HttpGateway::with(self.router_tab.clone())
+        HttpGateway::with(self.0.clone())
     }
 }
 
 impl<S: Socket, H: Middleware<S, GatewayContext>> VirtualHost<S, H> {
     /// 构建指定Http路由配置和Http请求处理器的Http网关工厂
     pub fn with(route: HttpRoute<S, GatewayContext, H>) -> Self {
-        VirtualHost {
-            router_tab: route.into(),
-        }
+        VirtualHost(Arc::new(route.into()))
     }
 }

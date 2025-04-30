@@ -152,8 +152,8 @@ impl GatewayContext {
 /// Http网关，每个Http连接和一个Http网关绑定
 ///
 pub struct HttpGateway<S: Socket, H: Middleware<S, GatewayContext>> {
-    context:    GatewayContext,                     //上下文
-    router_tab: RouterTab<S, GatewayContext, H>,    //路由器表
+    context:    GatewayContext,                         //上下文
+    router_tab: Arc<RouterTab<S, GatewayContext, H>>,   //路由器表
 }
 
 unsafe impl<S: Socket, H: Middleware<S, GatewayContext>> Send for HttpGateway<S, H> {}
@@ -224,10 +224,10 @@ impl<S: Socket, H: Middleware<S, GatewayContext>> HttpService<S> for HttpGateway
 
 impl<S: Socket, H: Middleware<S, GatewayContext>> HttpGateway<S, H> {
     /// 创建指定路由器表的Http路由服务
-    pub fn with(tab: RouterTab<S, GatewayContext, H>) -> Self {
+    pub fn with(router_tab: Arc<RouterTab<S, GatewayContext, H>>) -> Self {
         HttpGateway {
             context: GatewayContext::new(),
-            router_tab: tab,
+            router_tab,
         }
     }
 }

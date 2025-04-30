@@ -1,4 +1,5 @@
 use std::io::{Write, Result, Error};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use https::{status::StatusCode,
             header::{CONTENT_LENGTH}};
@@ -13,22 +14,42 @@ use crate::{service::HttpService,
             request::HttpRequest,
             response::HttpResponse,
             utils::{HttpRecvResult, ContentEncode}};
+use crate::service::ServiceFactory;
+
+// Http连接唯一ID分配器
+static HTTP_CONNECT_UID_ALLOCATOR: AtomicUsize = AtomicUsize::new(0);
 
 /*
 * Http连接
 */
-pub struct HttpConnect<S: Socket, HS: HttpService<S>> {
-    pub handle:         SocketHandle<S>,        //当前连接的Tcp连接句柄
+pub struct HttpConnect<S: Socket, H: ServiceFactory<S, Service = HS>, HS: HttpService<S>> {
+    uid:            usize,                  //唯一ID
+    handle:         SocketHandle<S>,        //当前连接的Tcp连接句柄
+    host:           H,                      //当前连接对应的主机
     service:        HS,                     //当前连接的服务
     keep_alive:     usize,                  //连接保持时间
 }
 
-unsafe impl<S: Socket, HS: HttpService<S, >> Send for HttpConnect<S, HS> {}
-unsafe impl<S: Socket, HS: HttpService<S>> Sync for HttpConnect<S, HS> {}
+unsafe impl<S: Socket, H: ServiceFactory<S, Service = HS>, HS: HttpService<S, >> Send for HttpConnect<S, H, HS> {}
+unsafe impl<S: Socket, H: ServiceFactory<S, Service = HS>, HS: HttpService<S>> Sync for HttpConnect<S, H, HS> {}
 
-impl<S: Socket, HS: HttpService<S>> Drop for HttpConnect<S, HS> {
+impl<S: Socket, H: ServiceFactory<S, Service = HS>, HS: HttpService<S>> Clone for HttpConnect<S, H, HS> {
+    // 重新分配当前主机的服务，并复制其它资源
+    fn clone(&self) -> Self {
+        HttpConnect {
+            uid: self.uid,
+            handle: self.handle.clone(),
+            host: self.host.clone(),
+            service: self.get_host().new_service(),
+            keep_alive: self.keep_alive,
+        }
+    }
+}
+
+impl<S: Socket, H: ServiceFactory<S, Service = HS>, HS: HttpService<S>> Drop for HttpConnect<S, H, HS> {
     fn drop(&mut self) {
-        debug!("Drop http connect, token: {:?}, uid: {:?}, remote: {:?}, local: {:?}, closed: {:?}",
+        debug!("Drop http connect, http_uid: {:?}, token: {:?}, tcp_uid: {:?}, remote: {:?}, local: {:?}, closed: {:?}",
+            self.uid,
             self.handle.get_token(),
             self.handle.get_uid(),
             self.handle.get_remote(),
@@ -40,16 +61,29 @@ impl<S: Socket, HS: HttpService<S>> Drop for HttpConnect<S, HS> {
 /*
 * Http连接同步方法
 */
-impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
+impl<S: Socket, H: ServiceFactory<S, Service = HS>, HS: HttpService<S>> HttpConnect<S, H, HS> {
     /// 构建指定Tcp连接句柄、异步任务等待队列、Http服务和Http连接保持时长的Http连接
     pub fn new(handle: SocketHandle<S>,
+               host: H,
                service: HS,
                keep_alive: usize) -> Self {
         HttpConnect {
+            uid: HTTP_CONNECT_UID_ALLOCATOR.fetch_add(1, Ordering::Relaxed),
             handle,
+            host,
             service,
             keep_alive,
         }
+    }
+
+    /// 获取Http连接的唯一ID
+    pub fn get_uid(&self) -> usize {
+        self.uid
+    }
+
+    /// 获取Http连接对应的主机
+    pub fn get_host(&self) -> &H {
+        &self.host
     }
 
     /// 异步回应指定的Http响应
@@ -102,7 +136,7 @@ impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
 /*
 * Http连接异步方法
 */
-impl<S: Socket, HS: HttpService<S>> HttpConnect<S, HS> {
+impl<S: Socket, H: ServiceFactory<S, Service = HS>, HS: HttpService<S>> HttpConnect<S, H, HS> {
     /// 运行连接上的服务
     pub async fn run_service(&mut self,
                              req: HttpRequest<S>) {

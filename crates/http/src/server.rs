@@ -79,7 +79,18 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
             async move {
                 //获取Http请求绑定的Http连接
                 let mut context;
-                if let Some(cx) = unsafe { (&*handle.get_context().get()).get::<HttpConnect<S, <<P as VirtualHostPool<S>>::Host as ServiceFactory<S>>::Service>>() } {
+                if let Some(cx) = unsafe {
+                    (
+                        &*handle
+                        .get_context()
+                        .get()
+                    ).get::<HttpConnect<
+                        S,
+                        <P as VirtualHostPool<S>>::Host,
+                        <<P as VirtualHostPool<S>>::Host as ServiceFactory<S>>::Service>
+                    >()
+                }
+                {
                     //需要将handle中获取的上下文句柄移动到外部，避免if let语句导致handle引用不会即时释放，从而导致在在后续使用handle的代码中出现编译时错误
                     context = cx;
                 } else {
@@ -93,8 +104,8 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 }
 
                 //解析上行请求
-                if let Some(connect) = context.as_mut() {
-                    println!("!!!!!!Request with connect, closed: {:?}, peer: {:?}", connect.handle.is_closed(), connect.handle.get_remote());
+                if let Some(connect_mut) = context.as_mut() {
+                    let mut connect = connect_mut.clone(); //只允许使用上下文中Http连接的复制
                     let mut http_request_result = None;
                     let mut buf: &[u8] = &[]; //初始化本地缓冲区
                     let mut last_bin_len = 0; //初始化本地缓冲区上次长度
@@ -278,7 +289,18 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 }
 
                 //连接已关闭，则立即释放Tcp连接的上下文
-                if let Err(e) = unsafe { (&mut *handle.get_context().get()).remove::<HttpConnect<S, <<P as VirtualHostPool<S>>::Host as ServiceFactory<S>>::Service>>() } {
+                if let Err(e) = unsafe {
+                    (
+                        &mut *handle
+                            .get_context()
+                            .get()
+                    ).remove::<HttpConnect<
+                        S,
+                        <P as VirtualHostPool<S>>::Host,
+                        <<P as VirtualHostPool<S>>::Host as ServiceFactory<S>>::Service>
+                    >()
+                }
+                {
                     warn!("Free Context Failed by Http Connect Close, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                         handle.get_token(),
                         handle.get_remote(),

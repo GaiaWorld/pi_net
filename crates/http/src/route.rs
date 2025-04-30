@@ -120,8 +120,8 @@ impl<S: Socket, Context: Send + Sync + 'static, Handler: Middleware<S, Context>>
     }
 
     /// 匹配路由表，匹配成功返回处理器
-    pub fn match_route(&mut self, path: &str) -> Option<Arc<Handler>> {
-        if let Some(matchor) = &mut self.matchor {
+    pub fn match_route(&self, path: &str) -> Option<Arc<Handler>> {
+        if let Some(matchor) = &self.matchor {
             let indexes: Vec<usize> = matchor.matches(path).into_iter().collect();
             let len = indexes.len();
             if len > 0 {
@@ -233,7 +233,7 @@ impl<S: Socket, Context: Send + Sync + 'static, Handler: Middleware<S, Context>>
     }
 
     /// 匹配路由表，优先判断确定路由表，再判断单级通配符路由表，最后判断多级通配符路由表，匹配成功返回处理器
-    pub fn match_route(&mut self, path: &str) -> Option<Arc<Handler>> {
+    pub fn match_route(&self, path: &str) -> Option<Arc<Handler>> {
         if let Some(handler) = self.fixed.get(&Atom::from(path)) {
             return Some(handler.clone());
         }
@@ -315,8 +315,8 @@ impl<S: Socket, Context: Send + Sync + 'static, Handler: Middleware<S, Context>>
     }
 
     /// 匹配路由表
-    pub fn match_route(&mut self, method: &Method, path: &str) -> Option<Arc<Handler>> {
-        if let Some(router) = self.map.get_mut(method) {
+    pub fn match_route(&self, method: &Method, path: &str) -> Option<Arc<Handler>> {
+        if let Some(router) = self.map.get(method) {
             return router.match_route(path);
         }
 

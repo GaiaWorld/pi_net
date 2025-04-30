@@ -135,9 +135,9 @@ impl<S: Socket> HttpAcceptor<S> {
                         if let Ok(host_name) = value.to_str() {
                             if let Some(host) = hosts.get(host_name) {
                                 let mut connect = HttpConnect::new(handle.clone(),
+                                                                   host.clone(),
                                                                    host.new_service(),
                                                                    keep_alive);
-                                println!("!!!!!!Create http connect, closed: {:?}, peer: {:?}", handle.is_closed(), handle.get_remote());
                                 if let &Some(method) = &req.method {
                                     if let &Some(path) = &req.path {
                                         //构建本次Http连接请求
@@ -200,7 +200,7 @@ impl<S: Socket> HttpAcceptor<S> {
         }
 
         if let Some((mut connect, request)) = http_request_result {
-            connect.run_service(request).await; //运行Http服务
+            connect.run_service(request).await; //运行Http服务，在没有绑定前可以直接使用Http连接
             unsafe { (&mut *handle.get_context().get()).set(connect); } //绑定Tcp连接上下文
         }
     }
