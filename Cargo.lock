@@ -2810,7 +2810,7 @@ dependencies = [
 
 [[package]]
 name = "pi_async_wsc"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "actix-codec",
  "actix-http",
@@ -3021,7 +3021,7 @@ dependencies = [
 
 [[package]]
 name = "pi_http"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "base64 0.13.1",
  "brotli 3.5.0",
@@ -3080,7 +3080,7 @@ dependencies = [
 
 [[package]]
 name = "pi_mqtt"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "bytes",
  "dashmap",
@@ -3312,7 +3312,7 @@ checksum = "90cd43372a1924678d6753b559a1b416880da067912eb0dc8d2478ec451e03c2"
 
 [[package]]
 name = "pi_ws"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.22.1",
  "bytes",
