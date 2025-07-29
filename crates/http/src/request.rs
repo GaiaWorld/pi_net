@@ -200,12 +200,19 @@ impl<S: Socket> HttpRequest<S> {
                             .unwrap_or(0); //需要继续接收的剩余请求体长度
 
                         if require_len > 0 {
-                            //还有未接收到的剩余请求体
-                            if let Ok(value) = self.handle.read_ready(require_len) {
-                                if value.await == 0 {
+                            //还有未接收到的剩余请求体，则异步准备读取后，继续尝试接收剩余请求体
+                            match self.handle.read_ready(len) {
+                                Err(0) => {
                                     //当前连接已关闭，则立即返回空
                                     return None;
-                                }
+                                },
+                                Ok(value) => {
+                                    if value.await == 0 {
+                                        //当前连接已关闭，则立即返回空
+                                        return None;
+                                    }
+                                },
+                                _ => (), //当前缓冲区已接收到指定长度的请求体
                             }
                         }
 
@@ -256,12 +263,19 @@ impl<S: Socket> HttpRequest<S> {
                             .unwrap_or(0); //需要继续接收的剩余请求体长度
 
                         if require_len > 0 {
-                            //还有未接收到的剩余请求体
-                            if let Ok(value) = self.handle.read_ready(require_len) {
-                                if value.await == 0 {
+                            //还有未接收到的剩余请求体，则异步准备读取后，继续尝试接收剩余请求体
+                            match self.handle.read_ready(len) {
+                                Err(0) => {
                                     //当前连接已关闭，则立即返回空
                                     return None;
-                                }
+                                },
+                                Ok(value) => {
+                                    if value.await == 0 {
+                                        //当前连接已关闭，则立即返回空
+                                        return None;
+                                    }
+                                },
+                                _ => (), //当前缓冲区已接收到指定长度的请求体
                             }
                         }
 
@@ -299,11 +313,18 @@ impl<S: Socket> HttpRequest<S> {
         loop {
             if unsafe { (&mut *self.handle.get_read_buffer().get()).as_ref().unwrap().remaining() } == 0 {
                 //当前缓冲区还没有请求的数据，则异步准备读取后，继续尝试接收请求数据
-                if let Ok(value) = self.handle.read_ready(0) {
-                    if value.await == 0 {
-                        //当前连接已关闭，则立即退出
+                match self.handle.read_ready(0) {
+                    Err(0) => {
+                        //当前连接已关闭，则立即返回空
                         return None;
-                    }
+                    },
+                    Ok(value) => {
+                        if value.await == 0 {
+                            //当前连接已关闭，则立即退出
+                            return None;
+                        }
+                    },
+                    _ => (), //当前缓冲区已接收到指定长度的请求体
                 }
 
                 continue;

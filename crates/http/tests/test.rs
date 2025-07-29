@@ -549,7 +549,7 @@ fn test_http_hosts() {
                                16,
                                512 * 1024,
                                512 * 1024,
-                               Some(10)) {
+                               Some(10000)) {
         Err(e) => {
             println!("!!!> Http Listener Bind Error, reason: {:?}", e);
         },
@@ -561,6 +561,7 @@ fn test_http_hosts() {
                 .connect_timeout(Duration::from_millis(5000))
                 .timeout(Duration::from_millis(30000))
                 .low_speed_timeout(1024, Duration::from_millis(30000))
+                .max_upload_speed(8192) //最大上行速率
                 .build()
                 .unwrap();
 
@@ -569,6 +570,7 @@ fn test_http_hosts() {
             let _ = file_rt.spawn(async move {
                 let url = "http://127.0.0.1/port/test0";
                 let request = Request::get(url).body(()).unwrap();
+                let client_clone = client_copy.clone();
                 match client_copy.send_async(request).await {
                     Err(e) => {
                         println!("Request failed, url: {:?}, reason: {:?}", url, e);
@@ -580,7 +582,7 @@ fn test_http_hosts() {
                             let url = "http://127.0.0.1/port/test1";
                             let request = Request::get(url).timeout(Duration::from_millis(1)).body(()).unwrap();
                             let now = Instant::now();
-                            let resp = client_copy.send_async(request).await;
+                            let resp = client_clone.send_async(request).await;
                             drop(resp);
                             println!("Request closed, url: {:?}, time: {:?}", url, now.elapsed());
                         });
