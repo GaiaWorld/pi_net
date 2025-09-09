@@ -159,7 +159,12 @@ impl<S: Socket> WsAcceptor<S> {
                         //握手请求成功，则更新握手状态，并返回握手请求的响应
                         let protocol_name: Option<&str> = None;
                         ws_protocol = ws_protocol.trim().to_string();
-                        let protocols: Vec<&str> = ws_protocol.split(";").collect();
+                        let protocols: Vec<&str> = ws_protocol
+                            .split(",")
+                            .filter(|protocol| {
+                                !protocol.is_empty()
+                            })
+                            .collect();
                         let protocols_len = protocols.len();
 
                         //匹配支持的任何一个子协议
