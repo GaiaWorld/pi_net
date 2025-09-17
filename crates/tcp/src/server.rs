@@ -376,6 +376,107 @@ impl<S, F> SocketListener<S, F>
         }
     }
 
+    /// 尝试绑定指定配置的Tcp连接监听器
+    pub fn try_bind(mut runtimes: Vec<LocalTaskRuntime<()>>,
+                    factory: F,                     //Tcp端口适配器工厂
+                    config: SocketConfig,           //连接配置
+                    init_cap: usize,                //连接池初始容量
+                    stack_size: usize,              //线程堆栈大小
+                    event_size: usize,              //同时处理的事件数
+                    recv_frame_buf_size: usize,     //接收帧缓冲数量
+                    readed_read_size_limit: usize,  //已读读缓冲大小限制
+                    readed_write_size_limit: usize, //已读写缓冲大小限制
+                    timeout: Option<usize>          //事件轮询超时时长
+    ) -> Result<Self> {
+        if runtimes.is_empty() {
+            //至少需要一个工作者
+            return Err(Error::new(ErrorKind::Other,
+                                  format!("Bind listener failed, reason: require runtime")));
+        }
+
+        let addrs = config.addrs();
+        let (sender, receiver) = unbounded();
+        let binds: Vec<(SocketAddr, Sender<S>)> = addrs.iter().map(|(addr, _tls_cfg)| {
+            (addr.clone(), sender.clone())
+        }).collect();
+
+        let acceptor;
+        let rt_size = runtimes.len(); //获取工作者数量
+        let mut pools = Vec::with_capacity(rt_size);
+        let mut driver = SocketDriver::new(&binds[..]);
+        match Acceptor::bind(&addrs[..], &driver) {
+            Err(e) => {
+                for runtime in runtimes {
+                    let _ = runtime.close();
+                }
+
+                return Err(e);
+            },
+            Ok(a) => {
+                //创建工作者数量的连接池，共用一个写缓冲池
+                acceptor = a;
+                for index in 0..rt_size {
+                    match TcpSocketPool::with_capacity(index as u8,
+                                                       acceptor.get_name(),
+                                                       receiver.clone(),
+                                                       config.clone(),
+                                                       init_cap) {
+                        Err(e) => {
+                            for runtime in runtimes {
+                                let _ = runtime.close();
+                            }
+                            return Err(e);
+                        },
+                        Ok(pool) => {
+                            pools.push(pool);
+                        },
+                    }
+                }
+            },
+        }
+
+        driver.set_controller(acceptor.get_controller()); //设置连接驱动的控制器
+        //为所有连接池，设置不同端口适配器的连接驱动，并启动所有连接池
+        let mut runtimes_copy = runtimes.clone();
+        for pool in pools {
+            let mut driver_clone = driver.clone();
+            driver_clone.set_adapter(factory.get_instance()); //设置连接驱动的端口适配器
+            if let Some(rt) = runtimes_copy.pop() {
+                if let Err(e) = pool.run(rt,
+                                         driver_clone,
+                                         event_size,
+                                         timeout) {
+                    //启动连接池失败
+                    for runtime in runtimes {
+                        let _ = runtime.close();
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        //启动接受器的监听
+        match acceptor.listen(stack_size,
+                              event_size,
+                              recv_frame_buf_size,
+                              readed_read_size_limit,
+                              readed_write_size_limit,
+                              timeout) {
+            Err(e) => {
+                //启动接受器失败
+                Err(e)
+            },
+            Ok(acceptor_controller) => {
+                //启动接受器成功
+                Ok(SocketListener {
+                    runtimes,
+                    acceptor_controller,
+                    marker: PhantomData,
+                })
+            },
+        }
+    }
+
     //关闭Tcp连接监听器
     pub fn close(self, reason: Result<()>) {
         for runtime in self.runtimes {
