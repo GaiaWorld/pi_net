@@ -14,7 +14,7 @@ use log::{info, warn};
 use pi_async_rt::rt::{serial::{AsyncRuntime, AsyncRuntimeBuilder},
                       serial_worker_thread::WorkerRuntime};
 use pi_hash::XHashMap;
-use pi_slotmap::{Key, DefaultKey, KeyData, SlotMap};
+use slotmap::{Key, DefaultKey, KeyData, SlotMap};
 
 use crate::{SocketAdapter, Socket, Stream, AcceptorCmd, SocketDriver};
 use crate::utils::TlsConfig;

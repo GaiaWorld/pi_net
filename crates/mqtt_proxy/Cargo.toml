@@ -24,3 +24,10 @@ ws = {version = "0.6", path = "../ws", package = "pi_ws" }
 env_logger = "0.11"
 udp = {version = "0.3", path = "../blocking_udp", package = "pi_blocking_udp" }
 quinn-proto = "0.8"
+tokio = { version = "1.0", features = ["full"] }
+tokio-tungstenite = "0.20"
+futures-util = "0.3"
+url = "2.0"
+rand = "0.8"
+mqttbytes = "0.2"
+libc = "0.2"

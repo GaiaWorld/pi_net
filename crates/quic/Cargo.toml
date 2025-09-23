@@ -1,6 +1,6 @@
 [package]
 name = "pi_quic"
-version = "0.7.0"
+version = "0.7.1"
 authors = ["vmos <vmosone007@gmail.com>"]
 edition = "2021"
 description = "Quic client/server"
@@ -21,8 +21,8 @@ crossbeam-utils = "0.8"
 pi_hash = "0.1"
 dashmap = "6.1"
 log = "0.4"
-pi_cancel_timer = "0.2"
-slotmap = "1.0"
+pi_cancel_timer = "0.3"
+slotmap = { version = "0.2", package = "pi_slotmap" }
 tracing = "0.1"
 udp = { version = "0.3", path = "../blocking_udp", package = "pi_blocking_udp" }
 

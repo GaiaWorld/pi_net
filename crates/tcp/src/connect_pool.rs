@@ -18,7 +18,7 @@ use pi_async_rt::{lock::spin_lock::SpinLock,
                        serial_local_thread::LocalTaskRuntime}};
 use pi_hash::XHashMap;
 use pi_cancel_timer::Timer;
-use pi_slotmap::{Key, DefaultKey, KeyData, SlotMap};
+use slotmap::{Key, DefaultKey, KeyData, SlotMap};
 
 use crate::{Socket, Stream, SocketAdapter, SocketConfig, SocketEvent, SocketDriver,
             utils::register_close_sender};

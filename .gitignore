@@ -18,3 +18,4 @@
 /crates/mqtt/tests/*.key
 /crates/mqtt_proxy/tests/*.pem
 /crates/mqtt_proxy/tests/*.key
+**/*.md
