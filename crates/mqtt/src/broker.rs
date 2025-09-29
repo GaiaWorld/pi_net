@@ -286,11 +286,15 @@ impl<S: Socket> MqttBroker<S> {
         let _ = PUBLIC_BROKER_RUNTIME.spawn(async move {
             loop {
                 PUBLIC_BROKER_RUNTIME.timeout(interval.as_millis() as usize).await;
+                let time = Instant::now();
 
                 // 获取所有超时的未被订阅的主题
-                let now = broker.clock.elapsed();
+                let mut count = 0;
+                let mut removed_count = 0;
                 let mut timestamps = Vec::new();
                 let mut locked = broker.topic_expiry.lock();
+                count = locked.len();
+                let now = broker.clock.elapsed();
                 for (key, _value) in locked.range(Duration::default()..=now) {
                     timestamps.push(key.clone());
                 }
@@ -298,7 +302,6 @@ impl<S: Socket> MqttBroker<S> {
                 // 从会话订阅表中移除未被订阅的主题
                 for timestamp in &timestamps {
                     if let Some(topics) = locked.remove(&timestamp) {
-                        let mut count = 0;
                         for topic in topics.iter() {
                             let b = if let Some(cache) = broker.sub_tab.get(topic) {
                                 //再次确认指定主题没有被订阅
@@ -311,13 +314,15 @@ impl<S: Socket> MqttBroker<S> {
                             if b {
                                 //移除未被订阅的主题
                                 let _ = broker.sub_tab.remove(topic);
-                                count += 1;
+                                removed_count += 1;
                             }
                         }
-
-                        info!("Expire unsubscribed topic successful, count: {:?}", count);
                     }
                 }
+                info!("Expire unsubscribed quic topic successful, count: {:?}, removed: {:?}, time: {:?}",
+                    count,
+                    removed_count,
+                    time.elapsed());
             }
         });
     }
@@ -399,6 +404,7 @@ impl<S: Socket> MqttBroker<S> {
                 let len = sessions.len();
                 match len {
                     0 => {
+                        println!("!!!!!!1");
                         //没有任何订阅当前主题的会话，则忽略
                         let retain_copy = retain.clone();
                         self.sub_tab.entry(topic.clone()).or_insert_with(move || {

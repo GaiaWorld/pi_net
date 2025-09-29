@@ -10,7 +10,7 @@ use mqtt311::{TopicPath, Topic};
 use quinn_proto::{TransportConfig, VarInt};
 use env_logger;
 
-use pi_async_rt::rt::{serial::AsyncRuntimeBuilder, AsyncValue};
+use pi_async_rt::rt::{serial::AsyncRuntimeBuilder, AsyncValue, startup_global_time_loop};
 
 use tcp::{AsyncService, Socket, SocketHandle, SocketConfig, SocketStatus, SocketEvent,
           connect::TcpSocket,
@@ -24,7 +24,7 @@ use ws::{server::WebsocketListener,
 use udp::terminal::UdpTerminal;
 use quic::{server::{QuicListener, ClientCertVerifyLevel},
            utils::QuicSocketReady};
-use mqtt::{server::{register_mqtt_listener, register_mqtt_service,
+use pi_mqtt::{server::{register_mqtt_listener, register_mqtt_service,
                     register_mqtts_listener, register_mqtts_service,
                     register_quic_mqtt_listener, register_quic_mqtt_service,
                     MqttBrokerProtocol, WsMqttBrokerFactory, WssMqttBrokerFactory, QuicMqttBrokerFactory},
@@ -162,7 +162,8 @@ impl<S: Socket> MqttBrokerService<S> for TestBrokerService {
                topic: String,
                payload: Arc<Vec<u8>>) -> LocalBoxFuture<'static, Result<()>> {
         async move {
-            connect.send(&topic, payload)
+            let _ = connect.send(&topic, payload);
+            pi_mqtt::server::publish_topic(Some("test_ws_mqtt".to_string()), false, topic.to_string(), 0, None, Arc::new(vec![]))
         }.boxed_local()
     }
 }
@@ -172,6 +173,7 @@ fn test_mqtt_311() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
+    let _handle = startup_global_time_loop(100);
     let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
 
     let protocol_name = "mqttv3.1";
@@ -219,6 +221,7 @@ fn test_tls_mqtt_311() {
     //启动日志系统
     env_logger::builder().format_timestamp_millis().init();
 
+    let _handle = startup_global_time_loop(100);
     let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
 
     let protocol_name = "mqttv3.1";
@@ -236,8 +239,8 @@ fn test_tls_mqtt_311() {
                  Box::new(WebsocketListener::with_protocol(broker_factory.new_child_protocol(true))));
     let tls_config = TlsConfig::new_server("",
                                            false,
-                                           "./tests/7285407__17youx.cn.pem",
-                                           "./tests/7285407__17youx.cn.key",
+                                           "./tests/17youx.cn.pem",
+                                           "./tests/17youx.cn.key",
                                            "",
                                            "",
                                            "",
