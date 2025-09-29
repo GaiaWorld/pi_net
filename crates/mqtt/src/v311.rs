@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::marker::PhantomData;
 use std::collections::HashMap;
 use std::io::{Cursor, Result, ErrorKind, Error};
-
+use std::time::Duration;
 use futures::future::{FutureExt, LocalBoxFuture};
 use mio::Token;
 use fnv::FnvBuildHasher;
@@ -198,7 +198,7 @@ fn update_timeout(connect: &WsSocket<TcpSocket>,
     //设置当前会话超时时长，一般为keep_alive的1.5倍
     let mut event = SocketEvent::empty();
     event.set::<String>(client_id);
-    connect.set_timeout(keep_alive as usize * 1500, event);
+    connect.set_timeout(keep_alive as usize * 3 / 2, event);
 }
 
 // 发送指定的Mqtt报文，一般用于报文回应
@@ -646,12 +646,15 @@ impl WsMqtt311 {
                      broker_name: &str,
                      qos: u8,
                      is_strict: bool) -> Self {
+        let broker = MqttBroker::new();
+        broker.startup_expire_unsubscribed_topic_loop(Duration::from_millis(15000));
+
         WsMqtt311 {
             is_strict,
             protocol_name: protocol_name.to_lowercase(),
             broker_name: broker_name.to_string(),
             qos: QoS::from_u8(qos).unwrap(),
-            broker: MqttBroker::new(),
+            broker,
         }
     }
 

@@ -600,7 +600,8 @@ async fn handle_timer<S, A>(pool: &mut TcpSocketPool<S, A>)
                 }
 
                 //设置指定事件的定时器，并在连接上设置定时器句柄
-                let timer = pool.timer.push(timeout, (token, event));
+                let current_time = pool.duration.elapsed().as_millis() as u64;
+                let timer = pool.timer.push_time(current_time + timeout as u64, (token, event));
                 unsafe { (&mut *socket.get()).set_timer_handle(timer.data().as_ffi() as usize); }
             }
         } else {
@@ -624,32 +625,29 @@ async fn handle_timer<S, A>(pool: &mut TcpSocketPool<S, A>)
 
     //轮询所有超时的定时器，执行已超时回调
     let current_time = pool.duration.elapsed().as_millis() as u64;
-    while pool.timer.is_ok(current_time) {
-        //需要继续获取超时的回调
-        while let Some((_key, item)) = pool.timer.pop_kv(current_time) {
-            //存在超时的回调
-            let (token, event) = item;
-            if let Some(Some(socket)) = pool
-                .sockets
-                .lock()
-                .get_mut(DefaultKey::from(KeyData::from_ffi(token.0 as u64))) {
-                if unsafe { (&*socket.get()).is_closed() } {
-                    //连接已关闭，则忽略
-                    continue;
-                }
-
-                //移除连接上的定时器句柄
-                unsafe { (&mut *socket.get()).unset_timer_handle(); }
-
-                //连接已超时
-                let handle = unsafe { (&*socket.get()).get_handle() };
-                pool.driver
-                    .as_ref()
-                    .unwrap()
-                    .get_adapter()
-                    .timeouted(handle, event)
-                    .await;
+    while let Some((_key, item)) = pool.timer.pop_kv(current_time) {
+        //存在超时的回调
+        let (token, event) = item;
+        if let Some(Some(socket)) = pool
+            .sockets
+            .lock()
+            .get_mut(DefaultKey::from(KeyData::from_ffi(token.0 as u64))) {
+            if unsafe { (&*socket.get()).is_closed() } {
+                //连接已关闭，则忽略
+                continue;
             }
+
+            //移除连接上的定时器句柄
+            unsafe { (&mut *socket.get()).unset_timer_handle(); }
+
+            //连接已超时
+            let handle = unsafe { (&*socket.get()).get_handle() };
+            pool.driver
+                .as_ref()
+                .unwrap()
+                .get_adapter()
+                .timeouted(handle, event)
+                .await;
         }
     }
 }

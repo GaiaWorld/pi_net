@@ -1,14 +1,19 @@
 use std::sync::Arc;
 use std::io::Result;
-use std::collections::{BTreeMap,
+use std::time::{Duration, Instant};
+use std::collections::{HashSet, BTreeMap,
                        btree_map::Entry};
 
 use futures::future::LocalBoxFuture;
+use pi_async_rt::{rt::{AsyncRuntime, AsyncRuntimeBuilder,
+                       worker_thread::WorkerRuntime},
+                  lock::spin_lock::SpinLock};
 use parking_lot::RwLock;
 use dashmap::DashMap;
+use futures::AsyncWriteExt;
 use mqtt311::{TopicPath, Publish};
-
 use tcp::Socket;
+use log::info;
 
 use crate::{server::MqttBrokerProtocol,
             session::{MqttConnect, QosZeroSession},
@@ -19,6 +24,11 @@ use crate::{server::MqttBrokerProtocol,
 ///
 lazy_static! {
     pub static ref MQTT_RESPONSE_SYS_TOPIC: String = "$r".to_string();
+}
+
+// Mqtt代理的公共异步运行时
+lazy_static! {
+    static ref PUBLIC_BROKER_RUNTIME: WorkerRuntime<()> = AsyncRuntimeBuilder::default_worker_thread(Some("MQTT-BROKER-RT"), None, None, None);
 }
 
 ///
@@ -113,14 +123,16 @@ unsafe impl<S: Socket> Sync for MqttService<S> {}
 /// Mqtt代理
 ///
 pub struct MqttBroker<S: Socket> {
-    listener:   Arc<RwLock<Option<Arc<dyn MqttBrokerListener<S>>>>>,    //监听器，用于监听Mqtt连接和关闭事件
-    service:    Arc<RwLock<Option<Arc<dyn MqttBrokerService<S>>>>>,     //通用主题服务
-    services:   Arc<DashMap<String, Arc<dyn MqttBrokerService<S>>>>,    //服务表，保存指定主题的服务
-    sessions:   Arc<DashMap<String, Arc<QosZeroSession<S>>>>,           //会话表
-    sub_tab:    Arc<DashMap<String, Arc<RwLock<SubCache<S>>>>>,         //会话订阅表
-    patterns:   Arc<RwLock<PathTree<Arc<QosZeroSession<S>>>>>,          //订阅模式表
-    publics:    Arc<RwLock<BTreeMap<String, u8>>>,                      //已发布的公共主题列表
-    topics:     Arc<DashMap<Arc<QosZeroSession<S>>, Vec<String>>>,      //用户已订阅主题表
+    listener:       Arc<RwLock<Option<Arc<dyn MqttBrokerListener<S>>>>>,    //监听器，用于监听Mqtt连接和关闭事件
+    service:        Arc<RwLock<Option<Arc<dyn MqttBrokerService<S>>>>>,     //通用主题服务
+    services:       Arc<DashMap<String, Arc<dyn MqttBrokerService<S>>>>,    //服务表，保存指定主题的服务
+    sessions:       Arc<DashMap<String, Arc<QosZeroSession<S>>>>,           //会话表
+    sub_tab:        Arc<DashMap<String, Arc<RwLock<SubCache<S>>>>>,         //会话订阅表
+    patterns:       Arc<RwLock<PathTree<Arc<QosZeroSession<S>>>>>,          //订阅模式表
+    publics:        Arc<RwLock<BTreeMap<String, u8>>>,                      //已发布的公共主题列表
+    topics:         Arc<DashMap<Arc<QosZeroSession<S>>, Vec<String>>>,      //用户已订阅主题表
+    clock:          Instant,                                                //Mqtt代理时钟
+    topic_expiry:   Arc<SpinLock<BTreeMap<Duration, HashSet<String>>>>,     //待过期的没有任何订阅的主题表
 }
 
 unsafe impl<S: Socket> Send for MqttBroker<S> {}
@@ -137,6 +149,8 @@ impl<S: Socket> Clone for MqttBroker<S> {
             patterns: self.patterns.clone(),
             publics: self.publics.clone(),
             topics: self.topics.clone(),
+            clock: self.clock.clone(),
+            topic_expiry: self.topic_expiry.clone(),
         }
     }
 }
@@ -153,6 +167,8 @@ impl<S: Socket> MqttBroker<S> {
             patterns: Arc::new(RwLock::new(PathTree::empty())),
             publics: Arc::new(RwLock::new(BTreeMap::new())),
             topics: Arc::new(DashMap::default()),
+            clock: Instant::now(),
+            topic_expiry: Arc::new(SpinLock::new(BTreeMap::new())),
         }
     }
 
@@ -250,6 +266,62 @@ impl<S: Socket> MqttBroker<S> {
         }
     }
 
+    // 记录指定的没有任何订阅的主题
+    pub(crate) fn insert_unsubscribed_topic(&self, topic: String, timeout: Duration) {
+        let broker = self.clone();
+        let key = self.clock.elapsed() + timeout;
+        let _ = PUBLIC_BROKER_RUNTIME.spawn(async move {
+            broker
+                .topic_expiry
+                .lock()
+                .entry(key)
+                .or_insert(HashSet::from([topic.clone()]))
+                .insert(topic);
+        });
+    }
+
+    // 移除过期的没有任何订阅的主题
+    pub fn startup_expire_unsubscribed_topic_loop(&self, interval: Duration) {
+        let broker = self.clone();
+        let _ = PUBLIC_BROKER_RUNTIME.spawn(async move {
+            loop {
+                PUBLIC_BROKER_RUNTIME.timeout(interval.as_millis() as usize).await;
+
+                // 获取所有超时的未被订阅的主题
+                let now = broker.clock.elapsed();
+                let mut timestamps = Vec::new();
+                let mut locked = broker.topic_expiry.lock();
+                for (key, _value) in locked.range(Duration::default()..=now) {
+                    timestamps.push(key.clone());
+                }
+
+                // 从会话订阅表中移除未被订阅的主题
+                for timestamp in &timestamps {
+                    if let Some(topics) = locked.remove(&timestamp) {
+                        let mut count = 0;
+                        for topic in topics.iter() {
+                            let b = if let Some(cache) = broker.sub_tab.get(topic) {
+                                //再次确认指定主题没有被订阅
+                                let locked_ = cache.value().read();
+                                locked_.first.is_none() && locked_.sessions.is_empty()
+                            } else {
+                                true
+                            };
+
+                            if b {
+                                //移除未被订阅的主题
+                                let _ = broker.sub_tab.remove(topic);
+                                count += 1;
+                            }
+                        }
+
+                        info!("Expire unsubscribed topic successful, count: {:?}", count);
+                    }
+                }
+            }
+        });
+    }
+
     /// 获取已订阅指定主题的会话
     pub fn subscribed(&self, is_public: bool,
                       topic: &String,
@@ -334,6 +406,8 @@ impl<S: Socket> MqttBroker<S> {
                             Arc::new(RwLock::new(SubCache::with_session(None,
                                                                         retain_copy)))
                         });
+
+                        self.insert_unsubscribed_topic(topic.clone(), Duration::from_secs(3600));
 
                         //线程安全的确认当前主题的订阅缓存为空，则初始化订阅表成功，并返回
                         return Some(sessions);

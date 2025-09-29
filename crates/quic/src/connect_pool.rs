@@ -205,31 +205,29 @@ fn poll_timer<P: EndPointPoller>(rt: &LocalTaskRuntime<()>,
                                  pool: &mut QuicSocketPool<P>) {
     //推动连接池定时器
     let now = pool.clock.elapsed().as_millis() as u64;
-    while pool.timer.is_ok(now) {
-        if let Some((connection_handle_number, timer_event)) = pool.timer.pop(now) {
-            if timer_event.is_empty() {
-                //指定连接已内部超时，则写入连接超时表
-                if pool.sockets.contains_key(&connection_handle_number) {
-                    //超时的连接存在，则记录已到期的连接唯一id
-                    pool.expired.insert(connection_handle_number, now);
+    while let Some((connection_handle_number, timer_event)) = pool.timer.pop(now) {
+        if timer_event.is_empty() {
+            //指定连接已内部超时，则写入连接超时表
+            if pool.sockets.contains_key(&connection_handle_number) {
+                //超时的连接存在，则记录已到期的连接唯一id
+                pool.expired.insert(connection_handle_number, now);
+            }
+        } else {
+            //指定连接已外部超时
+            if let Some(item) = pool.sockets.get(&connection_handle_number) {
+                let socket = item.value();
+                if unsafe { (&*socket.get()).is_closed() } {
+                    //连接已关闭，则忽略
+                    continue;
                 }
-            } else {
-                //指定连接已外部超时
-                if let Some(item) = pool.sockets.get(&connection_handle_number) {
-                    let socket = item.value();
-                    if unsafe { (&*socket.get()).is_closed() } {
-                        //连接已关闭，则忽略
-                        continue;
-                    }
 
-                    //移除连接上的定时器句柄
-                    unsafe { (&mut *socket.get()).unset_timer_handle(); }
+                //移除连接上的定时器句柄
+                unsafe { (&mut *socket.get()).unset_timer_handle(); }
 
-                    //连接已超时，则执行超时回调
-                    let service = pool.service.clone();
-                    let handle = unsafe { (&*socket.get()).get_socket_handle() };
-                    rt.spawn(service.handle_timeouted(handle, Ok(timer_event)));
-                }
+                //连接已超时，则执行超时回调
+                let service = pool.service.clone();
+                let handle = unsafe { (&*socket.get()).get_socket_handle() };
+                rt.spawn(service.handle_timeouted(handle, Ok(timer_event)));
             }
         }
     }
@@ -811,7 +809,8 @@ async fn handle_timeout_timer<P: EndPointPoller>(pool: &mut QuicSocketPool<P>,
             }
 
             //设置指定事件的定时器，并在连接上设置定时器句柄
-            let timer = pool.timer.push(timeout, (connection_handle.0, event));
+            let now = pool.clock.elapsed().as_millis() as u64;
+            let timer = pool.timer.push_time(now + timeout as u64, (connection_handle.0, event));
             unsafe { (&mut *socket.get()).set_timer_handle(timer.data().as_ffi()); }
         }
     } else {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::io::{Cursor, Result, ErrorKind, Error};
-
+use std::time::Duration;
 use futures::future::{FutureExt, LocalBoxFuture};
 use mqtt311::{MqttWrite, MqttRead, ConnectReturnCode, Packet, Connect,
               Connack, QoS, Publish, SubscribeReturnCodes,
@@ -698,10 +698,13 @@ impl QuicMqtt311 {
     //构建指定协议名和支持的最大Qos，且基于Websocket的Mqtt3.1.1协议
     pub fn with_name(broker_name: &str,
                      qos: u8) -> Self {
+        let broker = MqttBroker::new();
+        broker.startup_expire_unsubscribed_topic_loop(Duration::from_millis(15000));
+
         QuicMqtt311 {
             broker_name: broker_name.to_string(),
             qos: QoS::from_u8(qos).unwrap(),
-            broker: MqttBroker::new(),
+            broker,
         }
     }
 
