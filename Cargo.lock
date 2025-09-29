@@ -3123,7 +3123,7 @@ dependencies = [
 
 [[package]]
 name = "pi_mqtt"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "bytes",
  "dashmap",

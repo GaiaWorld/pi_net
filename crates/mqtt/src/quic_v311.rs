@@ -257,7 +257,7 @@ fn update_timeout(connect: &SocketHandle,
     //设置当前会话超时时长，一般为keep_alive的1.5倍
     let mut event = SocketEvent::empty();
     event.set::<String>(client_id);
-    connect.set_timeout(keep_alive as usize * 1500, event);
+    connect.set_timeout(keep_alive as usize * 3 / 2, event);
 }
 
 // 发送指定的Mqtt报文，一般用于报文回应
