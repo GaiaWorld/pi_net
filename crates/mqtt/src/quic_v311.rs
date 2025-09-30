@@ -238,11 +238,22 @@ impl AsyncService for QuicMqtt311 {
                 e);
         }
 
-        error!("Mqtt session timeout for mqtt by quic, uid: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
-            handle.get_uid(),
-            handle.get_remote(),
-            handle.get_local(),
-            result);
+        match result {
+            Err(e) => {
+                error!("Mqtt session timeout for mqtt by quic, uid: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                    handle.get_uid(),
+                    handle.get_remote(),
+                    handle.get_local(),
+                    e);
+            },
+            Ok(mut event) => {
+                error!("Mqtt session timeout for mqtt by quic, uid: {:?}, remote: {:?}, local: {:?}, client_id: {:?}",
+                    handle.get_uid(),
+                    handle.get_remote(),
+                    handle.get_local(),
+                    event.remove::<String>());
+            },
+        }
 
         async move {
 

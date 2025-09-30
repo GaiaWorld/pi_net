@@ -173,7 +173,7 @@ impl ChildProtocol<TcpSocket> for WsMqtt311 {
     fn protocol_timeout(&self,
                         connect: WsSocket<TcpSocket>,
                         context: &mut WsSession,
-                        event: SocketEvent) -> LocalBoxFuture<'static, Result<()>> {
+                        mut event: SocketEvent) -> LocalBoxFuture<'static, Result<()>> {
         async move {
             if let Err(e) = send_packet(&connect, &Packet::Disconnect) {
                 //发送关闭连接报文失败，则立即返回错误原因
@@ -182,10 +182,11 @@ impl ChildProtocol<TcpSocket> for WsMqtt311 {
                                               e)));
             }
 
-            warn!("Mqtt Session Timeout, token: {:?}, local: {:?}, remote: {:?}",
-            connect.get_token(),
-            connect.get_local(),
-            connect.get_remote());
+            warn!("Mqtt Session Timeout, token: {:?}, local: {:?}, remote: {:?}, client_id: {:?}",
+                connect.get_token(),
+                connect.get_local(),
+                connect.get_remote(),
+                event.remove::<String>());
             Ok(())
         }.boxed_local()
     }

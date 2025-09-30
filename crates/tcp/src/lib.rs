@@ -2,12 +2,14 @@
 #![feature(is_some_and)]
 #![feature(io_slice_advance)]
 
+use std::mem;
 use std::ptr;
 use std::rc::Rc;
 use std::task::Waker;
 use std::str::FromStr;
 use std::future::Future;
 use std::cell::UnsafeCell;
+use std::any::{Any, TypeId};
 use std::result::Result as GenResult;
 use std::io::{Error, Result, ErrorKind};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
@@ -365,40 +367,54 @@ pub enum SocketStatus {
 ///
 #[derive(Debug)]
 pub struct SocketEvent {
-    inner: *mut (), //内部事件
+    inner: Box<dyn Any + Send + 'static>, //内部事件
 }
 
 unsafe impl Send for SocketEvent {}
 
+impl Default for SocketEvent {
+    fn default() -> Self {
+        let inner = Box::new(());
+        Self { inner }
+    }
+}
+
 impl SocketEvent {
     /// 创建空的事件
     pub fn empty() -> Self {
-        SocketEvent {
-            inner: ptr::null_mut(),
-        }
+        Self::default()
     }
 
     /// 判断事件是否为空
     pub fn is_empty(&self) -> bool {
-        self.inner.is_null()
+        self.inner.type_id() == TypeId::of::<()>()
     }
 
-    /// 获取事件
-    pub fn get<T: 'static>(&self) -> Option<T> {
+    /// 获取事件只读引用
+    pub fn get<T: 'static>(&self) -> Option<&T> {
         if self.is_empty() {
             return None;
         }
 
-        Some(unsafe { *Box::from_raw(self.inner as *mut T) })
+        self.inner.downcast_ref::<T>()
+    }
+
+    /// 获取事件可写引用
+    pub fn get_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        if self.is_empty() {
+            return None;
+        }
+
+        self.inner.downcast_mut::<T>()
     }
 
     /// 设置事件，如果当前事件不为空，则设置失败
-    pub fn set<T: 'static>(&mut self, event: T) -> bool {
+    pub fn set<T: Send + 'static>(&mut self, event: T) -> bool {
         if !self.is_empty() {
             return false;
         }
 
-        self.inner = Box::into_raw(Box::new(event)) as *mut ();
+        self.inner = Box::new(event);
         true
     }
 
@@ -408,9 +424,11 @@ impl SocketEvent {
             return None;
         }
 
-        let result = self.get();
-        self.inner = ptr::null_mut();
-        result
+        let old = mem::replace(&mut self.inner, Box::new(()));
+        match old.downcast() {
+            Err(_) => None,
+            Ok(inner) => Some(*inner),
+        }
     }
 }
 
