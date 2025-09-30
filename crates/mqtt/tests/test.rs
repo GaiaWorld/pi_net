@@ -204,7 +204,7 @@ fn test_mqtt_311() {
                                16,
                                4096,
                                4096,
-                               Some(1)) {
+                               Some(1000)) {
         Err(e) => {
             println!("!!!> Mqtt Listener Bind Error, reason: {:?}", e);
         },
@@ -259,7 +259,7 @@ fn test_tls_mqtt_311() {
                                16,
                                4096,
                                4096,
-                               Some(1)) {
+                               Some(1000)) {
         Err(e) => {
             println!("!!!> Mqtt Listener Bind Error, reason: {:?}", e);
         },

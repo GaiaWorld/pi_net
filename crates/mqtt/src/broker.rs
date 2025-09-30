@@ -28,7 +28,7 @@ lazy_static! {
 
 // Mqtt代理的公共异步运行时
 lazy_static! {
-    static ref PUBLIC_BROKER_RUNTIME: WorkerRuntime<()> = AsyncRuntimeBuilder::default_worker_thread(Some("MQTT-BROKER-RT"), None, None, None);
+    static ref PUBLIC_BROKER_RUNTIME: WorkerRuntime<()> = AsyncRuntimeBuilder::default_worker_thread(Some("MQTT-BROKER-RT"), None, None, Some(Some(1)));
 }
 
 ///
