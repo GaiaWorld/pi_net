@@ -654,7 +654,7 @@ impl WssMqtt311 {
                      qos: u8,
                      is_strict: bool) -> Self {
         let broker = MqttBroker::new();
-        broker.startup_expire_unsubscribed_topic_loop(Duration::from_millis(15000));
+        broker.startup_expire_unsubscribed_topic_loop(Duration::from_millis(60000));
 
         WssMqtt311 {
             is_strict,

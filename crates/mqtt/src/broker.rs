@@ -319,7 +319,7 @@ impl<S: Socket> MqttBroker<S> {
                         }
                     }
                 }
-                info!("Expire unsubscribed quic topic successful, count: {:?}, removed: {:?}, time: {:?}",
+                info!("Expire unsubscribed topic successful, count: {:?}, removed: {:?}, time: {:?}",
                     count,
                     removed_count,
                     time.elapsed());

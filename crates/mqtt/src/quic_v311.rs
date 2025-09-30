@@ -710,7 +710,7 @@ impl QuicMqtt311 {
     pub fn with_name(broker_name: &str,
                      qos: u8) -> Self {
         let broker = MqttBroker::new();
-        broker.startup_expire_unsubscribed_topic_loop(Duration::from_millis(15000));
+        broker.startup_expire_unsubscribed_topic_loop(Duration::from_millis(60000));
 
         QuicMqtt311 {
             broker_name: broker_name.to_string(),
