@@ -3298,7 +3298,7 @@ dependencies = [
 
 [[package]]
 name = "pi_tcp"
-version = "0.5.11"
+version = "0.5.12"
 dependencies = [
  "bytes",
  "crossbeam-channel",
