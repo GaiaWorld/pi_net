@@ -123,19 +123,8 @@ pub struct TcpSocket {
 unsafe impl Send for TcpSocket {}
 unsafe impl Sync for TcpSocket {}
 
-static TCP_SOCKET_ADD_COUNTER: AtomicUsize = AtomicUsize::new(0);
-static TCP_SOCKET_SUB_COUNTER: AtomicUsize = AtomicUsize::new(0);
-pub fn tcp_socket_count() -> usize {
-    TCP_SOCKET_ADD_COUNTER
-        .load(Ordering::Acquire)
-        .checked_sub(TCP_SOCKET_SUB_COUNTER
-            .load(Ordering::Acquire))
-        .unwrap_or(0)
-}
-
 impl Drop for TcpSocket {
     fn drop(&mut self) {
-        TCP_SOCKET_SUB_COUNTER.fetch_add(1, Ordering::Release);
         debug!("Drop tcp socket, token: {:?}, uid: {:?}, remote: {:?}, local: {:?}, closed: {:?}",
             self.token,
             self.uid,
@@ -189,8 +178,6 @@ impl Stream for TcpSocket {
         let hibernated_queue = Arc::new(SpinLock::new(VecDeque::new()));
         let context = Rc::new(UnsafeCell::new(SocketContext::empty()));
         let closed = Arc::new(AtomicBool::new(false));
-
-        TCP_SOCKET_ADD_COUNTER.fetch_add(1, Ordering::Release);
 
         TcpSocket {
             rt: None,
@@ -386,7 +373,7 @@ impl Stream for TcpSocket {
                     block.truncate(block_pos); //截断未填充的接收块
                     if let Some(buf) = unsafe { (&mut *self.read_buf.get()) } {
                         //填充到连接的读缓冲区
-                        buf.put_slice(&block[..]); //TODO memory leak...
+                        buf.put_slice(&block[..]);
                     }
                     result = Ok(block_pos);
                     break;
@@ -667,7 +654,7 @@ impl Socket for TcpSocket {
     }
 
     fn write_ready<B>(&mut self, buf: B) -> Result<()>
-        where B: AsRef<[u8]> + 'static {
+    where B: AsRef<[u8]> + 'static {
         if self.is_closed() {
             //连接已关闭，则忽略，并立即返回
             return Err(Error::new(ErrorKind::ConnectionAborted,
@@ -726,7 +713,7 @@ impl Socket for TcpSocket {
 
     fn push_hibernated_task<F>(&self,
                                task: F)
-        where F: Future<Output = ()> + 'static {
+    where F: Future<Output = ()> + 'static {
         let boxed = async move {
             task.await;
         }.boxed_local();

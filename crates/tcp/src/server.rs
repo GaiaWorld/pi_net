@@ -8,7 +8,6 @@ use fnv::FnvBuildHasher;
 use crossbeam_channel::{Sender, unbounded};
 use futures::future::{FutureExt, LocalBoxFuture};
 use dashmap::DashMap;
-use futures::task::SpawnExt;
 use num_cpus;
 use log::{warn, error};
 
@@ -45,7 +44,7 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
                     if let Some(val) = adapter.0.get(&port) {
                         let service = val.value();
                         Some(service.handle_connected(handle,
-                                                     SocketStatus::Connected(Err(e))))
+                                                      SocketStatus::Connected(Err(e))))
                     } else {
                         None
                     }
@@ -55,7 +54,7 @@ impl<S: Socket> SocketAdapter for PortsAdapter<S> {
                     if let Some(val) = adapter.0.get(&port) {
                         let service = val.value();
                         Some(service.handle_connected(handle,
-                                                     SocketStatus::Connected(Ok(()))))
+                                                      SocketStatus::Connected(Ok(()))))
                     } else {
                         None
                     }
@@ -270,8 +269,8 @@ pub struct SocketListener<S: Socket + Stream, F: SocketAdapterFactory<Connect = 
 }
 
 impl<S, F> SocketListener<S, F>
-    where S: Socket + Stream,
-          F: SocketAdapterFactory<Connect = S, Adapter = PortsAdapter<S>>, {
+where S: Socket + Stream,
+      F: SocketAdapterFactory<Connect = S, Adapter = PortsAdapter<S>>, {
     /// 绑定指定配置的Tcp连接监听器
     pub fn bind(mut runtimes: Vec<LocalTaskRuntime<()>>,
                 factory: F,                     //Tcp端口适配器工厂
@@ -368,16 +367,6 @@ impl<S, F> SocketListener<S, F>
             },
             Ok(acceptor_controller) => {
                 //启动接受器成功
-                use pi_async_rt::rt::AsyncRuntime;
-                let rt = pi_async_rt::rt::AsyncRuntimeBuilder::default_worker_thread(None, None, None, Some(Some(10)));
-                let rt_copy = rt.clone();
-                let _ = rt.spawn(async move {
-                    loop {
-                        rt_copy.timeout(10000).await;
-                        println!("!!!!!!tcp_socket_count: {:?}", crate::connect::tcp_socket_count());
-                    }
-                });
-
                 Ok(SocketListener {
                     runtimes,
                     acceptor_controller,
