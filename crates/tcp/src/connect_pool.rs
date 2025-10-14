@@ -330,7 +330,7 @@ async fn handle_write_event<S, A>(pool: &mut TcpSocketPool<S, A>)
 
             unsafe {
                 if let Some(write_buf) = (&mut *socket.get()).get_write_buffer() {
-                    write_buf.put_slice(buf.as_ref());
+                    write_buf.put_slice(buf.as_ref()); //TODO memory leak...
                 }
             }
         }

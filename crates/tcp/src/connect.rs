@@ -52,46 +52,90 @@ const DEAFULT_READED_WRITE_BUF_SIZE_LIMIT: usize = 256 * 1024;
 /// Tcp连接
 ///
 pub struct TcpSocket {
-    rt:                 Option<LocalTaskRuntime<()>>,                           //连接所在运行时
-    uid:                Option<usize>,                                          //连接唯一id
-    local:              SocketAddr,                                             //连接本地地址
-    remote:             SocketAddr,                                             //连接远端地址
-    token:              Option<Token>,                                          //连接令牌
-    stream:             TcpStream,                                              //连接流
-    interest:           Arc<SpinLock<Interest>>,                                //连接当前感兴趣的事件类型
-    wait_recv_len:      usize,                                                  //连接需要接收的字节数
-    recv_len:           usize,                                                  //连接已接收的字节数
-    read_len:           Arc<AtomicUsize>,                                       //连接读取块大小
-    readed_read_limit:  Arc<AtomicUsize>,                                       //已读读缓冲大小限制
-    readed:             usize,                                                  //已读读缓冲当前大小
-    read_buf:           Rc<UnsafeCell<Option<BytesMut>>>,                       //连接读缓冲
-    wait_ready_len:     usize,                                                  //连接异步准备读取的字节数
-    ready_len:          usize,                                                  //连接异步准备读取已就绪的字节数
-    ready_reader:       SpinLock<Option<AsyncValue<usize>>>,                    //异步准备读取器
-    wait_sent_len:      AtomicUsize,                                            //连接需要发送的字节数
-    sent_len:           usize,                                                  //连接已发送的字节数
-    write_len:          Arc<AtomicUsize>,                                       //连接写入块大小
-    readed_write_limit: Arc<AtomicUsize>,                                       //已读写缓冲大小限制
-    readed_write_len:   usize,                                                  //已读写缓冲大小
-    write_buf:          Option<BytesMut>,                                       //连接写缓冲
-    poll:               Option<Rc<UnsafeCell<Poll>>>,                          //连接所在轮询器
-    hibernate:          SpinLock<Option<Hibernate<Self>>>,                      //连接异步休眠对象
-    hibernate_wakers:   SpinLock<VecDeque<Waker>>,                              //连接正在休眠时，其它休眠对象的唤醒器队列
-    hibernated_queue:   Arc<SpinLock<VecDeque<LocalBoxFuture<'static, ()>>>>,   //连接休眠时任务队列
-    handle:             Option<SocketHandle<Self>>,                             //连接句柄
-    context:            Rc<UnsafeCell<SocketContext>>,                          //连接上下文
-    write_listener:     Option<Sender<(Token, Vec<u8>)>>,                       //连接写事件监听器
-    closed:             Arc<AtomicBool>,                                        //连接关闭状态
-    close_listener:     Option<Sender<(Token, Result<()>)>>,                    //连接关闭事件监听器
-    timer_handle:       Option<usize>,                                          //定时器句柄
-    timer_listener:     Option<Sender<(Token, Option<(usize, SocketEvent)>)>>,  //定时事件监听器
+    //连接所在运行时
+    rt:                 Option<LocalTaskRuntime<()>>,
+    //连接唯一id
+    uid:                Option<usize>,
+    //连接本地地址
+    local:              SocketAddr,
+    //连接远端地址
+    remote:             SocketAddr,
+    //连接令牌
+    token:              Option<Token>,
+    //连接流
+    stream:             TcpStream,
+    //连接当前感兴趣的事件类型
+    interest:           Arc<SpinLock<Interest>>,
+    //连接需要接收的字节数
+    wait_recv_len:      usize,
+    //连接已接收的字节数
+    recv_len:           usize,
+    //连接读取块大小
+    read_len:           Arc<AtomicUsize>,
+    //已读读缓冲大小限制
+    readed_read_limit:  Arc<AtomicUsize>,
+    //已读读缓冲当前大小
+    readed:             usize,
+    //连接读缓冲
+    read_buf:           Rc<UnsafeCell<Option<BytesMut>>>,
+    //连接异步准备读取的字节数
+    wait_ready_len:     usize,
+    //连接异步准备读取已就绪的字节数
+    ready_len:          usize,
+    //异步准备读取器
+    ready_reader:       SpinLock<Option<AsyncValue<usize>>>,
+    //连接需要发送的字节数
+    wait_sent_len:      AtomicUsize,
+    //连接已发送的字节数
+    sent_len:           usize,
+    //连接写入块大小
+    write_len:          Arc<AtomicUsize>,
+    //已读写缓冲大小限制
+    readed_write_limit: Arc<AtomicUsize>,
+    //已读写缓冲大小
+    readed_write_len:   usize,
+    //连接写缓冲
+    write_buf:          Option<BytesMut>,
+    //连接所在轮询器
+    poll:               Option<Rc<UnsafeCell<Poll>>>,
+    //连接异步休眠对象
+    hibernate:          SpinLock<Option<Hibernate<Self>>>,
+    //连接正在休眠时，其它休眠对象的唤醒器队列
+    hibernate_wakers:   SpinLock<VecDeque<Waker>>,
+    //连接休眠时任务队列
+    hibernated_queue:   Arc<SpinLock<VecDeque<LocalBoxFuture<'static, ()>>>>,
+    //连接句柄
+    handle:             Option<SocketHandle<Self>>,
+    //连接上下文
+    context:            Rc<UnsafeCell<SocketContext>>,
+    //连接写事件监听器
+    write_listener:     Option<Sender<(Token, Vec<u8>)>>,
+    //连接关闭状态
+    closed:             Arc<AtomicBool>,
+    //连接关闭事件监听器
+    close_listener:     Option<Sender<(Token, Result<()>)>>,
+    //定时器句柄
+    timer_handle:       Option<usize>,
+    //定时事件监听器
+    timer_listener:     Option<Sender<(Token, Option<(usize, SocketEvent)>)>>,
 }
 
 unsafe impl Send for TcpSocket {}
 unsafe impl Sync for TcpSocket {}
 
+static TCP_SOCKET_ADD_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static TCP_SOCKET_SUB_COUNTER: AtomicUsize = AtomicUsize::new(0);
+pub fn tcp_socket_count() -> usize {
+    TCP_SOCKET_ADD_COUNTER
+        .load(Ordering::Acquire)
+        .checked_sub(TCP_SOCKET_SUB_COUNTER
+            .load(Ordering::Acquire))
+        .unwrap_or(0)
+}
+
 impl Drop for TcpSocket {
     fn drop(&mut self) {
+        TCP_SOCKET_SUB_COUNTER.fetch_add(1, Ordering::Release);
         debug!("Drop tcp socket, token: {:?}, uid: {:?}, remote: {:?}, local: {:?}, closed: {:?}",
             self.token,
             self.uid,
@@ -145,6 +189,8 @@ impl Stream for TcpSocket {
         let hibernated_queue = Arc::new(SpinLock::new(VecDeque::new()));
         let context = Rc::new(UnsafeCell::new(SocketContext::empty()));
         let closed = Arc::new(AtomicBool::new(false));
+
+        TCP_SOCKET_ADD_COUNTER.fetch_add(1, Ordering::Release);
 
         TcpSocket {
             rt: None,
@@ -340,7 +386,7 @@ impl Stream for TcpSocket {
                     block.truncate(block_pos); //截断未填充的接收块
                     if let Some(buf) = unsafe { (&mut *self.read_buf.get()) } {
                         //填充到连接的读缓冲区
-                        buf.put_slice(&block[..]);
+                        buf.put_slice(&block[..]); //TODO memory leak...
                     }
                     result = Ok(block_pos);
                     break;
