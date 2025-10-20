@@ -1,6 +1,6 @@
 [package]
 name = "pi_ws"
-version = "0.6.4"
+version = "0.6.5"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_ws"

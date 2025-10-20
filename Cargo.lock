@@ -3381,7 +3381,7 @@ checksum = "90cd43372a1924678d6753b559a1b416880da067912eb0dc8d2478ec451e03c2"
 
 [[package]]
 name = "pi_ws"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "base64 0.22.1",
  "bytes",
