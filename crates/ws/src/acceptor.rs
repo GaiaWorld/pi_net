@@ -200,6 +200,11 @@ impl<S: Socket> WsAcceptor<S> {
                                     reply_handshake(Ok((ws_ext, Some((*p)), ws_accept.as_str())))
                                 };
                                 return (resp.is_ok(), resp);
+                            } else if protocol.protocol_name() == "" {
+                                //服务端没有配置任何子协议，则握手成功，将客户需要的子协议名原样返回
+                                //子协议处理握手成功
+                                let resp = reply_handshake(Ok((ws_ext, Some((*p)), ws_accept.as_str())));
+                                return (resp.is_ok(), resp);
                             }
                         }
 
