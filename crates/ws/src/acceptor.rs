@@ -166,6 +166,7 @@ impl<S: Socket> WsAcceptor<S> {
                             })
                             .collect();
                         let protocols_len = protocols.len();
+                        println!("!!!!!!protocols: {:?}, protocol_name: {:?}", protocols, protocol.protocol_name());
 
                         //匹配支持的任何一个子协议
                         for p in &protocols {
