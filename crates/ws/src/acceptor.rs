@@ -430,6 +430,7 @@ fn check_handshake_request(req: &mut Request, window_bits: u8) -> Result<Status>
     let mut ws_ext = 0;
     let mut ws_protocol = String::default();
 
+    println!("!!!!!!check_handshake_request, {:#?}", req.headers);
     for header in req.headers.iter() {
         match header.name.to_lowercase().as_str() {
             key if key == HOST.as_str() => {
