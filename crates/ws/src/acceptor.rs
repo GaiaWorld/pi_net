@@ -170,7 +170,7 @@ impl<S: Socket> WsAcceptor<S> {
                         if protocols.is_empty() && protocol.protocol_name() == "" {
                             //服务端没有配置任何子协议，客户端也没有设置任何子协议，则握手成功，将客户需要的子协议名原样返回
                             //退化为非标准握手请求成功
-                            match protocol.non_standard_handshake_protocol(&req) {
+                            return match protocol.non_standard_handshake_protocol(&req) {
                                 Err(err) => {
                                     //处理非标准握手请求失败
                                     warn!("Ws Check Handshake Failed, token: {:?}, remote: {:?}, local: {:?}, non-standard check failed reason: {:?}",
@@ -179,12 +179,12 @@ impl<S: Socket> WsAcceptor<S> {
                                         handle.get_local(),
                                         err);
                                     let resp = reply_non_standard_handshake(Err(StatusCode::BAD_REQUEST));
-                                    return (resp.is_ok(), resp);
+                                    (resp.is_ok(), resp)
                                 },
                                 Ok(successed) => {
                                     //处理非标准握手请求成功
                                     let resp = reply_non_standard_handshake(Ok(successed));
-                                    return (resp.is_ok(), resp);
+                                    (resp.is_ok(), resp)
                                 },
                             }
                         }
@@ -265,7 +265,7 @@ impl<S: Socket> WsAcceptor<S> {
             parse_count += 1; //更新分析次数
             if parse_count > 16 {
                 //过多的分析次数，则立即返回错误原因
-                handle.close(Err(Error::new(ErrorKind::Other,
+                let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                             format!("Websocket handshake by http parse failed, token: {:?}, remote: {:?}, local: {:?}, buf_len: {:?}, buf: {:?}, reason: out of parse",
                                                     handle.get_token(),
                                                     handle.get_remote(),
@@ -304,7 +304,7 @@ impl<S: Socket> WsAcceptor<S> {
                 }
             } else {
                 //Tcp读缓冲区不存在
-                handle.close(Err(Error::new(ErrorKind::Other,
+                let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                             format!("Websocket handshake by http parse failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid read buffer",
                                                     handle.get_token(),
                                                     handle.get_remote(),
@@ -319,7 +319,7 @@ impl<S: Socket> WsAcceptor<S> {
             match req.parse(buf) {
                 Err(e) => {
                     //解析握手时的Http头错误
-                    handle.close(Err(Error::new(ErrorKind::Other,
+                    let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                                 format!("Websocket handshake by http parse failed, token: {:?}, remote: {:?}, local: {:?}, buf_len: {:?}, buf: {:?}, reason: {:?}",
                                                         handle.get_token(),
                                                         handle.get_remote(),
@@ -334,7 +334,7 @@ impl<S: Socket> WsAcceptor<S> {
                     match req.version {
                         Some(ver) if ver != 1 => {
                             //不合法的Http版本号
-                            handle.close(Err(Error::new(ErrorKind::Other,
+                            let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                                         format!("Websocket handshake by http parse failed, token: {:?}, remote: {:?}, local: {:?}, version: {}, reason: invalid http version",
                                                                 handle.get_token(),
                                                                 handle.get_remote(),
@@ -369,7 +369,7 @@ impl<S: Socket> WsAcceptor<S> {
                     match acceptor.handshake(handle.clone(), &support_protocol, req) {
                         (_, Err(e)) => {
                             //握手异常
-                            handle.close(Err(Error::new(ErrorKind::Other,
+                            let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                                         format!("Websocket handshake failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                                                                 handle.get_token(),
                                                                 handle.get_remote(),
@@ -379,7 +379,7 @@ impl<S: Socket> WsAcceptor<S> {
                         (_, Ok(resp)) => {
                             //握手请求已完成，则返回
                             if let Err(e) = handle.write_ready(resp_to_vec(resp)) {
-                                handle.close(Err(Error::new(ErrorKind::Other,
+                                let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                                             format!("WebSocket handshake write error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                                                                     handle.get_token(),
                                                                     handle.get_remote(),
@@ -391,7 +391,7 @@ impl<S: Socket> WsAcceptor<S> {
                                 //在握手回应后，向对端发送加密后的当前连接会话的随机数种子
                                 let safe_seed_bytes = match xor_encrypt_confusion(seed.to_le_bytes(), SAFE_SEED_KEY.to_le_bytes()) {
                                     Err(e) => {
-                                        handle.close(Err(Error::new(ErrorKind::Other,
+                                        let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                                                     format!("WebSocket strict handshake error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                                                                             handle.get_token(),
                                                                             handle.get_remote(),
@@ -404,7 +404,7 @@ impl<S: Socket> WsAcceptor<S> {
 
                                 let ws_connect = WsSocket::new(handle, window_bits);
                                 if let Err(e) = ws_connect.send(WsFrameType::Binary, safe_seed_bytes) {
-                                    ws_connect.close(Err(Error::new(ErrorKind::Other,
+                                    let _ = ws_connect.close(Err(Error::new(ErrorKind::Other,
                                                                 format!("WebSocket strict handshake write error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                                                                         ws_connect.get_token(),
                                                                         ws_connect.get_remote(),
@@ -430,7 +430,6 @@ fn check_handshake_request(req: &mut Request, window_bits: u8) -> Result<Status>
     let mut ws_ext = 0;
     let mut ws_protocol = String::default();
 
-    println!("!!!!!!check_handshake_request, {:#?}", req.headers);
     for header in req.headers.iter() {
         match header.name.to_lowercase().as_str() {
             key if key == HOST.as_str() => {
