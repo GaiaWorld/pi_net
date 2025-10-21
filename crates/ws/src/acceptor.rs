@@ -167,28 +167,6 @@ impl<S: Socket> WsAcceptor<S> {
                             .collect();
                         let protocols_len = protocols.len();
 
-                        // if protocols.is_empty() && protocol.protocol_name() == "" {
-                        //     //服务端没有配置任何子协议，客户端也没有设置任何子协议，则握手成功，将客户需要的子协议名原样返回
-                        //     //退化为非标准握手请求成功
-                        //     return match protocol.non_standard_handshake_protocol(&req) {
-                        //         Err(err) => {
-                        //             //处理非标准握手请求失败
-                        //             warn!("Ws Check Handshake Failed, token: {:?}, remote: {:?}, local: {:?}, non-standard check failed reason: {:?}",
-                        //                 handle.get_token(),
-                        //                 handle.get_remote(),
-                        //                 handle.get_local(),
-                        //                 err);
-                        //             let resp = reply_non_standard_handshake(Err(StatusCode::BAD_REQUEST));
-                        //             (resp.is_ok(), resp)
-                        //         },
-                        //         Ok(successed) => {
-                        //             //处理非标准握手请求成功
-                        //             let resp = reply_non_standard_handshake(Ok(successed));
-                        //             (resp.is_ok(), resp)
-                        //         },
-                        //     }
-                        // }
-
                         //匹配支持的任何一个子协议
                         for p in &protocols {
                             //将客户端需要的子协议名转换为全小写，并与服务器端支持的子协议进行对比
@@ -220,6 +198,23 @@ impl<S: Socket> WsAcceptor<S> {
                                 } else {
                                     //子协议处理握手成功
                                     reply_handshake(Ok((ws_ext, Some((*p)), ws_accept.as_str())))
+                                };
+                                return (resp.is_ok(), resp);
+                            } else if protocols.is_empty() && protocol.protocol_name() == "" {
+                                println!("!!!!!!req: {:#?}", req);
+                                //服务端没有配置任何子协议，客户端也没有设置任何子协议，则握手成功，将客户需要的子协议名原样返回
+                                //标准握手请求成功
+                                let resp = if let Err(e) = protocol.handshake_protocol(handle.clone(), &req, &protocols) {
+                                    //子协议处理握手失败，则立即中止握手
+                                    warn!("Ws Handshake Failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                                        handle.get_token(),
+                                        handle.get_remote(),
+                                        handle.get_local(),
+                                        e);
+                                    reply_handshake(Err(StatusCode::BAD_REQUEST))
+                                } else {
+                                    //子协议处理握手成功
+                                    reply_handshake(Ok((ws_ext, None, ws_accept.as_str())))
                                 };
                                 return (resp.is_ok(), resp);
                             }
