@@ -168,7 +168,6 @@ impl<S: Socket> WsAcceptor<S> {
                         let protocols_len = protocols.len();
 
                         if protocols.is_empty() && protocol.protocol_name() == "" {
-                            println!("!!!!!!req: {:#?}", req);
                             //服务端没有配置任何子协议，客户端也没有设置任何子协议，则握手成功，将客户需要的子协议名原样返回
                             //标准握手请求成功
                             let resp = if let Err(e) = protocol.handshake_protocol(handle.clone(), &req, &protocols) {
