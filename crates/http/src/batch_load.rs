@@ -44,6 +44,11 @@ use std::time::SystemTime;
 */
 const DEFAULT_CONTENT_DISPOSITION: &str = "attachment;filename=batch";
 
+// 批量加载的大小头信息关键字
+pub(crate) const BATCH_LOAD_SIZE_HEADER: &str = "PI-BATCH-LOAD-SIZE";
+// 批量加载的文件数量头信息关键字
+pub(crate) const BATCH_LOAD_COUNT_HEADER: &str = "PI-BATCH-LOAD-COUNT";
+
 /*
 * Http文件改进的批量加载器
 */
@@ -311,8 +316,8 @@ impl<S: Socket> Middleware<S, GatewayContext> for BatchLoad {
 
                 if total_len == 0 {
                     //当前没有加载任何文件，则中止当前响应处理，并立即响应文件未找到
-                    response.status(StatusCode::NOT_FOUND.as_u16());
-                    response.header(CONTENT_LENGTH.as_str(), "0");
+                    let _ = response.status(StatusCode::NOT_FOUND.as_u16());
+                    let _ = response.header(CONTENT_LENGTH.as_str(), "0");
                     return MiddlewareResult::Break(response);
                 }
 
@@ -368,10 +373,14 @@ impl<S: Socket> Middleware<S, GatewayContext> for BatchLoad {
                 }
             }
 
+            // 增加批量加载的特定头信息
+            let _ = response.header(BATCH_LOAD_SIZE_HEADER, total_size.to_string().as_str());
+            let _ = response.header(BATCH_LOAD_COUNT_HEADER, total_len.to_string().as_str());
+
             if let Some((files_id, mime, last_modified)) = context.get_cache_args() {
                 //设置响应体类型
-                response.header(CONTENT_DISPOSITION.as_str(), DEFAULT_CONTENT_DISPOSITION);
-                response.header(CONTENT_TYPE.as_str(), mime.as_ref());
+                let _ = response.header(CONTENT_DISPOSITION.as_str(), DEFAULT_CONTENT_DISPOSITION);
+                let _ = response.header(CONTENT_TYPE.as_str(), mime.as_ref());
 
                 if self.is_store {
                     //需要缓存文件

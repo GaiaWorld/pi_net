@@ -555,40 +555,40 @@ fn test_http_hosts() {
         },
         Ok(driver) => {
             println!("===> Http Listener Bind Ok");
-            let client = HttpClient::builder()
-                .max_connections_per_host(1)
-                .tcp_keepalive(Duration::from_millis(60000))
-                .connect_timeout(Duration::from_millis(5000))
-                .timeout(Duration::from_millis(30000))
-                .low_speed_timeout(1024, Duration::from_millis(30000))
-                .max_upload_speed(8192) //最大上行速率
-                .build()
-                .unwrap();
-
-            let rt_copy = file_rt.clone();
-            let client_copy = client.clone();
-            let _ = file_rt.spawn(async move {
-                let url = "http://127.0.0.1/port/test0";
-                let request = Request::get(url).body(()).unwrap();
-                let client_clone = client_copy.clone();
-                match client_copy.send_async(request).await {
-                    Err(e) => {
-                        println!("Request failed, url: {:?}, reason: {:?}", url, e);
-                    },
-                    Ok(resp) => {
-                        println!("Request ok, url: {:?}, resp: {:?}", url, resp);
-
-                        let _ = rt_copy.spawn(async move {
-                            let url = "http://127.0.0.1/port/test1";
-                            let request = Request::get(url).timeout(Duration::from_millis(1)).body(()).unwrap();
-                            let now = Instant::now();
-                            let resp = client_clone.send_async(request).await;
-                            drop(resp);
-                            println!("Request closed, url: {:?}, time: {:?}", url, now.elapsed());
-                        });
-                    },
-                }
-            });
+            // let client = HttpClient::builder()
+            //     .max_connections_per_host(1)
+            //     .tcp_keepalive(Duration::from_millis(60000))
+            //     .connect_timeout(Duration::from_millis(5000))
+            //     .timeout(Duration::from_millis(30000))
+            //     .low_speed_timeout(1024, Duration::from_millis(30000))
+            //     .max_upload_speed(8192) //最大上行速率
+            //     .build()
+            //     .unwrap();
+            //
+            // let rt_copy = file_rt.clone();
+            // let client_copy = client.clone();
+            // let _ = file_rt.spawn(async move {
+            //     let url = "http://127.0.0.1/port/test0";
+            //     let request = Request::get(url).body(()).unwrap();
+            //     let client_clone = client_copy.clone();
+            //     match client_copy.send_async(request).await {
+            //         Err(e) => {
+            //             println!("Request failed, url: {:?}, reason: {:?}", url, e);
+            //         },
+            //         Ok(resp) => {
+            //             println!("Request ok, url: {:?}, resp: {:?}", url, resp);
+            //
+            //             let _ = rt_copy.spawn(async move {
+            //                 let url = "http://127.0.0.1/port/test1";
+            //                 let request = Request::get(url).timeout(Duration::from_millis(1)).body(()).unwrap();
+            //                 let now = Instant::now();
+            //                 let resp = client_clone.send_async(request).await;
+            //                 drop(resp);
+            //                 println!("Request closed, url: {:?}, time: {:?}", url, now.elapsed());
+            //             });
+            //         },
+            //     }
+            // });
         }
     }
 

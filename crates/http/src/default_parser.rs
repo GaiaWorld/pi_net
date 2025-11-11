@@ -3,7 +3,7 @@ use std::io::{Error, Result, ErrorKind, Write, Read};
 
 use url::form_urlencoded;
 use mime::{APPLICATION, WWW_FORM_URLENCODED, JSON, OCTET_STREAM, PDF, TEXT, CHARSET, UTF_8, IMAGE, AUDIO, VIDEO, Mime};
-use https::{Method, header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, CONTENT_LENGTH}, StatusCode};
+use https::{Method, header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE, CONTENT_LENGTH}, StatusCode, HeaderName};
 use flate2::{Compression, FlushCompress, Compress, Status, write::GzEncoder};
 use brotli::{CompressorReader, CompressorWriter};
 use serde_json::{Result as JsonResult, Value};
@@ -16,7 +16,9 @@ use tcp::Socket;
 use crate::{gateway::GatewayContext,
             middleware::{MiddlewareResult, Middleware},
             request::HttpRequest,
-            response::HttpResponse};
+            response::HttpResponse,
+            files_load::{FILES_LOAD_SIZE_HEADER, FILES_LOAD_COUNT_HEADER},
+            batch_load::{BATCH_LOAD_SIZE_HEADER, BATCH_LOAD_COUNT_HEADER}};
 
 /*
 * 默认支持的压缩算法
@@ -160,6 +162,15 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
                         }
                     }
                 }
+            }
+
+            if (response.contains_header(HeaderName::from_str(FILES_LOAD_SIZE_HEADER).unwrap())
+                && response.contains_header(HeaderName::from_str(FILES_LOAD_COUNT_HEADER).unwrap()))
+                || (response.contains_header(HeaderName::from_str(BATCH_LOAD_SIZE_HEADER).unwrap())
+                && response.contains_header(HeaderName::from_str(BATCH_LOAD_COUNT_HEADER).unwrap()))
+            {
+                //如果是批量加载的数据，则允许编码
+                is_codable = true;
             }
 
             if is_codable {

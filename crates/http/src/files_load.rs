@@ -39,6 +39,11 @@ use tcp::Socket;
 ///
 const DEFAULT_CONTENT_DISPOSITION: &str = "attachment;filename=files";
 
+// 批量加载的大小头信息关键字
+pub(crate) const FILES_LOAD_SIZE_HEADER: &str = "PI-FILES-LOAD-SIZE";
+// 批量加载的文件数量头信息关键字
+pub(crate) const FILES_LOAD_COUNT_HEADER: &str = "PI-FILES-LOAD-COUNT";
+
 ///
 /// Http文件批量加载器
 ///
@@ -327,6 +332,10 @@ impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
                     }
                 }
             }
+
+            // 增加批量加载的特定头信息
+            let _ = response.header(FILES_LOAD_SIZE_HEADER, total_size.to_string().as_str());
+            let _ = response.header(FILES_LOAD_COUNT_HEADER, total_len.to_string().as_str());
 
             if let Some((files_id, mime, last_modified)) = context.get_cache_args() {
                 //设置响应体类型
