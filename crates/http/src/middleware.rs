@@ -17,7 +17,6 @@ pub enum MiddlewareResult<S: Socket> {
     Break(HttpResponse),                                //退出请求或响应中间件的处理，并立即返回Http响应，退出会跳过剩余中间件的处理，由用户创建响应
     Finish((HttpRequest<S>, HttpResponse)),             //完成请求或响应中间件的处理
     Throw(Error),                                       //中止请求或响应中间件的处理，并抛出错误，抛出错误会跳过剩余中间件的处理，但会根据错误自动创建响应
-    Terminate,                                          //立即终止请求或响应中间件的处理，不会有任何响应
 }
 
 ///

@@ -378,36 +378,11 @@ impl<R: AsyncRuntime> Handler for TestHttpGatewayHandler<R> {
     fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> LocalBoxFuture<'static, Self::HandleResult> {
         let rt = self.0.clone();
         async move {
-            match args {
-                Args::TwoArgs(addr, method) => {
-                    handle_closed(rt, env, topic, addr, method);
-                },
-                Args::FiveArgs(addr, method, headers, msg, handler) => {
-                    handle(rt, env, topic, addr, method, headers, msg, handler);
-                },
-                _ => (),
+            if let Args::FiveArgs(addr, method, headers, msg, handler) = args {
+                handle(rt, env, topic, addr, method, headers, msg, handler);
             }
         }.boxed_local()
     }
-}
-
-fn handle_closed<R: AsyncRuntime>(rt: R,
-                                  env: Arc<dyn GrayVersion>,
-                                  topic: Atom,
-                                  addr: SocketAddr,
-                                  method: String) {
-    let rt_copy = rt.clone();
-    let _ = rt.spawn(async move {
-        println!("!!!!!!http gateway handle, topic: {:?}", topic);
-        println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
-        println!("!!!!!!http gateway handler method: {:?}", method);
-        rt_copy.timeout(15000).await;
-
-        if &method == "CLOSED" {
-            println!("!!!!!!http connection closed");
-            return;
-        }
-    });
 }
 
 fn handle<R: AsyncRuntime>(rt: R,
@@ -555,7 +530,6 @@ fn test_http_hosts() {
         .at("/upload").post(upload_middleware.clone())
         .at("/login").get(port_middleware.clone())
         .at("/login").post(port_middleware.clone())
-        .at("/port/**").closed(port_middleware.clone())
         .at("/port/**").get(port_middleware.clone())
         .at("/port/**").post(port_middleware);
 
@@ -568,8 +542,22 @@ fn test_http_hosts() {
     let  _ = hosts.add_default(host);
 
     let mut factory = PortsAdapterFactory::<TcpSocket>::new();
-    factory.bind(80,
-                 HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 60000).new_service());
+    factory.bind(
+        80,
+        HttpListenerFactory::<TcpSocket, _>::with_hosts_and_handler(
+            hosts,
+            60000,
+            move |event| {
+                if event.is_connected() {
+                    println!("!!!!!!Connected, peer: {:?}", event.peer_addr());
+                } else if event.is_closed() {
+                    println!("!!!!!!Closed, peer: {:?}", event.peer_addr());
+                } else {
+                    println!("!!!!!!Timeout, peer: {:?}", event.peer_addr());
+                }
+            })
+            .new_service()
+    );
     let mut config = SocketConfig::new("0.0.0.0", factory.ports().as_slice());
     config.set_option(16384, 16384, 16384, 16);
 
@@ -743,8 +731,21 @@ fn test_https_hosts() {
     let _ = hosts.add_default(host);
 
     let mut factory = PortsAdapterFactory::<TlsSocket>::new();
-    factory.bind(443,
-                 HttpListenerFactory::<TlsSocket, _>::with_hosts(hosts, 10000).new_service());
+    factory.bind(
+        443,
+        HttpListenerFactory::<TlsSocket, _>::with_hosts_and_handler(
+            hosts,
+            60000,
+            move |event| {
+                if event.is_connected() {
+                    println!("!!!!!!Connected, peer: {:?}", event.peer_addr());
+                } else if event.is_closed() {
+                    println!("!!!!!!Closed, peer: {:?}", event.peer_addr());
+                } else {
+                    println!("!!!!!!Timeout, peer: {:?}", event.peer_addr());
+                }
+            })
+            .new_service());
     let tls_config = TlsConfig::new_server("",
                                            false,
                                            "./tests/17youx.cn.pem",

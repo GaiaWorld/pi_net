@@ -1,4 +1,4 @@
-use std::io::{Write, Result, Error, ErrorKind};
+use std::io::{Write, Result, Error};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use https::{status::StatusCode,
@@ -144,14 +144,8 @@ impl<S: Socket, H: ServiceFactory<S, Service = HS>, HS: HttpService<S>> HttpConn
         match self.service.call(req).await {
             Err(e) => {
                 //服务调用异常
-                let reason = e.into();
-                if reason.kind() == ErrorKind::Interrupted {
-                    // 立即终止服务调用，不需要返回任何响应
-                    return;
-                }
-
                 let resp = HttpResponse::empty();
-                let _ = self.throw(resp, StatusCode::INTERNAL_SERVER_ERROR, reason);
+                let _ = self.throw(resp, StatusCode::INTERNAL_SERVER_ERROR, e.into());
             },
             Ok(resp) => {
                 //服务调用完成，则序列化响应，并回应本次Http请求

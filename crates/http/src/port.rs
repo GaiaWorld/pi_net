@@ -16,7 +16,6 @@ use tcp::Socket;
 
 use crate::{gateway::GatewayContext,
             middleware::{MiddlewareResult, Middleware},
-            route::DEFAULT_HTTP_CONNECTION_CLOSED_METHOD_NAME,
             request::HttpRequest,
             response::{ResponseHandler, HttpResponse},
             utils::HttpRecvResult};
@@ -87,24 +86,10 @@ impl<S: Socket> Middleware<S, GatewayContext> for HttpPort {
             let gray = self.get_gray(); //获取当前灰度
             let remote_addr = req.get_handle().get_remote().clone(); //获取当前http连接的对端地址
             let method = req.method().as_str().to_string();
-            if &method == DEFAULT_HTTP_CONNECTION_CLOSED_METHOD_NAME {
-                // Http连接关闭事件
-                let http_gray = HttpGray {
-                    uid,
-                    gray,
-                };
-                self
-                    .handler
-                    .handle(Arc::new(http_gray),
-                            Atom::from(req.url().path()),
-                            Args::TwoArgs(remote_addr, method))
-                    .await;
-                return MiddlewareResult::Terminate;
-            }
-
-            //检查是否有表单分段数据
             let headers = req.share_headers(); //获取当前http请求头
             let args = context.as_params().clone(); //获取http请求参数或请求体
+
+            //检查是否有表单分段数据
             if !context.as_parts().is_empty() {
                 //请求中有表单分段数据，则填充到参数中
                 let parts = context.as_mut_parts();
@@ -134,8 +119,7 @@ impl<S: Socket> Middleware<S, GatewayContext> for HttpPort {
                                            method,
                                            headers,
                                            args,
-                                           resp_handler))
-                    .await;
+                                           resp_handler)).await;
             }
 
             //完成请求处理
