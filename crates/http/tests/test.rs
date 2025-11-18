@@ -2,12 +2,12 @@ extern crate route_recognizer;
 
 use std::thread;
 use std::sync::Arc;
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::io::{Read, Write};
 use std::time::Instant;
 use std::time::Duration;
 use std::net::SocketAddr;
-
+use std::ops::Deref;
 use https::HeaderMap;
 use regex::{RegexSetBuilder, RegexSet, RegexBuilder};
 use route_recognizer::Router;
@@ -352,6 +352,12 @@ struct WrapMsg(Arc<RefCell<XHashMap<String, SGenType>>>);
 unsafe impl Send for WrapMsg {}
 unsafe impl Sync for WrapMsg {}
 
+impl WrapMsg {
+    fn inner(&self) -> XHashMap<String, SGenType> {
+        self.0.borrow().clone()
+    }
+}
+
 struct TestHttpGatewayHandler<R: AsyncRuntime>(R);
 
 unsafe impl<R: AsyncRuntime> Send for TestHttpGatewayHandler<R> {}
@@ -372,11 +378,36 @@ impl<R: AsyncRuntime> Handler for TestHttpGatewayHandler<R> {
     fn handle(&self, env: Arc<dyn GrayVersion>, topic: Atom, args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>) -> LocalBoxFuture<'static, Self::HandleResult> {
         let rt = self.0.clone();
         async move {
-            if let Args::FiveArgs(addr, method, headers, msg, handler) = args {
-                handle(rt, env, topic, addr, method, headers, msg, handler);
+            match args {
+                Args::TwoArgs(addr, method) => {
+                    handle_closed(rt, env, topic, addr, method);
+                },
+                Args::FiveArgs(addr, method, headers, msg, handler) => {
+                    handle(rt, env, topic, addr, method, headers, msg, handler);
+                },
+                _ => (),
             }
         }.boxed_local()
     }
+}
+
+fn handle_closed<R: AsyncRuntime>(rt: R,
+                                  env: Arc<dyn GrayVersion>,
+                                  topic: Atom,
+                                  addr: SocketAddr,
+                                  method: String) {
+    let rt_copy = rt.clone();
+    let _ = rt.spawn(async move {
+        println!("!!!!!!http gateway handle, topic: {:?}", topic);
+        println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
+        println!("!!!!!!http gateway handler method: {:?}", method);
+        rt_copy.timeout(15000).await;
+
+        if &method == "CLOSED" {
+            println!("!!!!!!http connection closed");
+            return;
+        }
+    });
 }
 
 fn handle<R: AsyncRuntime>(rt: R,
@@ -391,11 +422,12 @@ fn handle<R: AsyncRuntime>(rt: R,
     let resp_handler = Arc::new(handler);
 
     let rt_copy = rt.clone();
-    rt.spawn(async move {
-        // println!("!!!!!!http gateway handle, topic: {:?}", topic);
-        // println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
-        // println!("!!!!!!http gateway handle, headers: {:?}", headers);
-        // println!("!!!!!!http gateway handle, msg: {:?}", msg.0.borrow());
+    let _ = rt.spawn(async move {
+        println!("!!!!!!http gateway handle, topic: {:?}", topic);
+        println!("!!!!!!http gateway handle, peer addr: {:?}", addr);
+        println!("!!!!!!http gateway handler method: {:?}", method);
+        println!("!!!!!!http gateway handle, headers: {:?}", headers);
+        println!("!!!!!!http gateway handle, headers: {:#?}", msg.inner());
         rt_copy.timeout(15000).await;
 
         //处理Http响应
@@ -523,6 +555,7 @@ fn test_http_hosts() {
         .at("/upload").post(upload_middleware.clone())
         .at("/login").get(port_middleware.clone())
         .at("/login").post(port_middleware.clone())
+        .at("/port/**").closed(port_middleware.clone())
         .at("/port/**").get(port_middleware.clone())
         .at("/port/**").post(port_middleware);
 
@@ -531,8 +564,8 @@ fn test_http_hosts() {
 
     //设置虚拟主机
     let mut hosts = VirtualHostTab::new();
-    hosts.add("test.17youx.cn", host.clone());
-    hosts.add_default(host);
+    let  _ = hosts.add("test.17youx.cn", host.clone());
+    let  _ = hosts.add_default(host);
 
     let mut factory = PortsAdapterFactory::<TcpSocket>::new();
     factory.bind(80,
@@ -706,8 +739,8 @@ fn test_https_hosts() {
 
     //设置虚拟主机
     let mut hosts = VirtualHostTab::new();
-    hosts.add("test.17youx.cn", host.clone());
-    hosts.add_default(host);
+    let _ = hosts.add("test.17youx.cn", host.clone());
+    let _ = hosts.add_default(host);
 
     let mut factory = PortsAdapterFactory::<TlsSocket>::new();
     factory.bind(443,

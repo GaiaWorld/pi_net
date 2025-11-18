@@ -206,6 +206,11 @@ impl<S: Socket, H: Middleware<S, GatewayContext>> HttpService<S> for HttpGateway
                         //中止请求处理，并立即返回错误
                         Err(reason)
                     },
+                    MiddlewareResult::Terminate => {
+                        //立即终止请求处理
+                        Err(Error::new(ErrorKind::Interrupted,
+                                       "terminate"))
+                    },
                     _ => {
                         //无效的请求返回，则立即返回错误
                         Err(Error::new(ErrorKind::Other,

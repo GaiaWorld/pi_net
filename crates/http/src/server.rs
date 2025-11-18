@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use std::io::{ErrorKind, Error};
 
-use https::{Version, HeaderMap, header::HOST};
+use https::{Version, HeaderMap, header::HOST, Method};
 use httparse::{EMPTY_HEADER, Request};
 use futures::future::{FutureExt, LocalBoxFuture};
 use bytes::Buf;
@@ -14,8 +14,15 @@ use crate::{acceptor::{MAX_CONNECT_HTTP_HEADER_LIMIT, HttpAcceptor},
             connect::HttpConnect,
             virtual_host::VirtualHostPool,
             service::ServiceFactory,
+            route::DEFAULT_HTTP_CONNECTION_CLOSED_METHOD_NAME,
             request::HttpRequest,
             packet::UpStreamHeader};
+
+// 默认的Http连接关闭的Host部分
+pub(crate) const DEFAULT_HTTP_CONNECTION_CLOSED_HOST_PART: &str = "closed.host.local";
+
+// 默认的Http连接关闭的Path部分
+pub(crate) const DEFAULT_HTTP_CONNECTION_CLOSED_PATH_PART: &str = "/__$connection_closed$__";
 
 ///
 /// Http连接监听器
@@ -34,7 +41,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
         let future = async move {
             if let SocketStatus::Connected(Err(e)) = status {
                 //Tcp连接失败
-                handle.close(Err(Error::new(ErrorKind::Other,
+                let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                             format!("Http server connect failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                                                     handle.get_token(),
                                                     handle.get_remote(),
@@ -53,7 +60,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
         if let SocketStatus::Readed(Err(e)) = status {
             //Tcp读数据失败
             return async move {
-                handle.close(Err(Error::new(ErrorKind::Other,
+                let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                             format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                                                     handle.get_token(),
                                                     handle.get_remote(),
@@ -95,7 +102,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                     context = cx;
                 } else {
                     //请求没有连接上下文，则立即关闭当前Tcp连接
-                    handle.close(Err(Error::new(ErrorKind::ConnectionRefused,
+                    let _ = handle.close(Err(Error::new(ErrorKind::ConnectionRefused,
                                                 format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid http connect context",
                                                         handle.get_token(),
                                                         handle.get_remote(),
@@ -114,7 +121,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                         parse_count += 1; //更新分析次数
                         if parse_count > 16 {
                             //过多的分析次数，则立即返回错误原因
-                            handle.close(Err(Error::new(ErrorKind::Other,
+                            let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                                         format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, buf_len: {:?}, buf: {:?}, reason: out of parse",
                                                                 handle.get_token(),
                                                                 handle.get_remote(),
@@ -152,7 +159,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                             }
                         } else {
                             //Tcp读缓冲区不存在
-                            handle.close(Err(Error::new(ErrorKind::Other,
+                            let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                                         format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid read buffer",
                                                                 handle.get_token(),
                                                                 handle.get_remote(),
@@ -200,7 +207,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                                                     break;
                                                 } else {
                                                     //请求的Url无效，则立即关闭当前Tcp连接
-                                                    handle.close(Err(Error::new(ErrorKind::ConnectionRefused,
+                                                    let _ = handle.close(Err(Error::new(ErrorKind::ConnectionRefused,
                                                                                 format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, url: {:?}, reason: invalid url",
                                                                                         handle.get_token(),
                                                                                         handle.get_remote(),
@@ -212,7 +219,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                                         }
                                     } else {
                                         //请求的主机头无效，则立即关闭当前连接
-                                        handle.close(Err(Error::new(ErrorKind::Other,
+                                        let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                                                     format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid host header",
                                                                             handle.get_token(),
                                                                             handle.get_remote(),
@@ -221,7 +228,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                                     }
                                 } else {
                                     //请求没有主机头，则立即关闭当前连接
-                                    handle.close(Err(Error::new(ErrorKind::Other,
+                                    let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                                                 format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: host header not exist",
                                                                         handle.get_token(),
                                                                         handle.get_remote(),
@@ -238,7 +245,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                     }
                 } else {
                     //请求没有绑定Http连接，则立即关闭当前Tcp连接
-                    handle.close(Err(Error::new(ErrorKind::ConnectionRefused,
+                    let _ = handle.close(Err(Error::new(ErrorKind::ConnectionRefused,
                                                 format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid http connect",
                                                         handle.get_token(),
                                                         handle.get_remote(),
@@ -255,7 +262,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
         let future = async move {
             if let SocketStatus::Writed(Err(e)) = status {
                 //Tcp写数据失败，则立即关闭当前Http连接
-                handle.close(Err(Error::new(ErrorKind::Other,
+                let _ = handle.close(Err(Error::new(ErrorKind::Other,
                                             format!("Http server write failed, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                                                     handle.get_token(),
                                                     handle.get_remote(),
@@ -289,7 +296,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 }
 
                 //连接已关闭，则立即释放Tcp连接的上下文
-                if let Err(e) = unsafe {
+                let mut connect = match unsafe {
                     (
                         &mut *handle
                             .get_context()
@@ -301,11 +308,37 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                     >()
                 }
                 {
-                    warn!("Free Context Failed by Http Connect Close, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                    Err(e) => {
+                        warn!("Free Context Failed by Http Connect Close, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                         handle.get_token(),
                         handle.get_remote(),
                         handle.get_local(),
                         e);
+                        return;
+                    },
+                    Ok(None) => {
+                        // 当前Tcp连接的上下文不存在，则立即返回
+                        return;
+                    },
+                    Ok(Some(connect)) => {
+                        connect
+                    },
+                };
+
+                //通知上层连接关闭
+                let url = if handle.is_security() {
+                    "https://".to_string() + DEFAULT_HTTP_CONNECTION_CLOSED_HOST_PART + "/port" + DEFAULT_HTTP_CONNECTION_CLOSED_PATH_PART
+                } else {
+                    "http://".to_string() + DEFAULT_HTTP_CONNECTION_CLOSED_HOST_PART + "/port" + DEFAULT_HTTP_CONNECTION_CLOSED_PATH_PART
+                };
+
+                if let Some(request) = HttpRequest::new(handle,
+                                                        DEFAULT_HTTP_CONNECTION_CLOSED_METHOD_NAME,
+                                                        &url,
+                                                        Version::HTTP_11,
+                                                        HeaderMap::default(),
+                                                        &[]) {
+                    connect.run_service(request).await;
                 }
             }
         };
@@ -318,7 +351,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
         let future = async move {
             if let SocketStatus::Timeout(event) = status {
                 //Http连接超时，则立即关闭当前Http连接
-                handle.close(Ok(()));
+                let _ = handle.close(Ok(()));
                 warn!("Http Connect Timeout, token: {:?}, remote: {:?}, local: {:?}, keep_alive: {:?}",
                     handle.get_token(),
                     handle.get_remote(),

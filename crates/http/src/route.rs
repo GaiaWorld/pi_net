@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::str::FromStr;
 use std::marker::PhantomData;
 use std::collections::hash_map::Entry;
 use std::io::{Error, Result, ErrorKind};
@@ -13,6 +14,9 @@ use tcp::Socket;
 
 use crate::{service::HttpService,
             middleware::Middleware};
+
+// 默认的Http连接关闭Method名
+pub(crate) const DEFAULT_HTTP_CONNECTION_CLOSED_METHOD_NAME: &str = "CLOSED";
 
 ///
 /// 需要被替换的字符
@@ -382,6 +386,12 @@ impl<S: Socket, Context: Send + Sync + 'static, Handler: Middleware<S, Context>>
     /// 为指定的路由设置post方法的处理器
     pub fn post(&mut self, handler: Handler) -> &mut Self {
         self.method(Method::POST, handler);
+        self
+    }
+
+    /// 为指定的路由设置closed方法的处理器
+    pub fn closed(&mut self, handler: Handler) -> &mut Self {
+        self.method(Method::from_str(DEFAULT_HTTP_CONNECTION_CLOSED_METHOD_NAME).unwrap(), handler);
         self
     }
 }
