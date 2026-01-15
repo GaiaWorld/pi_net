@@ -22,7 +22,7 @@ rustls-pemfile = "1.0"
 spin_sleep_util = "~0.1"
 log = "0.4"
 pi-async-rt = "0.2"
-pi_async_buffer = "0.8"
+pi_async_buffer = "0.9"
 pi_hash = { version = "0.1", features = ["xxhash"] }
 pi_cancel_timer = "0.3"
 slotmap = { version = "0.2", package = "pi_slotmap" }
