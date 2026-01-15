@@ -1,6 +1,6 @@
 [package]
 name = "pi_quic"
-version = "0.7.2"
+version = "0.8.0"
 authors = ["vmos <vmosone007@gmail.com>"]
 edition = "2021"
 description = "Quic client/server"
@@ -15,7 +15,7 @@ quinn-proto = "0.8"
 pi-async-rt = "0.2"
 rustls = { version = "0.20", features = ["dangerous_configuration"] }
 rustls-pemfile = "1.0"
-bytes = "~1.10"
+bytes = "~1.11"
 crossbeam-channel = "0.5"
 crossbeam-utils = "0.8"
 pi_hash = "0.1"
@@ -24,7 +24,7 @@ log = "0.4"
 pi_cancel_timer = "0.3"
 slotmap = { version = "0.2", package = "pi_slotmap" }
 tracing = "0.1"
-udp = { version = "0.3", path = "../blocking_udp", package = "pi_blocking_udp" }
+udp = { version = "0.5", path = "../blocking_udp", package = "pi_blocking_udp" }
 
 [dev-dependencies]
 tokio = { version = "1.21", features = ["full"] }
