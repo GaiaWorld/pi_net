@@ -24,7 +24,21 @@ use pi_hash::XHashMap;
 * 异步Http客户端运行时
 */
 lazy_static! {
-    static ref ASYNC_HTTPC_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread().thread_name("ASYNC-HTTPC").worker_threads(2).max_blocking_threads(16).enable_all().build().unwrap();
+    static ref ASYNC_HTTPC_RUNTIME: tokio::runtime::Runtime = {
+        // 从环境变量获取工作线程数，默认为4
+        let worker_threads = std::env::var("ASYNC_HTTPC_WORKER_THREADS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4);
+
+        tokio::runtime::Builder::new_multi_thread()
+            .thread_name("ASYNC-HTTPC")
+            .worker_threads(worker_threads)
+            .max_blocking_threads(16)
+            .enable_all()
+            .build()
+            .unwrap()
+    };
 }
 
 /*
