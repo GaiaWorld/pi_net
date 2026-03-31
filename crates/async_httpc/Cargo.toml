@@ -34,3 +34,7 @@ pi_handler = "0.2"
 pi_hash = "0.1"
 pi_gray = "0.1"
 pi_atom = "0.6"
+
+[patch.crates-io]
+actix-http = { git = "https://github.com/actix/actix-web", rev = "http-v3.11.2" }
+time = { git = "https://github.com/time-rs/time", rev = "v0.3.45" }
