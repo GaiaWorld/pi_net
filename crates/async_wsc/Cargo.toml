@@ -1,6 +1,6 @@
 [package]
 name = "pi_async_wsc"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_async_wsc"
@@ -19,13 +19,13 @@ actix-rt = "2.1"
 actix-codec = "0.5"
 actix-http = "3.0"
 awc = { version = "0.1", package = "pi_awc", path = "../awc", features = ["rustls"] }
-tcp = { version = "0.6", package = "pi_tcp", path = "../tcp" }
+tcp = { version = "0.7", package = "pi_tcp", path = "../tcp" }
 url = "2.5"
 lazy_static = "1.5"
 parking_lot = "0.12"
 log = "0.4"
 async-lock = "~3.4"
-pi-async-rt = "0.2"
+pi-async-rt = "0.3"
 pi_rand = "~0.3"
 bytestring = "1.0"
 
@@ -33,4 +33,4 @@ bytestring = "1.0"
 env_logger = "0.11"
 httparse = "~1.8"
 crossbeam-channel = "0.5"
-wss = { package = "pi_ws", version = "0.7", path = "../ws" }
+wss = { package = "pi_ws", version = "0.8", path = "../ws" }

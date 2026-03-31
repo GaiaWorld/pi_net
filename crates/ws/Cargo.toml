@@ -1,6 +1,6 @@
 [package]
 name = "pi_ws"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_ws"
@@ -17,13 +17,13 @@ bytes = "~1.11"
 fnv = "1.0"
 mio = "0.8"
 log = "0.4"
-pi_async_buffer = "0.9"
+pi_async_buffer = "0.10"
 pi_atom = "0.6"
-tcp = { version="0.6", path = "../tcp", package = "pi_tcp" }
+tcp = { version="0.7", path = "../tcp", package = "pi_tcp" }
 pi_rand = "~0.3"
 pi_crypto = "0.1"
 
 [dev-dependencies]
-pi-async-rt = "0.2"
+pi-async-rt = "0.3"
 env_logger = "0.11"
 

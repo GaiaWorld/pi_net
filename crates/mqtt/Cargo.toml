@@ -1,6 +1,6 @@
 [package]
 name = "pi_mqtt"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_mqtt"
@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 keywords = ["pi", "mqtt"]
 
 [dependencies]
-pi-async-rt = "0.2"
+pi-async-rt = "0.3"
 fnv = "1.0"
 futures = "0.3"
 mio = "0.8"
@@ -18,10 +18,10 @@ parking_lot = "0.12"
 lazy_static = "1.5"
 dashmap = "~6.1"
 pi_hash = { version = "0.1", features = ["xxhash"] }
-tcp = { version = "0.6", path = "../tcp", package = "pi_tcp" }
-ws = { version = "0.7", path = "../ws", package = "pi_ws" }
+tcp = { version = "0.7", path = "../tcp", package = "pi_tcp" }
+ws = { version = "0.8", path = "../ws", package = "pi_ws" }
 udp = { version = "0.5", path = "../blocking_udp", package = "pi_blocking_udp" }
-quic = { version = "0.8", path = "../quic", package = "pi_quic" }
+quic = { version = "0.9", path = "../quic", package = "pi_quic" }
 pi_atom = "0.6"
 quinn-proto = "0.8"
 httparse = "~1.8"
