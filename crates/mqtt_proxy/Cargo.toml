@@ -22,7 +22,7 @@ log = "0.4"
 [dev-dependencies]
 ws = {version = "0.8", path = "../ws", package = "pi_ws" }
 env_logger = "0.11"
-udp = {version = "0.5", path = "../blocking_udp", package = "pi_blocking_udp" }
+udp = {version = "0.6", path = "../blocking_udp", package = "pi_blocking_udp" }
 quinn-proto = "0.8"
 tokio = { version = "1.0", features = ["full"] }
 tokio-tungstenite = "0.20"
