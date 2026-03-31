@@ -20,7 +20,7 @@ dashmap = "~6.1"
 pi_hash = { version = "0.1", features = ["xxhash"] }
 tcp = { version = "0.7", path = "../tcp", package = "pi_tcp" }
 ws = { version = "0.8", path = "../ws", package = "pi_ws" }
-udp = { version = "0.5", path = "../blocking_udp", package = "pi_blocking_udp" }
+udp = { version = "0.6", path = "../blocking_udp", package = "pi_blocking_udp" }
 quic = { version = "0.9", path = "../quic", package = "pi_quic" }
 pi_atom = "0.6"
 quinn-proto = "0.8"
