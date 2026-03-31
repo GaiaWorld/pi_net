@@ -235,7 +235,7 @@ dependencies = [
  "serde_urlencoded",
  "smallvec",
  "socket2 0.4.10",
- "time 0.3.47",
+ "time 0.3.45",
  "url",
 ]
 
@@ -402,7 +402,7 @@ dependencies = [
  "num-traits",
  "rusticata-macros",
  "thiserror",
- "time 0.3.47",
+ "time 0.3.45",
 ]
 
 [[package]]
@@ -842,7 +842,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e859cd57d0710d9e06c381b550c06e76992472a8c6d527aecd2fc673dcc231fb"
 dependencies = [
  "percent-encoding",
- "time 0.3.47",
+ "time 0.3.45",
  "version_check",
 ]
 
@@ -853,7 +853,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7efb37c3e1ccb1ff97164ad95ac1606e8ccd35b3fa0a7d99a304c7f4a428cc24"
 dependencies = [
  "percent-encoding",
- "time 0.3.47",
+ "time 0.3.45",
  "version_check",
 ]
 
@@ -870,7 +870,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "time 0.3.47",
+ "time 0.3.45",
  "url",
 ]
 
@@ -2522,9 +2522,9 @@ dependencies = [
 
 [[package]]
 name = "num-conv"
-version = "0.2.1"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6673768db2d862beb9b39a78fdcb1a69439615d5794a1be50caa9bc92c81967"
+checksum = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
 
 [[package]]
 name = "num-integer"
@@ -4748,9 +4748,8 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.47"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "743bd48c283afc0388f9b8827b976905fb217ad9e647fae3a379a9283c4def2c"
+version = "0.3.45"
+source = "git+https://github.com/time-rs/time?rev=v0.3.45#d41b5e129b52dc3486a89a4367e1979496f661d7"
 dependencies = [
  "deranged",
  "itoa",
@@ -4763,15 +4762,13 @@ dependencies = [
 
 [[package]]
 name = "time-core"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
+version = "0.1.7"
+source = "git+https://github.com/time-rs/time?rev=v0.3.45#d41b5e129b52dc3486a89a4367e1979496f661d7"
 
 [[package]]
 name = "time-macros"
-version = "0.2.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
+version = "0.2.25"
+source = "git+https://github.com/time-rs/time?rev=v0.3.45#d41b5e129b52dc3486a89a4367e1979496f661d7"
 dependencies = [
  "num-conv",
  "time-core",
@@ -5766,7 +5763,7 @@ dependencies = [
  "ring 0.16.20",
  "rusticata-macros",
  "thiserror",
- "time 0.3.47",
+ "time 0.3.45",
 ]
 
 [[package]]
@@ -5920,8 +5917,3 @@ dependencies = [
 name = "actix-http"
 version = "3.11.2"
 source = "git+https://github.com/actix/actix-web?rev=http-v3.11.2#25963dbdf12f3d56c3b1bb1afbbff15e0a5aba1d"
-
-[[patch.unused]]
-name = "time"
-version = "0.3.45"
-source = "git+https://github.com/time-rs/time?rev=v0.3.45#d41b5e129b52dc3486a89a4367e1979496f661d7"
