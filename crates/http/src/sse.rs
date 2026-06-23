@@ -75,12 +75,13 @@ use futures::{
 };
 use https::{
     header::{
-        HeaderName, ACCEPT, CACHE_CONTROL, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH,
+        HeaderName, HeaderValue, ACCEPT, CACHE_CONTROL, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH,
         CONTENT_TYPE, TRANSFER_ENCODING,
     },
     Method, StatusCode,
 };
 use pi_async_rt::rt::AsyncRuntime;
+use pi_handler::SGenType;
 use tcp::{Socket, SocketHandle};
 use wyhash::WyHasherBuilder;
 
@@ -100,11 +101,68 @@ const SSE_ACCEL_BUFFERING_HEADER: &str = "x-accel-buffering";
 const SSE_ACCEL_BUFFERING_DISABLED: &str = "no";
 const LAST_EVENT_ID_HEADER: &str = "last-event-id";
 
+/// SSE port/params 握手请求侧保留参数：当前请求是否为 SSE 候选请求。
+///
+/// 该 key 只写入 `GatewayContext.params`，供 `SseMiddleware` 后续中间件和 `HttpPort`
+/// handler 读取，不会写入真实 HTTP 请求头或请求体。值固定为 `SGenType::Str("1")`。
+/// `SseMiddleware` 注入前会覆盖同名业务参数，响应阶段会清理。读取成本为 Map 均摊
+/// `O(1)`，无 I/O；该 key 不应由客户端业务参数直接信任。
+pub const SSE_PARAM_PENDING: &str = "__pi_http_sse.pending";
+/// SSE port/params 握手请求侧保留参数：候选连接 ID。
+///
+/// 值为十进制 `u32` 字符串。后续中间件必须在响应内部头
+/// `SSE_HEADER_CONNECTION_ID` 中原样回传，`SseMiddleware.response` 会校验其与当前请求
+/// pending 状态一致。该值在 `on_open` 前只表示候选 ID，不代表活动 SSE 连接。
+pub const SSE_PARAM_CONNECTION_ID: &str = "__pi_http_sse.connection_id";
+/// SSE port/params 握手请求侧保留参数：当前请求握手 nonce。
+///
+/// 该 nonce 用于防止后续中间件误把其它请求的响应决策应用到当前请求；它不是跨进程安全
+/// token，也不应暴露给客户端。响应阶段必须通过 `SSE_HEADER_NONCE` 原样回传。
+pub const SSE_PARAM_NONCE: &str = "__pi_http_sse.nonce";
+/// SSE port/params 握手请求侧保留参数：客户端 `Last-Event-ID` 快照。
+///
+/// 仅当请求头存在合法 `Last-Event-ID` 时写入。业务可据此自行做历史事件定位；`pi_http`
+/// SSE 核心不会自动持久化或重放事件。
+pub const SSE_PARAM_LAST_EVENT_ID: &str = "__pi_http_sse.last_event_id";
+/// SSE port/params 握手请求侧保留参数：当前 TCP/TLS 对端地址。
+///
+/// 值为 `SocketAddr::to_string()` 结果，仅供后续业务鉴权、审计或 session 绑定参考。
+pub const SSE_PARAM_REMOTE_ADDR: &str = "__pi_http_sse.remote_addr";
+
+/// SSE port/params 握手响应侧内部头：允许或拒绝 SSE 建连。
+///
+/// 后续中间件通过 `ResponseHandler::insert_header` 写入该头。`SseMiddleware.response`
+/// 读取后会移除或丢弃它，最终网络响应不得包含该头。合法值为
+/// `SSE_DECISION_ACCEPT` 或 `SSE_DECISION_REJECT`。
+pub const SSE_HEADER_DECISION: &str = "x-pi-http-sse-decision";
+/// SSE port/params 握手响应侧内部头：回传候选连接 ID。
+pub const SSE_HEADER_CONNECTION_ID: &str = "x-pi-http-sse-connection-id";
+/// SSE port/params 握手响应侧内部头：回传请求侧 nonce。
+pub const SSE_HEADER_NONCE: &str = "x-pi-http-sse-nonce";
+/// SSE port/params 握手响应侧内部头：业务 key。
+///
+/// `port_handshake_string_key` 使用该头作为 `String` Hub key；泛型 key 模式可通过
+/// `port_handshake_with_key` 自行解析该字段。
+pub const SSE_HEADER_KEY: &str = "x-pi-http-sse-key";
+/// SSE port/params 握手响应侧内部头：拒绝建连时的 HTTP 状态码。
+pub const SSE_HEADER_REJECT_STATUS: &str = "x-pi-http-sse-reject-status";
+/// SSE port/params 握手响应侧内部头：拒绝建连时的响应文本。
+pub const SSE_HEADER_REJECT_MESSAGE: &str = "x-pi-http-sse-reject-message";
+/// SSE port/params 握手响应侧内部头值：允许建连。
+pub const SSE_DECISION_ACCEPT: &str = "accept";
+/// SSE port/params 握手响应侧内部头值：拒绝建连。
+pub const SSE_DECISION_REJECT: &str = "reject";
+
+const SSE_ATTR_PENDING: &str = "__pi_http_sse.attr.pending";
+const SSE_ATTR_CONNECTION_ID: &str = "__pi_http_sse.attr.connection_id";
+const SSE_ATTR_NONCE: &str = "__pi_http_sse.attr.nonce";
+
 const SENDER_STATE_OPEN: u8 = 0;
 const SENDER_STATE_FINISHING: u8 = 1;
 const SENDER_STATE_CLOSED: u8 = 2;
 
 static SSE_CONNECTION_ID_ALLOCATOR: AtomicU32 = AtomicU32::new(1);
+static SSE_HANDSHAKE_NONCE_ALLOCATOR: AtomicU32 = AtomicU32::new(1);
 
 /// SSE 结果类型。
 ///
@@ -124,6 +182,8 @@ pub enum SseError {
     InvalidMethod(String),
     /// 事件字段非法，例如 `event`、`id` 中含 CR/LF/NUL。
     InvalidEvent(String),
+    /// port/params 内部握手字段非法或不一致。
+    InvalidHandshake(String),
     /// 编码后的单事件超过配置上限。
     EventTooLarge {
         /// 实际编码字节数。
@@ -151,6 +211,7 @@ impl Display for SseError {
             SseError::InvalidConfig(reason) => write!(f, "invalid SSE config: {}", reason),
             SseError::InvalidMethod(method) => write!(f, "invalid SSE method: {}", method),
             SseError::InvalidEvent(reason) => write!(f, "invalid SSE event: {}", reason),
+            SseError::InvalidHandshake(reason) => write!(f, "invalid SSE handshake: {}", reason),
             SseError::EventTooLarge { len, limit } => {
                 write!(f, "SSE event too large: {}, limit: {}", len, limit)
             }
@@ -556,6 +617,7 @@ impl SseResponse {
         SseResponseBuilder {
             req,
             config: SseConfig::default(),
+            connection_id: None,
         }
     }
 }
@@ -591,6 +653,7 @@ impl SseResponse {
 pub struct SseResponseBuilder<'a, S: Socket> {
     req: &'a HttpRequest<S>,
     config: SseConfig,
+    connection_id: Option<SseConnectionId>,
 }
 
 impl<'a, S: Socket> SseResponseBuilder<'a, S> {
@@ -599,6 +662,11 @@ impl<'a, S: Socket> SseResponseBuilder<'a, S> {
     /// 覆盖 Builder 当前配置。调用成本 `O(1)` 加 `SseConfig` clone 成本，无 I/O、无阻塞。
     pub fn config(mut self, config: SseConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    fn connection_id(mut self, id: SseConnectionId) -> Self {
+        self.connection_id = Some(id);
         self
     }
 
@@ -638,7 +706,7 @@ impl<'a, S: Socket> SseResponseBuilder<'a, S> {
             .ok_or_else(|| SseError::InvalidConfig("missing response handler".to_string()))?;
         let last_event_id = read_last_event_id(self.req)?;
         let sender = SseSender::new(
-            next_connection_id(),
+            self.connection_id.unwrap_or_else(next_connection_id),
             self.req.get_handle().clone(),
             handler,
             self.config.max_event_bytes,
@@ -756,6 +824,127 @@ impl<K> SseAcceptDecision<K> {
 pub type SseAcceptHandler<K, S> =
     Arc<dyn for<'a> Fn(SseAccept<'a, S>) -> SseResult<SseAcceptDecision<K>> + Send + Sync>;
 
+/// SSE port/params 内部握手允许信息。
+///
+/// 功能说明：
+/// - `SseMiddleware` 在 port/params 握手模式的响应阶段解析并校验后续中间件写入的内部响应头，
+///   然后把该结构传给 key 解析回调。
+/// - 外部可根据 `key` 字符串、透明连接 ID 和 nonce 生成最终 Hub key。
+///
+/// 入参/出参：
+/// - `id` 是当前请求阶段注入到 `GatewayContext.params` 的候选连接 ID，已经通过响应头回传校验。
+/// - `nonce` 是当前请求内 nonce，已经通过响应头回传校验。
+/// - `key` 是后续中间件通过 `SSE_HEADER_KEY` 写入的可选业务 key 字符串。
+///
+/// 业务边界：
+/// - 该结构不包含 `SseSender`；sender 只会在 key 解析成功、Hub 注册前后由中间件创建，
+///   并在 `on_open` 中暴露。
+/// - `nonce` 不提供跨进程安全性，只用于同一请求链内部匹配。
+///
+/// 性能与安全：
+/// - 构造为 `O(1)`，不分配、不执行 I/O、不阻塞。
+/// - 引用只在 key 解析回调期间有效，不能逃逸。
+///
+/// 测试入口：
+/// - 单元测试 `sse_middleware_port_handshake_accepts_after_port_decision` 覆盖 key 解析和打开时机。
+pub struct SseHandshakeAccept<'a> {
+    /// 已校验的候选透明连接 ID。
+    pub id: SseConnectionId,
+    /// 已校验的当前请求握手 nonce。
+    pub nonce: &'a str,
+    /// 后续中间件返回的业务 key 字符串。
+    pub key: Option<&'a str>,
+}
+
+/// SSE port/params 握手 key 解析回调。
+///
+/// 功能说明：
+/// - 仅在 `SseMiddlewareBuilder::port_handshake_with_key` 模式下使用。
+/// - 后续 `HttpPort` 或其它中间件通过内部响应头返回字符串字段后，本回调把字符串字段转换为
+///   `SseHub<K, S>` 所需的业务 key。
+///
+/// 边界与性能：
+/// - 回调同步执行，必须快速返回；禁止阻塞当前请求路径。
+/// - 返回 `Err` 会使中间件返回普通 HTTP 错误响应，不创建 sender、不注册 Hub。
+/// - 回调不得保存 `SseHandshakeAccept` 中的引用；需要保存时应复制为 owned 值。
+pub type SseHandshakeKeyHandler<K> =
+    Arc<dyn for<'a> Fn(SseHandshakeAccept<'a>) -> SseResult<K> + Send + Sync>;
+
+/// 写入 SSE port/params 握手允许响应头。
+///
+/// 功能说明：
+/// - 供 `HttpPort` handler 或其它后续中间件在决定允许当前 SSE 候选请求时调用。
+/// - 本函数只写入中间件链内部响应头；这些头会在 `SseMiddleware.response` 中读取并清理，
+///   最终不会作为 SSE 网络响应头发送给客户端。
+///
+/// 入参/出参：
+/// - `response` 是后续中间件持有的 `ResponseHandler`。
+/// - `id` 与 `nonce` 必须来自当前请求 `GatewayContext.params` 中的
+///   `SSE_PARAM_CONNECTION_ID` 和 `SSE_PARAM_NONCE`。
+/// - `key` 是可选业务 key；`port_handshake_string_key` 模式要求非空业务 key。
+///
+/// 性能与安全：
+/// - 时间复杂度 `O(k)`，`k` 为 key/nonce 字符串长度；空间复杂度由响应头内部复制决定。
+/// - 不执行 I/O，不异步阻塞；会短暂持有响应头同步锁。
+/// - 本函数不校验业务权限；权限必须由调用方在写入前完成。
+/// - `id`、`nonce` 和 `key` 必须是合法 HTTP 头值；非法值会返回 `InvalidHandshake`。
+///
+/// 测试入口：
+/// - `sse_real_network_port_handshake_accepts_and_binds_key` 通过真实 `HttpPort` handler 覆盖。
+pub fn write_sse_accept_headers(
+    response: &ResponseHandler,
+    id: impl Display,
+    nonce: &str,
+    key: &str,
+) -> SseResult<()> {
+    let id = id.to_string();
+    validate_handshake_header_value(SSE_HEADER_CONNECTION_ID, &id)?;
+    validate_handshake_header_value(SSE_HEADER_NONCE, nonce)?;
+    validate_handshake_header_value(SSE_HEADER_KEY, key)?;
+
+    response.insert_header(SSE_HEADER_DECISION, SSE_DECISION_ACCEPT);
+    response.insert_header(SSE_HEADER_CONNECTION_ID, &id);
+    response.insert_header(SSE_HEADER_NONCE, nonce);
+    response.insert_header(SSE_HEADER_KEY, key);
+    Ok(())
+}
+
+/// 写入 SSE port/params 握手拒绝响应头。
+///
+/// 功能说明：
+/// - 供后续中间件明确拒绝当前 SSE 候选请求时调用。
+/// - `SseMiddleware.response` 读取后会返回普通 HTTP 拒绝响应，不创建 sender、不注册 Hub。
+///
+/// 性能与安全：
+/// - 时间复杂度与 `message` 长度线性相关；不执行 I/O。
+/// - `status` 应为有效 HTTP 错误状态；如果后续解析失败，SSE 中间件会使用 `403`。
+/// - 内部响应头不会出现在最终网络响应中。
+/// - `id`、`nonce` 和 `message` 必须是合法 HTTP 头值；非法值会返回 `InvalidHandshake`。
+///
+/// 测试入口：
+/// - `sse_middleware_port_handshake_rejects_without_sender` 覆盖拒绝路径。
+pub fn write_sse_reject_headers(
+    response: &ResponseHandler,
+    id: impl Display,
+    nonce: &str,
+    status: StatusCode,
+    message: &str,
+) -> SseResult<()> {
+    let id = id.to_string();
+    let status = status.as_u16().to_string();
+    validate_handshake_header_value(SSE_HEADER_CONNECTION_ID, &id)?;
+    validate_handshake_header_value(SSE_HEADER_NONCE, nonce)?;
+    validate_handshake_header_value(SSE_HEADER_REJECT_STATUS, &status)?;
+    validate_handshake_header_value(SSE_HEADER_REJECT_MESSAGE, message)?;
+
+    response.insert_header(SSE_HEADER_DECISION, SSE_DECISION_REJECT);
+    response.insert_header(SSE_HEADER_CONNECTION_ID, &id);
+    response.insert_header(SSE_HEADER_NONCE, nonce);
+    response.insert_header(SSE_HEADER_REJECT_STATUS, &status);
+    response.insert_header(SSE_HEADER_REJECT_MESSAGE, message);
+    Ok(())
+}
+
 /// SSE 连接打开回调。
 ///
 /// 功能说明：
@@ -841,6 +1030,7 @@ pub struct SseMiddleware<K, S: Socket> {
     hub: SseHub<K, S>,
     config: SseConfig,
     acceptor: SseAcceptHandler<K, S>,
+    handshake_key: Option<SseHandshakeKeyHandler<K>>,
     on_open: Option<SseOpenHandler<K, S>>,
     heartbeat_starter: Option<SseHeartbeatStarter<S>>,
     require_accept_header: bool,
@@ -852,6 +1042,7 @@ impl<K, S: Socket> Clone for SseMiddleware<K, S> {
             hub: self.hub.clone(),
             config: self.config.clone(),
             acceptor: self.acceptor.clone(),
+            handshake_key: self.handshake_key.clone(),
             on_open: self.on_open.clone(),
             heartbeat_starter: self.heartbeat_starter.clone(),
             require_accept_header: self.require_accept_header,
@@ -877,6 +1068,7 @@ impl<S: Socket> SseMiddleware<SseConnectionId, S> {
             hub,
             config: SseConfig::default(),
             acceptor: Arc::new(|accept| Ok(SseAcceptDecision::Accept(accept.sender.id()))),
+            handshake_key: None,
             on_open: None,
             heartbeat_starter: None,
             require_accept_header: false,
@@ -901,6 +1093,7 @@ where
             hub,
             config: SseConfig::default(),
             acceptor: Arc::new(acceptor),
+            handshake_key: None,
             on_open: None,
             heartbeat_starter: None,
             require_accept_header: false,
@@ -920,6 +1113,132 @@ where
     pub fn config(&self) -> &SseConfig {
         &self.config
     }
+
+    fn open_stream_response(
+        &self,
+        req: &HttpRequest<S>,
+        key: K,
+        connection_id: Option<SseConnectionId>,
+    ) -> Result<(HttpResponse, SseConnectionId), HttpResponse> {
+        let mut builder = SseResponse::builder(req).config(self.config.clone());
+        if let Some(id) = connection_id {
+            builder = builder.connection_id(id);
+        }
+
+        let (resp, sender) = match builder.build() {
+            Ok(value) => value,
+            Err(error) => return Err(sse_error_to_response(error)),
+        };
+
+        let id = match self.hub.register(key.clone(), sender.clone()) {
+            Ok(id) => id,
+            Err(error) => {
+                let _ = sender.try_finish();
+                return Err(sse_error_to_response(error));
+            }
+        };
+
+        if let Some(on_open) = &self.on_open {
+            let open = SseOpen {
+                key,
+                id,
+                sender: sender.clone(),
+            };
+            if let Err(error) = on_open(open) {
+                let _ = self.hub.unregister(id);
+                let _ = sender.try_finish();
+                return Err(sse_error_to_response(error));
+            }
+        }
+
+        if let Some(starter) = &self.heartbeat_starter {
+            if self.config.heartbeat_interval_ms > 0 {
+                if let Err(error) = starter(sender.clone(), self.config.heartbeat_interval_ms) {
+                    let _ = self.hub.unregister(id);
+                    let _ = sender.try_finish();
+                    return Err(sse_error_to_response(error));
+                }
+            }
+        }
+
+        Ok((resp, id))
+    }
+
+    fn finalize_port_handshake(
+        &self,
+        context: &GatewayContext,
+        req: &HttpRequest<S>,
+        mut resp: HttpResponse,
+        resolve_key: &SseHandshakeKeyHandler<K>,
+    ) -> Result<HttpResponse, HttpResponse> {
+        let expected_id = match context_attr_string(context, SSE_ATTR_CONNECTION_ID)
+            .and_then(|value| parse_connection_id(&value))
+        {
+            Some(id) => id,
+            None => {
+                strip_sse_response_headers(&mut resp);
+                return Err(sse_error_response(
+                    StatusCode::FORBIDDEN,
+                    "missing SSE handshake connection id",
+                ));
+            }
+        };
+        let expected_nonce = match context_attr_string(context, SSE_ATTR_NONCE) {
+            Some(value) => value,
+            None => {
+                strip_sse_response_headers(&mut resp);
+                return Err(sse_error_response(
+                    StatusCode::FORBIDDEN,
+                    "missing SSE handshake nonce",
+                ));
+            }
+        };
+
+        let decision = response_header_string(&resp, SSE_HEADER_DECISION)
+            .map(|value| value.trim().to_ascii_lowercase());
+        let received_id = response_header_string(&resp, SSE_HEADER_CONNECTION_ID)
+            .and_then(|value| parse_connection_id(value.trim()));
+        let received_nonce = response_header_string(&resp, SSE_HEADER_NONCE);
+        let key = response_header_string(&resp, SSE_HEADER_KEY);
+        let reject_status = response_header_string(&resp, SSE_HEADER_REJECT_STATUS);
+        let reject_message = response_header_string(&resp, SSE_HEADER_REJECT_MESSAGE);
+        strip_sse_response_headers(&mut resp);
+
+        if received_id != Some(expected_id) || received_nonce.as_deref() != Some(&expected_nonce) {
+            return Err(sse_error_response(
+                StatusCode::FORBIDDEN,
+                "SSE handshake id or nonce mismatch",
+            ));
+        }
+
+        match decision.as_deref() {
+            Some(SSE_DECISION_ACCEPT) => {
+                let key = match resolve_key(SseHandshakeAccept {
+                    id: expected_id,
+                    nonce: &expected_nonce,
+                    key: key.as_deref(),
+                }) {
+                    Ok(key) => key,
+                    Err(error) => return Err(sse_error_to_response(error)),
+                };
+
+                self.open_stream_response(req, key, Some(expected_id))
+                    .map(|(resp, _)| resp)
+            }
+            Some(SSE_DECISION_REJECT) => {
+                let status = reject_status
+                    .as_deref()
+                    .and_then(parse_status_code)
+                    .unwrap_or(StatusCode::FORBIDDEN);
+                let message = reject_message.unwrap_or_else(|| "SSE open rejected".to_string());
+                Err(sse_error_response(status, message))
+            }
+            _ => Err(sse_error_response(
+                StatusCode::FORBIDDEN,
+                "missing or invalid SSE open decision",
+            )),
+        }
+    }
 }
 
 impl<K, S> Middleware<S, GatewayContext> for SseMiddleware<K, S>
@@ -938,6 +1257,23 @@ where
                     StatusCode::NOT_ACCEPTABLE,
                     "SSE request must accept text/event-stream",
                 ));
+            }
+
+            if self.handshake_key.is_some() {
+                if req.method() != &Method::GET {
+                    return MiddlewareResult::Break(sse_error_to_response(SseError::InvalidMethod(
+                        req.method().as_str().to_string(),
+                    )));
+                }
+
+                let last_event_id = match read_last_event_id(&req) {
+                    Ok(value) => value,
+                    Err(error) => return MiddlewareResult::Break(sse_error_to_response(error)),
+                };
+                let id = next_connection_id();
+                let nonce = next_handshake_nonce(id);
+                inject_sse_handshake(context, &req, id, &nonce, last_event_id);
+                return MiddlewareResult::ContinueRequest(req);
             }
 
             let (resp, sender) = match SseResponse::builder(&req)
@@ -1005,11 +1341,20 @@ where
 
     fn response<'a>(
         &'a self,
-        _context: &'a mut GatewayContext,
+        context: &'a mut GatewayContext,
         req: HttpRequest<S>,
         resp: HttpResponse,
     ) -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         async move {
+            if let Some(resolve_key) = &self.handshake_key {
+                let result = self.finalize_port_handshake(context, &req, resp, resolve_key);
+                clear_sse_handshake_context(context);
+                return match result {
+                    Ok(resp) => MiddlewareResult::Break(resp),
+                    Err(resp) => MiddlewareResult::Finish((req, resp)),
+                };
+            }
+
             if resp.is_stream() {
                 MiddlewareResult::Break(resp)
             } else {
@@ -1036,6 +1381,7 @@ pub struct SseMiddlewareBuilder<K, S: Socket> {
     hub: SseHub<K, S>,
     config: SseConfig,
     acceptor: SseAcceptHandler<K, S>,
+    handshake_key: Option<SseHandshakeKeyHandler<K>>,
     on_open: Option<SseOpenHandler<K, S>>,
     heartbeat_starter: Option<SseHeartbeatStarter<S>>,
     require_accept_header: bool,
@@ -1086,6 +1432,25 @@ where
         F: for<'a> Fn(SseAccept<'a, S>) -> SseResult<SseAcceptDecision<K>> + Send + Sync + 'static,
     {
         self.acceptor = Arc::new(acceptor);
+        self.handshake_key = None;
+        self
+    }
+
+    /// 启用 port/params 非终端握手模式，并设置业务 key 解析回调。
+    ///
+    /// 启用后，`SseMiddleware.request` 不再终止请求，而是在
+    /// `GatewayContext.params` 中写入 `SSE_PARAM_*` 保留字段并返回
+    /// `ContinueRequest(req)`。后续中间件必须通过 `SSE_HEADER_*` 内部响应头返回
+    /// 允许或拒绝决策。`SseMiddleware.response` 校验通过后才创建 `SseSender`、
+    /// 注册 Hub 并调用 `on_open`。
+    ///
+    /// 本方法会覆盖此前配置的 direct acceptor 决策来源；再次调用 `acceptor` 会回到默认直连
+    /// 决策模式。调用本方法本身为 `O(1)`，不执行 I/O、不启动任务。
+    pub fn port_handshake_with_key<F>(mut self, resolver: F) -> Self
+    where
+        F: for<'a> Fn(SseHandshakeAccept<'a>) -> SseResult<K> + Send + Sync + 'static,
+    {
+        self.handshake_key = Some(Arc::new(resolver));
         self
     }
 
@@ -1113,9 +1478,47 @@ where
             hub: self.hub,
             config: self.config,
             acceptor: self.acceptor,
+            handshake_key: self.handshake_key,
             on_open: self.on_open,
             heartbeat_starter: self.heartbeat_starter,
             require_accept_header: self.require_accept_header,
+        })
+    }
+}
+
+impl<S> SseMiddlewareBuilder<SseConnectionId, S>
+where
+    S: Socket,
+{
+    /// 启用以透明连接 ID 作为 Hub key 的 port/params 非终端握手模式。
+    ///
+    /// 后续中间件仍需写入 `accept` 决策并回传 ID/nonce，但不需要写入业务 key；
+    /// 中间件会直接使用候选 `SseConnectionId` 注册 Hub。适合只需要按透明 ID 发送的场景。
+    pub fn port_handshake(self) -> Self {
+        self.port_handshake_with_key(|accept| Ok(accept.id))
+    }
+}
+
+impl<S> SseMiddlewareBuilder<String, S>
+where
+    S: Socket,
+{
+    /// 启用以 `SSE_HEADER_KEY` 字符串作为 Hub key 的 port/params 非终端握手模式。
+    ///
+    /// 后续中间件必须在允许响应中写入非空 `SSE_HEADER_KEY`。该模式适合 `HttpPort`
+    /// handler 在完成上层 session 绑定后，把业务 session id、用户 id 或其它字符串 key
+    /// 交给 SSE Hub 使用。
+    pub fn port_handshake_string_key(self) -> Self {
+        self.port_handshake_with_key(|accept| {
+            let key = accept
+                .key
+                .ok_or_else(|| SseError::InvalidHandshake("missing SSE business key".to_string()))?;
+            if key.is_empty() {
+                return Err(SseError::InvalidHandshake(
+                    "empty SSE business key".to_string(),
+                ));
+            }
+            Ok(key.to_string())
         })
     }
 }
@@ -1144,6 +1547,12 @@ impl SseConnectionId {
     /// 该方法只暴露只读值，不允许反向构造连接。调用成本 `O(1)`，无副作用。
     pub fn get(self) -> u32 {
         self.0
+    }
+}
+
+impl Display for SseConnectionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -1970,11 +2379,119 @@ fn accepts_event_stream<S: Socket>(req: &HttpRequest<S>) -> bool {
         .unwrap_or(false)
 }
 
+fn inject_sse_handshake<S: Socket>(
+    context: &mut GatewayContext,
+    req: &HttpRequest<S>,
+    id: SseConnectionId,
+    nonce: &str,
+    last_event_id: Option<String>,
+) {
+    clear_sse_handshake_context(context);
+    {
+        let mut params = context.as_params().borrow_mut();
+        params.insert(SSE_PARAM_PENDING.to_string(), SGenType::Str("1".to_string()));
+        params.insert(
+            SSE_PARAM_CONNECTION_ID.to_string(),
+            SGenType::Str(id.get().to_string()),
+        );
+        params.insert(
+            SSE_PARAM_NONCE.to_string(),
+            SGenType::Str(nonce.to_string()),
+        );
+        if let Some(last_event_id) = last_event_id {
+            params.insert(
+                SSE_PARAM_LAST_EVENT_ID.to_string(),
+                SGenType::Str(last_event_id),
+            );
+        }
+        params.insert(
+            SSE_PARAM_REMOTE_ADDR.to_string(),
+            SGenType::Str(req.get_handle().get_remote().to_string()),
+        );
+    }
+
+    context.set(
+        SSE_ATTR_PENDING.to_string(),
+        SGenType::Str("1".to_string()),
+    );
+    context.set(
+        SSE_ATTR_CONNECTION_ID.to_string(),
+        SGenType::Str(id.get().to_string()),
+    );
+    context.set(
+        SSE_ATTR_NONCE.to_string(),
+        SGenType::Str(nonce.to_string()),
+    );
+}
+
+fn clear_sse_handshake_context(context: &mut GatewayContext) {
+    {
+        let mut params = context.as_params().borrow_mut();
+        params.remove(SSE_PARAM_PENDING);
+        params.remove(SSE_PARAM_CONNECTION_ID);
+        params.remove(SSE_PARAM_NONCE);
+        params.remove(SSE_PARAM_LAST_EVENT_ID);
+        params.remove(SSE_PARAM_REMOTE_ADDR);
+    }
+
+    let _ = context.remove(&SSE_ATTR_PENDING.to_string());
+    let _ = context.remove(&SSE_ATTR_CONNECTION_ID.to_string());
+    let _ = context.remove(&SSE_ATTR_NONCE.to_string());
+}
+
+fn context_attr_string(context: &GatewayContext, key: &str) -> Option<String> {
+    match context.get(&key.to_string()) {
+        Some(SGenType::Str(value)) => Some(value.clone()),
+        _ => None,
+    }
+}
+
+fn response_header_string(resp: &HttpResponse, key: &'static str) -> Option<String> {
+    let key = HeaderName::from_static(key);
+    resp.get_header(key)
+        .and_then(|value| value.to_str().ok().map(ToOwned::to_owned))
+}
+
+fn strip_sse_response_headers(resp: &mut HttpResponse) {
+    resp.remove_header(SSE_HEADER_DECISION);
+    resp.remove_header(SSE_HEADER_CONNECTION_ID);
+    resp.remove_header(SSE_HEADER_NONCE);
+    resp.remove_header(SSE_HEADER_KEY);
+    resp.remove_header(SSE_HEADER_REJECT_STATUS);
+    resp.remove_header(SSE_HEADER_REJECT_MESSAGE);
+}
+
+fn parse_connection_id(value: &str) -> Option<SseConnectionId> {
+    let id = value.parse::<u32>().ok()?;
+    if id == 0 {
+        None
+    } else {
+        Some(SseConnectionId(id))
+    }
+}
+
+fn parse_status_code(value: &str) -> Option<StatusCode> {
+    let code = value.parse::<u16>().ok()?;
+    StatusCode::from_u16(code).ok()
+}
+
+fn validate_handshake_header_value(name: &str, value: &str) -> SseResult<()> {
+    HeaderValue::from_str(value).map_err(|e| {
+        SseError::InvalidHandshake(format!(
+            "invalid SSE handshake header {}, reason: {:?}",
+            name, e
+        ))
+    })?;
+    Ok(())
+}
+
 fn sse_error_to_response(error: SseError) -> HttpResponse {
     let status = match error {
         SseError::InvalidMethod(_) => StatusCode::METHOD_NOT_ALLOWED,
         SseError::InvalidConfig(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        SseError::InvalidEvent(_) | SseError::EventTooLarge { .. } => StatusCode::BAD_REQUEST,
+        SseError::InvalidEvent(_)
+        | SseError::InvalidHandshake(_)
+        | SseError::EventTooLarge { .. } => StatusCode::BAD_REQUEST,
         SseError::QueueFull | SseError::Busy => StatusCode::SERVICE_UNAVAILABLE,
         SseError::Closed | SseError::ConnectionNotFound => StatusCode::GONE,
         SseError::ConnectionIdExhausted | SseError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -2051,6 +2568,11 @@ fn next_connection_id() -> SseConnectionId {
             return SseConnectionId(id);
         }
     }
+}
+
+fn next_handshake_nonce(id: SseConnectionId) -> String {
+    let nonce = SSE_HANDSHAKE_NONCE_ALLOCATOR.fetch_add(1, Ordering::Relaxed);
+    format!("{:08x}-{:08x}", id.get(), nonce)
 }
 
 #[cfg(test)]
@@ -2272,16 +2794,20 @@ mod tests {
     ///
     /// 该 helper 只用于中间件静态分支测试，不绑定真实网络端口；真实请求解析和 TCP 输出由
     /// `sse_real_network` 集成测试覆盖。
-    fn test_get_request(headers: HeaderMap) -> HttpRequest<TestSocket> {
+    fn test_request(method: &str, headers: HeaderMap) -> HttpRequest<TestSocket> {
         HttpRequest::new(
             test_handle(),
-            "GET",
+            method,
             "http://127.0.0.1/sse",
             Version::HTTP_11,
             headers,
             &[],
         )
         .expect("test HTTP request must be created")
+    }
+
+    fn test_get_request(headers: HeaderMap) -> HttpRequest<TestSocket> {
+        test_request("GET", headers)
     }
 
     /// 构造单元测试用 SSE 中间件配置。
@@ -2302,6 +2828,13 @@ mod tests {
         match result {
             MiddlewareResult::Finish(pair) => pair,
             _ => panic!("SSE middleware test expected Finish"),
+        }
+    }
+
+    fn expect_continue(result: MiddlewareResult<TestSocket>) -> HttpRequest<TestSocket> {
+        match result {
+            MiddlewareResult::ContinueRequest(req) => req,
+            _ => panic!("SSE middleware test expected ContinueRequest"),
         }
     }
 
@@ -2328,6 +2861,30 @@ mod tests {
 
     fn assert_send_sync<T: Send + Sync>() {}
     fn assert_clone<T: Clone>() {}
+
+    fn param_string(context: &GatewayContext, key: &str) -> Option<String> {
+        match context.as_params().borrow().get(key) {
+            Some(SGenType::Str(value)) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    fn no_internal_response_headers(resp: &HttpResponse) {
+        for key in [
+            SSE_HEADER_DECISION,
+            SSE_HEADER_CONNECTION_ID,
+            SSE_HEADER_NONCE,
+            SSE_HEADER_KEY,
+            SSE_HEADER_REJECT_STATUS,
+            SSE_HEADER_REJECT_MESSAGE,
+        ] {
+            assert!(
+                resp.get_header(HeaderName::from_static(key)).is_none(),
+                "internal SSE response header must be stripped: {}",
+                key
+            );
+        }
+    }
 
     /// 测试生产侧 `SseEvent` 的标准字段编码、多行 data、comment、id 和 retry。
     #[test]
@@ -2361,6 +2918,32 @@ mod tests {
             large.encode(4),
             Err(SseError::EventTooLarge { .. })
         ));
+    }
+
+    /// 测试生产侧 `SseError` 的公开错误展示分支。
+    ///
+    /// 被测生产入口：`Display for SseError`。该测试保护调用方可诊断错误文本，尤其是
+    /// 本轮新增的 `InvalidHandshake` 分支，避免公开错误枚举扩展后出现未覆盖展示语义。
+    #[test]
+    fn sse_error_display_covers_public_variants() {
+        let cases = [
+            SseError::InvalidConfig("cfg".to_string()).to_string(),
+            SseError::InvalidMethod("POST".to_string()).to_string(),
+            SseError::InvalidEvent("event".to_string()).to_string(),
+            SseError::InvalidHandshake("handshake".to_string()).to_string(),
+            SseError::EventTooLarge { len: 9, limit: 4 }.to_string(),
+            SseError::QueueFull.to_string(),
+            SseError::Busy.to_string(),
+            SseError::Closed.to_string(),
+            SseError::ConnectionNotFound.to_string(),
+            SseError::ConnectionIdExhausted.to_string(),
+            SseError::Io(std::io::Error::new(std::io::ErrorKind::Other, "io")).to_string(),
+        ];
+
+        assert!(cases.iter().any(|text| text.contains("invalid SSE handshake")));
+        assert!(cases.iter().any(|text| text.contains("SSE queue is full")));
+        assert!(cases.iter().any(|text| text.contains("SSE io error")));
+        assert_eq!(cases.len(), 11);
     }
 
     /// 测试生产侧 `SseConfigBuilder` 对非法配置返回错误而不是静默修正。
@@ -2549,6 +3132,278 @@ mod tests {
         }
     }
 
+    /// 测试生产侧 `SseMiddleware` port/params 握手模式在请求阶段注入可信内部参数。
+    ///
+    /// 被测生产入口：`SseMiddlewareBuilder::port_handshake`、
+    /// `SseMiddleware::request`、`GatewayContext.params` 保留命名空间。
+    /// 该测试验证客户端伪造的同名参数会被覆盖，且请求阶段不创建 sender、不注册 Hub。
+    #[test]
+    fn sse_middleware_port_handshake_injects_params_and_continues() {
+        let hub = SseHub::<SseConnectionId, TestSocket>::builder().build();
+        let middleware = SseMiddleware::builder(hub.clone())
+            .config(test_middleware_config())
+            .port_handshake()
+            .build()
+            .expect("port handshake middleware must build");
+        let mut context = GatewayContext::new();
+        context.as_params().borrow_mut().insert(
+            SSE_PARAM_PENDING.to_string(),
+            SGenType::Str("client-spoof".to_string()),
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static(LAST_EVENT_ID_HEADER),
+            HeaderValue::from_static("evt-42"),
+        );
+        let req = test_get_request(headers);
+
+        let _req = expect_continue(block_on(middleware.request(&mut context, req)));
+
+        assert_eq!(
+            param_string(&context, SSE_PARAM_PENDING).as_deref(),
+            Some("1")
+        );
+        let id = param_string(&context, SSE_PARAM_CONNECTION_ID)
+            .and_then(|value| parse_connection_id(&value))
+            .expect("SSE handshake id must be injected");
+        assert_ne!(id.get(), 0);
+        assert!(
+            param_string(&context, SSE_PARAM_NONCE)
+                .expect("SSE handshake nonce must be injected")
+                .contains('-')
+        );
+        assert_eq!(
+            param_string(&context, SSE_PARAM_LAST_EVENT_ID).as_deref(),
+            Some("evt-42")
+        );
+        assert!(param_string(&context, SSE_PARAM_REMOTE_ADDR).is_some());
+        assert!(hub.snapshot().is_empty());
+    }
+
+    /// 测试生产侧 `SseMiddleware` port/params 握手模式在请求前置校验失败时不会注入内部参数。
+    ///
+    /// 被测生产入口：`SseMiddlewareBuilder::require_accept_header`、
+    /// `SseMiddlewareBuilder::port_handshake` 和 `SseMiddleware::request`。
+    /// 该测试保护的语义是：不满足 SSE 请求边界的请求会在进入后续中间件前被拒绝，
+    /// 且不会遗留 `SSE_PARAM_*` 候选状态。
+    #[test]
+    fn sse_middleware_port_handshake_rejects_invalid_request_before_injection() {
+        let hub = SseHub::<SseConnectionId, TestSocket>::builder().build();
+        let middleware = SseMiddleware::builder(hub.clone())
+            .config(test_middleware_config())
+            .require_accept_header(true)
+            .port_handshake()
+            .build()
+            .expect("port handshake middleware must build");
+
+        let mut missing_accept_context = GatewayContext::new();
+        let missing_accept_resp = expect_break(block_on(middleware.request(
+            &mut missing_accept_context,
+            test_get_request(HeaderMap::new()),
+        )));
+        assert!(!missing_accept_resp.is_stream());
+        assert!(response_text(missing_accept_resp)
+            .to_ascii_lowercase()
+            .contains("406"));
+        assert!(param_string(&missing_accept_context, SSE_PARAM_PENDING).is_none());
+
+        let mut headers = HeaderMap::new();
+        headers.insert(ACCEPT, HeaderValue::from_static(SSE_CONTENT_TYPE));
+        let mut post_context = GatewayContext::new();
+        let post_resp = expect_break(block_on(middleware.request(
+            &mut post_context,
+            test_request("POST", headers),
+        )));
+        assert!(!post_resp.is_stream());
+        assert!(response_text(post_resp)
+            .to_ascii_lowercase()
+            .contains("405"));
+        assert!(param_string(&post_context, SSE_PARAM_PENDING).is_none());
+        assert!(hub.snapshot().is_empty());
+    }
+
+    /// 测试生产侧 `SseMiddleware` port/params 握手模式在后续中间件允许后才创建 sender。
+    ///
+    /// 被测生产入口：`write_sse_accept_headers`、`SseMiddleware::response`、
+    /// `SseMiddlewareBuilder::port_handshake_string_key` 和 `on_open`。
+    /// 该测试保护的语义是：请求阶段不触发 `on_open`，响应阶段校验 ID/nonce 和 key 后才注册 Hub。
+    #[test]
+    fn sse_middleware_port_handshake_accepts_after_port_decision() {
+        let hub = SseHub::<String, TestSocket>::builder().build();
+        let opened = Arc::new(AtomicU32::new(0));
+        let opened_for_handler = opened.clone();
+        let middleware = SseMiddleware::with_acceptor(hub.clone(), |_accept| {
+            unreachable!("port handshake mode must not call direct acceptor")
+        })
+        .config(test_middleware_config())
+        .port_handshake_string_key()
+        .on_open(move |open| {
+            assert_eq!(open.key, "session-a");
+            open.sender.try_send_data("opened by port")?;
+            opened_for_handler.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        })
+        .build()
+        .expect("port handshake middleware must build");
+        let mut context = GatewayContext::new();
+        let req = expect_continue(block_on(
+            middleware.request(&mut context, test_get_request(HeaderMap::new())),
+        ));
+        assert_eq!(opened.load(Ordering::Relaxed), 0);
+        let id = param_string(&context, SSE_PARAM_CONNECTION_ID)
+            .and_then(|value| parse_connection_id(&value))
+            .expect("SSE handshake id must exist");
+        let nonce = param_string(&context, SSE_PARAM_NONCE).expect("SSE nonce must exist");
+
+        let downstream = HttpResponse::new(2);
+        let handler = downstream
+            .get_response_handler()
+            .expect("downstream response handler must exist");
+        write_sse_accept_headers(&handler, id, &nonce, "session-a")
+            .expect("accept handshake headers must be valid");
+        let resp = expect_break(block_on(middleware.response(&mut context, req, downstream)));
+
+        assert!(resp.is_stream());
+        no_internal_response_headers(&resp);
+        assert_eq!(opened.load(Ordering::Relaxed), 1);
+        assert_eq!(hub.get(&"session-a".to_string()).len(), 1);
+        assert!(drain_event(&resp).contains("data: opened by port"));
+        assert!(param_string(&context, SSE_PARAM_PENDING).is_none());
+    }
+
+    /// 测试生产侧 `SseMiddleware` port/params 握手模式能由后续中间件拒绝建连。
+    ///
+    /// 被测生产入口：`write_sse_reject_headers` 与 `SseMiddleware::response`。
+    /// 拒绝路径必须返回普通 HTTP 响应，不创建 sender、不注册 Hub、不触发 `on_open`。
+    #[test]
+    fn sse_middleware_port_handshake_rejects_without_sender() {
+        let hub = SseHub::<String, TestSocket>::builder().build();
+        let opened = Arc::new(AtomicU32::new(0));
+        let opened_for_handler = opened.clone();
+        let middleware = SseMiddleware::with_acceptor(hub.clone(), |_accept| {
+            unreachable!("port handshake mode must not call direct acceptor")
+        })
+        .on_open(move |_open| {
+            opened_for_handler.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        })
+        .port_handshake_string_key()
+        .build()
+        .expect("string port handshake middleware must build");
+
+        let mut context = GatewayContext::new();
+        let req = expect_continue(block_on(
+            middleware.request(&mut context, test_get_request(HeaderMap::new())),
+        ));
+        let id = param_string(&context, SSE_PARAM_CONNECTION_ID)
+            .and_then(|value| parse_connection_id(&value))
+            .expect("SSE handshake id must exist");
+        let nonce = param_string(&context, SSE_PARAM_NONCE).expect("SSE nonce must exist");
+        let downstream = HttpResponse::new(2);
+        let handler = downstream.get_response_handler().unwrap();
+        write_sse_reject_headers(&handler, id, &nonce, StatusCode::UNAUTHORIZED, "denied")
+            .expect("reject handshake headers must be valid");
+
+        let (_req, resp) = expect_finish(block_on(middleware.response(
+            &mut context,
+            req,
+            downstream,
+        )));
+        assert!(!resp.is_stream());
+        assert!(response_text(resp).to_ascii_lowercase().contains("401"));
+        assert_eq!(opened.load(Ordering::Relaxed), 0);
+        assert!(hub.snapshot().is_empty());
+        assert!(param_string(&context, SSE_PARAM_PENDING).is_none());
+    }
+
+    /// 测试生产侧 `SseMiddleware` port/params 握手模式对缺失或不匹配决策默认拒绝。
+    ///
+    /// 被测生产入口：`SseMiddleware::response` 的内部响应头校验。
+    /// 该测试覆盖安全边界：没有后续中间件明确允许、或响应头中的 nonce 不匹配时，不会打开 SSE。
+    #[test]
+    fn sse_middleware_port_handshake_rejects_missing_or_mismatched_decision() {
+        let hub = SseHub::<SseConnectionId, TestSocket>::builder().build();
+        let middleware = SseMiddleware::builder(hub.clone())
+            .config(test_middleware_config())
+            .port_handshake()
+            .build()
+            .expect("port handshake middleware must build");
+
+        let mut missing_context = GatewayContext::new();
+        let missing_req = expect_continue(block_on(
+            middleware.request(&mut missing_context, test_get_request(HeaderMap::new())),
+        ));
+        let (_req, missing_resp) = expect_finish(block_on(middleware.response(
+            &mut missing_context,
+            missing_req,
+            HttpResponse::new(2),
+        )));
+        assert!(!missing_resp.is_stream());
+        assert!(response_text(missing_resp)
+            .to_ascii_lowercase()
+            .contains("403"));
+
+        let mut mismatch_context = GatewayContext::new();
+        let mismatch_req = expect_continue(block_on(
+            middleware.request(&mut mismatch_context, test_get_request(HeaderMap::new())),
+        ));
+        let id = param_string(&mismatch_context, SSE_PARAM_CONNECTION_ID)
+            .and_then(|value| parse_connection_id(&value))
+            .expect("SSE handshake id must exist");
+        let downstream = HttpResponse::new(2);
+        let handler = downstream.get_response_handler().unwrap();
+        write_sse_accept_headers(&handler, id, "wrong-nonce", "")
+            .expect("mismatched accept handshake headers must be syntactically valid");
+        let (_req, mismatch_resp) = expect_finish(block_on(middleware.response(
+            &mut mismatch_context,
+            mismatch_req,
+            downstream,
+        )));
+        assert!(!mismatch_resp.is_stream());
+        assert!(hub.snapshot().is_empty());
+        assert!(param_string(&mismatch_context, SSE_PARAM_PENDING).is_none());
+    }
+
+    /// 测试生产侧 `SseMiddleware` 字符串 key port/params 模式在缺失业务 key 时拒绝打开 SSE。
+    ///
+    /// 被测生产入口：`SseMiddlewareBuilder::port_handshake_string_key` 与
+    /// `SseMiddleware::response` 的 key 解析分支。该测试覆盖后续中间件只写入允许决策、
+    /// 但未完成上层 session/key 绑定时的失败路径。
+    #[test]
+    fn sse_middleware_port_handshake_rejects_missing_business_key() {
+        let hub = SseHub::<String, TestSocket>::builder().build();
+        let middleware = SseMiddleware::with_acceptor(hub.clone(), |_accept| {
+            unreachable!("port handshake mode must not call direct acceptor")
+        })
+        .port_handshake_string_key()
+        .build()
+        .expect("string port handshake middleware must build");
+        let mut context = GatewayContext::new();
+        let req = expect_continue(block_on(
+            middleware.request(&mut context, test_get_request(HeaderMap::new())),
+        ));
+        let id = param_string(&context, SSE_PARAM_CONNECTION_ID)
+            .and_then(|value| parse_connection_id(&value))
+            .expect("SSE handshake id must exist");
+        let nonce = param_string(&context, SSE_PARAM_NONCE).expect("SSE nonce must exist");
+        let mut downstream = HttpResponse::new(2);
+        downstream.insert_header(SSE_HEADER_DECISION, SSE_DECISION_ACCEPT);
+        downstream.insert_header(SSE_HEADER_CONNECTION_ID, &id.to_string());
+        downstream.insert_header(SSE_HEADER_NONCE, &nonce);
+
+        let (_req, resp) = expect_finish(block_on(middleware.response(
+            &mut context,
+            req,
+            downstream,
+        )));
+        assert!(!resp.is_stream());
+        assert!(response_text(resp)
+            .to_ascii_lowercase()
+            .contains("missing sse business key"));
+        assert!(hub.snapshot().is_empty());
+        assert!(param_string(&context, SSE_PARAM_PENDING).is_none());
+    }
+
     /// 测试生产侧 `SseMiddleware` 允许外部拒绝打开 SSE。
     ///
     /// 被拒绝时应返回普通 HTTP 响应，不注册 Hub，不返回 stream response，也不会要求外部保存
@@ -2719,6 +3574,27 @@ mod tests {
 
         let report = hub.try_send_to_id(SseConnectionId(u32::MAX), SseEvent::data("missing"));
         assert_eq!(report.not_found, 1);
+    }
+
+    /// 测试生产侧 `SseHub::send_to` 异步发送路径会真实进入队列并保持报告一致。
+    ///
+    /// 被测生产入口：`SseHub::send_to`、内部 `send_many` 和 `SseSender::send`。
+    /// 该测试覆盖异步等待队列容量的成功路径，区别于 `try_send_to_id` 的同步非阻塞路径。
+    #[test]
+    fn sse_hub_async_send_to_reports_and_delivers() {
+        let hub = SseHub::<String, TestSocket>::builder().build();
+        let fixture = test_sender(2);
+        let id = hub
+            .register("session".to_string(), fixture.sender.clone())
+            .unwrap();
+
+        let report = block_on(hub.send_to(&"session".to_string(), SseEvent::data("async data")));
+
+        assert_eq!(report.total, 1);
+        assert_eq!(report.sent, 1);
+        assert!(report.failures.is_empty());
+        assert!(drain_event(&fixture._resp).contains("data: async data"));
+        hub.unregister(id).unwrap();
     }
 
     /// 测试生产侧 `SseHub::close` 摘除并关闭连接，`unregister` 与关闭副作用保持分离。

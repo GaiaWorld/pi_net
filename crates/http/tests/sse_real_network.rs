@@ -23,12 +23,20 @@
 
 use std::io::{Error, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::mpsc;
+use std::cell::RefCell;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use https::StatusCode;
+use futures::{
+    future::{FutureExt, LocalBoxFuture},
+};
+use https::{HeaderMap, StatusCode};
+use pi_atom::Atom;
 use pi_async_rt::rt::{serial::AsyncRuntimeBuilder, startup_global_time_loop};
+use pi_gray::GrayVersion;
+use pi_handler::{Args, Handler, SGenType};
+use pi_hash::XHashMap;
 use tcp::{
     connect::TcpSocket,
     server::{PortsAdapterFactory, SocketListener},
@@ -37,9 +45,15 @@ use tcp::{
 
 use pi_http::{
     gateway::GatewayContext,
+    middleware::MiddlewareChain,
+    port::HttpPort,
     route::HttpRoute,
     server::HttpListenerFactory,
-    sse::{SseAcceptDecision, SseConfig, SseEvent, SseHub, SseMiddleware},
+    response::ResponseHandler,
+    sse::{
+        write_sse_accept_headers, write_sse_reject_headers, SseAcceptDecision, SseConfig,
+        SseEvent, SseHub, SseMiddleware, SSE_PARAM_CONNECTION_ID, SSE_PARAM_NONCE,
+    },
     virtual_host::{VirtualHost, VirtualHostPool, VirtualHostTab},
 };
 
@@ -58,6 +72,89 @@ enum SseNetworkScenario {
     SameThreadOrder,
     CrossThreadControlledOrder,
     Heartbeat,
+}
+
+/// 真实网络 port/params 握手测试场景。
+///
+/// 对应生产侧 `SseMiddleware` 非终端模式：
+/// - `Accept` 验证 `SseMiddleware -> HttpPort` 中由 port handler 允许建连并绑定业务 key。
+/// - `Reject` 验证 port handler 可返回普通 HTTP 拒绝响应，且不会创建 SSE stream。
+#[derive(Clone, Copy)]
+enum SsePortNetworkScenario {
+    Accept,
+    Reject,
+}
+
+/// 真实网络测试用 `HttpPort` handler。
+///
+/// 被测生产入口：
+/// - 读取 `GatewayContext.params` 中的 `SSE_PARAM_CONNECTION_ID` / `SSE_PARAM_NONCE`。
+/// - 通过 `ResponseHandler` 写入 SSE 内部响应头。
+/// - 由 `SseMiddleware.response` 在后续响应阶段消费这些头。
+///
+/// 该 handler 只服务测试路由，不执行外部 I/O；真实网络副作用来自 `SocketListener`
+/// 和客户端 `TcpStream`。
+struct SsePortDecisionHandler {
+    scenario: SsePortNetworkScenario,
+}
+
+impl Handler for SsePortDecisionHandler {
+    type A = SocketAddr;
+    type B = String;
+    type C = Arc<HeaderMap>;
+    type D = Arc<RefCell<XHashMap<String, SGenType>>>;
+    type E = ResponseHandler;
+    type F = ();
+    type G = ();
+    type H = ();
+    type HandleResult = ();
+
+    fn handle(
+        &self,
+        _env: Arc<dyn GrayVersion>,
+        _topic: Atom,
+        args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>,
+    ) -> LocalBoxFuture<'static, Self::HandleResult> {
+        let scenario = self.scenario;
+        async move {
+            if let Args::FiveArgs(_addr, _method, _headers, params, response) = args {
+                let (id, nonce) = {
+                    let params = params.borrow();
+                    let id = match params.get(SSE_PARAM_CONNECTION_ID) {
+                        Some(SGenType::Str(value)) => value.clone(),
+                        _ => panic!("port handler must receive SSE connection id"),
+                    };
+                    let nonce = match params.get(SSE_PARAM_NONCE) {
+                        Some(SGenType::Str(value)) => value.clone(),
+                        _ => panic!("port handler must receive SSE nonce"),
+                    };
+                    (id, nonce)
+                };
+
+                match scenario {
+                    SsePortNetworkScenario::Accept => {
+                        write_sse_accept_headers(&response, id.as_str(), &nonce, "port-session-a")
+                            .expect("port accept handshake headers must be valid");
+                    }
+                    SsePortNetworkScenario::Reject => {
+                        write_sse_reject_headers(
+                            &response,
+                            id.as_str(),
+                            &nonce,
+                            StatusCode::UNAUTHORIZED,
+                            "port rejected sse",
+                        )
+                        .expect("port reject handshake headers must be valid");
+                    }
+                }
+                response
+                    .finish()
+                    .await
+                    .expect("port decision response must finish");
+            }
+        }
+        .boxed_local()
+    }
 }
 
 /// 在真实网络测试服务端线程中发送一条具名 SSE 事件。
@@ -250,6 +347,107 @@ fn start_sse_server(
     (listener, addr)
 }
 
+/// 启动真实 `SseMiddleware -> HttpPort` port/params 握手服务端。
+///
+/// 该函数覆盖生产侧组合边界：
+/// - `SseMiddleware` 在请求阶段作为非终端中间件注入 `GatewayContext.params`。
+/// - `HttpPort` 把该 Map 传给上层 handler。
+/// - handler 写入内部响应头。
+/// - 响应阶段反向回到 `SseMiddleware`，由它完成 Hub 注册、`on_open` 和 stream 响应。
+fn start_sse_port_server(
+    scenario: SsePortNetworkScenario,
+) -> (
+    SocketListener<TcpSocket, PortsAdapterFactory<TcpSocket>>,
+    SocketAddr,
+) {
+    let port = reserve_local_port();
+    let addr: SocketAddr = format!("127.0.0.1:{}", port)
+        .parse()
+        .expect("test addr must parse");
+
+    let hub = SseHub::<String, TcpSocket>::builder().build();
+    let hub_for_open = hub.clone();
+    let middleware = SseMiddleware::with_acceptor(hub.clone(), |_accept| {
+        unreachable!("port/params handshake must not call direct acceptor")
+    })
+    .config(
+        SseConfig::builder()
+            .channel_size(8)
+            .heartbeat_interval_ms(0)
+            .send_initial_comment(false)
+            .build()
+            .expect("SSE port test config must be valid"),
+    )
+    .port_handshake_string_key()
+    .on_open(move |open| {
+        assert_eq!(open.key, "port-session-a");
+        let hub_for_thread = hub_for_open.clone();
+        let id = open.id;
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            send_ordered_event(
+                &hub_for_thread,
+                id,
+                "evt-port-1",
+                "session",
+                "port session ready",
+            );
+            hub_for_thread
+                .try_close(id)
+                .expect("SSE port test connection must close explicitly");
+        });
+        Ok(())
+    })
+    .build()
+    .expect("SSE port middleware must build");
+
+    let port_handler = HttpPort::with_handler(
+        None,
+        Arc::new(SsePortDecisionHandler {
+            scenario,
+        }),
+    );
+    let mut chain = MiddlewareChain::<TcpSocket, GatewayContext>::new();
+    chain.push_back(Arc::new(middleware));
+    chain.push_back(Arc::new(port_handler));
+    chain.finish();
+    let chain = Arc::new(chain);
+
+    let mut route =
+        HttpRoute::<TcpSocket, GatewayContext, Arc<MiddlewareChain<TcpSocket, GatewayContext>>>::new();
+    route.at("/sse").get(chain);
+    let host = VirtualHost::with(route);
+    let mut hosts = VirtualHostTab::<TcpSocket, Arc<MiddlewareChain<TcpSocket, GatewayContext>>>::new();
+    hosts
+        .add_default(host)
+        .expect("test virtual host must register");
+
+    let mut factory = PortsAdapterFactory::<TcpSocket>::new();
+    factory.bind(
+        port,
+        HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 5000).new_service(),
+    );
+
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let mut config = SocketConfig::new("127.0.0.1", &[port]);
+    config.set_option(16 * 1024, 16 * 1024, 16 * 1024, 16);
+    let listener = SocketListener::try_bind(
+        vec![rt],
+        factory,
+        config,
+        64,
+        1024 * 1024,
+        128,
+        8,
+        16 * 1024,
+        16 * 1024,
+        Some(10),
+    )
+    .expect("test SSE port server must bind");
+
+    (listener, addr)
+}
+
 /// 断言真实 HTTP 响应文本中 `first` 出现在 `second` 之前。
 ///
 /// 该 helper 对应生产侧顺序语义验收：事件顺序必须在最终网络字节流中保持，而不是只在
@@ -427,6 +625,95 @@ fn sse_real_network_acceptor_can_reject_open_request() {
             .windows(b"0\r\n\r\n".len())
             .any(|w| w == b"0\r\n\r\n"),
         "reject response must not contain chunked finish frame, got: {}",
+        String::from_utf8_lossy(&response)
+    );
+}
+
+/// 真实网络验证 port/params 握手模式可由 `HttpPort` handler 决定允许建连并绑定业务 key。
+///
+/// 对应生产侧功能/API：
+/// - `SseMiddlewareBuilder::port_handshake_string_key`：请求阶段非终端注入 `GatewayContext.params`。
+/// - `HttpPort`：把参数 Map 交给上层 handler。
+/// - `write_sse_accept_headers`：handler 通过内部响应头允许 SSE 并传入业务 key。
+/// - `on_open`：在 Hub 注册后拿到 sender，并基于 key/id 建立进程内映射或发送初始化事件。
+///
+/// 验收断言：
+/// - 响应是标准 HTTP/1.1 SSE stream。
+/// - 响应体包含由 `on_open` 后真实 Hub 发送的事件。
+/// - 内部 `x-pi-http-sse-*` 响应头不会泄漏到客户端。
+#[test]
+fn sse_real_network_port_handshake_accepts_and_binds_key() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let _timer = startup_global_time_loop(10);
+    let (listener, addr) = start_sse_port_server(SsePortNetworkScenario::Accept);
+    thread::sleep(Duration::from_millis(100));
+
+    let response = read_sse_response(addr);
+    listener.close(Err(Error::new(
+        ErrorKind::Interrupted,
+        "close SSE port accept test listener",
+    )));
+
+    let text = String::from_utf8_lossy(&response).to_ascii_lowercase();
+    assert!(
+        text.contains("http/1.1 200"),
+        "port accept response must contain HTTP 200 status, got: {}",
+        String::from_utf8_lossy(&response)
+    );
+    assert!(
+        text.contains("content-type:text/event-stream; charset=utf-8"),
+        "port accept response must be SSE stream, got: {}",
+        String::from_utf8_lossy(&response)
+    );
+    assert!(
+        text.contains("data: port session ready"),
+        "port accept response must contain initialized SSE event, got: {}",
+        String::from_utf8_lossy(&response)
+    );
+    assert!(
+        !text.contains("x-pi-http-sse-"),
+        "internal SSE handshake headers must not leak, got: {}",
+        String::from_utf8_lossy(&response)
+    );
+}
+
+/// 真实网络验证 port/params 握手模式可由 `HttpPort` handler 拒绝建连。
+///
+/// 对应生产侧功能/API：
+/// - `write_sse_reject_headers`：handler 明确拒绝当前 SSE 候选请求。
+/// - `SseMiddleware::response`：返回普通 HTTP 拒绝响应，不创建 sender、不返回 stream。
+#[test]
+fn sse_real_network_port_handshake_rejects_open_request() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let _timer = startup_global_time_loop(10);
+    let (listener, addr) = start_sse_port_server(SsePortNetworkScenario::Reject);
+    thread::sleep(Duration::from_millis(100));
+
+    let response = read_sse_response(addr);
+    listener.close(Err(Error::new(
+        ErrorKind::Interrupted,
+        "close SSE port reject test listener",
+    )));
+
+    let text = String::from_utf8_lossy(&response).to_ascii_lowercase();
+    assert!(
+        text.contains("http/1.1 401"),
+        "port reject response must contain HTTP 401 status, got: {}",
+        String::from_utf8_lossy(&response)
+    );
+    assert!(
+        text.contains("port rejected sse"),
+        "port reject response must contain reject reason, got: {}",
+        String::from_utf8_lossy(&response)
+    );
+    assert!(
+        !text.contains("content-type:text/event-stream"),
+        "port reject response must not be SSE stream, got: {}",
+        String::from_utf8_lossy(&response)
+    );
+    assert!(
+        !text.contains("x-pi-http-sse-"),
+        "internal SSE handshake headers must not leak, got: {}",
         String::from_utf8_lossy(&response)
     );
 }

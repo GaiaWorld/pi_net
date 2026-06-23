@@ -10,6 +10,7 @@
 //! - 严格顺序：同一连接、同一发送线程连续发送固定序列，客户端逐条验证顺序。
 //! - 并发吞吐：多个真实客户端并发建立 SSE，每个连接接收固定事件数。
 //! - 首事件延迟：单连接从写入请求到读到第一条 `data:` 的延迟。
+//! - port/params 握手：真实 `SseMiddleware -> HttpPort` 链路下的严格顺序、并发吞吐和首事件延迟。
 //!
 //! 运行入口：
 //!
@@ -21,10 +22,20 @@ extern crate test;
 
 use std::io::{Error, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::cell::RefCell;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use futures::{
+    future::{FutureExt, LocalBoxFuture},
+};
+use https::HeaderMap;
+use pi_atom::Atom;
 use pi_async_rt::rt::{serial::AsyncRuntimeBuilder, startup_global_time_loop};
+use pi_gray::GrayVersion;
+use pi_handler::{Args, Handler, SGenType};
+use pi_hash::XHashMap;
 use tcp::{
     connect::TcpSocket,
     server::{PortsAdapterFactory, SocketListener},
@@ -34,9 +45,15 @@ use test::{black_box, Bencher};
 
 use pi_http::{
     gateway::GatewayContext,
+    middleware::MiddlewareChain,
+    port::HttpPort,
+    response::ResponseHandler,
     route::HttpRoute,
     server::HttpListenerFactory,
-    sse::{SseAcceptDecision, SseConfig, SseEvent, SseHub, SseMiddleware},
+    sse::{
+        write_sse_accept_headers, SseAcceptDecision, SseConfig, SseEvent, SseHub,
+        SseMiddleware, SSE_PARAM_CONNECTION_ID, SSE_PARAM_NONCE,
+    },
     virtual_host::{VirtualHost, VirtualHostPool, VirtualHostTab},
 };
 
@@ -53,6 +70,57 @@ enum BenchScenario {
     StrictOrder { events: usize },
     ConcurrentThroughput { events_per_client: usize },
     FirstEventLatency,
+}
+
+/// port/params 握手 benchmark 用 `HttpPort` handler。
+///
+/// 对应生产侧路径：handler 从 `GatewayContext.params` 读取 SSE 候选 ID/nonce，并通过
+/// `ResponseHandler` 写入内部 accept 头。该 handler 不执行外部 I/O；所有网络成本都来自
+/// 真实服务端和真实客户端。
+struct SsePortBenchHandler;
+
+impl Handler for SsePortBenchHandler {
+    type A = SocketAddr;
+    type B = String;
+    type C = Arc<HeaderMap>;
+    type D = Arc<RefCell<XHashMap<String, SGenType>>>;
+    type E = ResponseHandler;
+    type F = ();
+    type G = ();
+    type H = ();
+    type HandleResult = ();
+
+    fn handle(
+        &self,
+        _env: Arc<dyn GrayVersion>,
+        _topic: Atom,
+        args: Args<Self::A, Self::B, Self::C, Self::D, Self::E, Self::F, Self::G, Self::H>,
+    ) -> LocalBoxFuture<'static, Self::HandleResult> {
+        async move {
+            if let Args::FiveArgs(_addr, _method, _headers, params, response) = args {
+                let (id, nonce) = {
+                    let params = params.borrow();
+                    let id = match params.get(SSE_PARAM_CONNECTION_ID) {
+                        Some(SGenType::Str(value)) => value.clone(),
+                        _ => panic!("port benchmark handler must receive SSE connection id"),
+                    };
+                    let nonce = match params.get(SSE_PARAM_NONCE) {
+                        Some(SGenType::Str(value)) => value.clone(),
+                        _ => panic!("port benchmark handler must receive SSE nonce"),
+                    };
+                    (id, nonce)
+                };
+
+                write_sse_accept_headers(&response, id.as_str(), &nonce, "bench-port-client")
+                    .expect("port benchmark accept handshake headers must be valid");
+                response
+                    .finish()
+                    .await
+                    .expect("port benchmark response must finish");
+            }
+        }
+        .boxed_local()
+    }
 }
 
 /// 真实网络 benchmark server。
@@ -164,6 +232,94 @@ fn start_bench_server(scenario: BenchScenario) -> BenchServer {
         Some(10),
     )
     .expect("benchmark SSE server must bind");
+
+    thread::sleep(Duration::from_millis(100));
+
+    BenchServer {
+        _timer: timer,
+        listener: Some(listener),
+        addr,
+    }
+}
+
+/// 启动真实 port/params 握手 benchmark server。
+///
+/// 构建成本不计入 `b.iter`。每次迭代仍会真实经过
+/// `SseMiddleware.request -> HttpPort.request -> HttpPort.response -> SseMiddleware.response`
+/// 后才返回 SSE stream。
+fn start_port_bench_server(events_per_connection: usize) -> BenchServer {
+    let timer = startup_global_time_loop(10);
+    let port = reserve_local_port();
+    let addr: SocketAddr = format!("127.0.0.1:{}", port)
+        .parse()
+        .expect("benchmark addr must parse");
+
+    let hub = SseHub::<String, TcpSocket>::builder().build();
+    let hub_for_open = hub.clone();
+    let middleware = SseMiddleware::with_acceptor(hub.clone(), |_accept| {
+        unreachable!("port/params benchmark must not call direct acceptor")
+    })
+    .config(
+        SseConfig::builder()
+            .channel_size(1024)
+            .heartbeat_interval_ms(0)
+            .send_initial_comment(false)
+            .build()
+            .expect("benchmark SSE config must be valid"),
+    )
+    .port_handshake_string_key()
+    .on_open(move |open| {
+        let hub_for_thread = hub_for_open.clone();
+        let id = open.id;
+        thread::spawn(move || {
+            send_sequence(&hub_for_thread, id, events_per_connection);
+            hub_for_thread
+                .try_close(id)
+                .expect("benchmark SSE port connection must close");
+        });
+        Ok(())
+    })
+    .build()
+    .expect("benchmark SSE port middleware must build");
+
+    let port_handler = HttpPort::with_handler(None, Arc::new(SsePortBenchHandler));
+    let mut chain = MiddlewareChain::<TcpSocket, GatewayContext>::new();
+    chain.push_back(Arc::new(middleware));
+    chain.push_back(Arc::new(port_handler));
+    chain.finish();
+    let chain = Arc::new(chain);
+
+    type BenchChain = Arc<MiddlewareChain<TcpSocket, GatewayContext>>;
+    let mut route = HttpRoute::<TcpSocket, GatewayContext, BenchChain>::new();
+    route.at("/sse").get(chain);
+    let host = VirtualHost::with(route);
+    let mut hosts = VirtualHostTab::<TcpSocket, BenchChain>::new();
+    hosts
+        .add_default(host)
+        .expect("benchmark virtual host must register");
+
+    let mut factory = PortsAdapterFactory::<TcpSocket>::new();
+    factory.bind(
+        port,
+        HttpListenerFactory::<TcpSocket, _>::with_hosts(hosts, 5000).new_service(),
+    );
+
+    let rt = AsyncRuntimeBuilder::default_local_thread(None, None);
+    let mut config = SocketConfig::new("127.0.0.1", &[port]);
+    config.set_option(16 * 1024, 16 * 1024, 16 * 1024, 64);
+    let listener = SocketListener::try_bind(
+        vec![rt],
+        factory,
+        config,
+        128,
+        1024 * 1024,
+        128,
+        8,
+        16 * 1024,
+        16 * 1024,
+        Some(10),
+    )
+    .expect("benchmark SSE port server must bind");
 
     thread::sleep(Duration::from_millis(100));
 
@@ -308,6 +464,56 @@ fn bench_sse_real_network_concurrent_throughput_16x32(b: &mut Bencher) {
 #[bench]
 fn bench_sse_real_network_first_event_latency(b: &mut Bencher) {
     let server = start_bench_server(BenchScenario::FirstEventLatency);
+    b.bytes = 1;
+
+    b.iter(|| {
+        let started = Instant::now();
+        let (data, first_latency) = read_sse_events(server.addr, started);
+        assert_eq!(data.len(), 1);
+        black_box(first_latency);
+    });
+}
+
+#[bench]
+fn bench_sse_real_network_port_handshake_strict_order_64_events(b: &mut Bencher) {
+    let server = start_port_bench_server(STRICT_ORDER_EVENTS);
+    b.bytes = STRICT_ORDER_EVENTS as u64;
+
+    b.iter(|| {
+        let started = Instant::now();
+        let (data, first_latency) = read_sse_events(server.addr, started);
+        black_box(first_latency);
+        assert_strict_order(&data, STRICT_ORDER_EVENTS);
+    });
+}
+
+#[bench]
+fn bench_sse_real_network_port_handshake_concurrent_throughput_16x32(b: &mut Bencher) {
+    let server = start_port_bench_server(THROUGHPUT_EVENTS_PER_CLIENT);
+    b.bytes = (THROUGHPUT_CLIENTS * THROUGHPUT_EVENTS_PER_CLIENT) as u64;
+
+    b.iter(|| {
+        let mut clients = Vec::with_capacity(THROUGHPUT_CLIENTS);
+        for _ in 0..THROUGHPUT_CLIENTS {
+            let addr = server.addr;
+            clients.push(thread::spawn(move || {
+                let started = Instant::now();
+                let (data, first_latency) = read_sse_events(addr, started);
+                black_box(first_latency);
+                assert_eq!(data.len(), THROUGHPUT_EVENTS_PER_CLIENT);
+            }));
+        }
+        for client in clients {
+            client
+                .join()
+                .expect("benchmark port concurrent client must finish");
+        }
+    });
+}
+
+#[bench]
+fn bench_sse_real_network_port_handshake_first_event_latency(b: &mut Bencher) {
+    let server = start_port_bench_server(1);
     b.bytes = 1;
 
     b.iter(|| {
