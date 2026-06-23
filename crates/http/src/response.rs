@@ -180,7 +180,7 @@ impl ResponseHandler {
 
     /// 允许将块响应修改为流响应，修改后无法再修改为块响应
     pub fn enable_stream(&self) {
-        self.header(TRANSFER_ENCODING.as_str(), DEFAULT_STREAM_TRANSFER_ENCODING); //设置流响应的流传输头
+        self.insert_header(TRANSFER_ENCODING.as_str(), DEFAULT_STREAM_TRANSFER_ENCODING); //设置流响应的流传输头
         self.is_stream.store(true, Ordering::Relaxed)
     }
 
@@ -198,9 +198,58 @@ impl ResponseHandler {
         }
     }
 
+    /// 线程安全地覆盖设置 HTTP 响应头。
+    ///
+    /// 与 `header` 的追加语义不同，本方法使用 HeaderMap 的 `insert` 语义覆盖旧值。
+    /// SSE 响应构建会使用它设置 `Transfer-Encoding: chunked` 等单值头，避免重复头导致
+    /// 客户端或中间代理行为不一致。
+    ///
+    /// 时间复杂度均摊 `O(1)`；空间复杂度 `O(k + v)`，`k` 和 `v` 分别为头名和值长度。
+    /// 本方法不阻塞异步任务，但会短暂持有同步锁；它有副作用，不是幂等操作，不过用相同值
+    /// 重复调用的最终可观察头部结果相同。线程安全和异步安全由内部 `Mutex<HeaderMap>` 保证。
+    ///
+    /// 测试入口：`pi_http::sse` 单元测试通过 SSE response 构建间接覆盖；
+    /// `sse_real_network_get_stream_receives_chunked_event` 在真实网络响应头中验证最终效果。
+    pub fn insert_header(&self, key: &str, value: &str) {
+        if let Ok(key) = HeaderName::from_str(key) {
+            if let Ok(value) = HeaderValue::from_str(value) {
+                self.headers.lock().insert(key, value);
+            }
+        }
+    }
+
+    /// 线程安全地删除 HTTP 响应头。
+    ///
+    /// 本方法主要用于移除与流式响应冲突的 `Content-Length`、`Content-Encoding` 等头。
+    /// 时间复杂度均摊 `O(1)`；空间复杂度 `O(1)`。它会短暂持有同步锁，不执行 I/O，
+    /// 不阻塞异步运行时。重复删除同一个不存在的头是安全且幂等的。
+    ///
+    /// 测试入口：`sse_real_network_get_stream_receives_chunked_event` 验证 SSE 响应没有被固定长度
+    /// 响应语义破坏。
+    pub fn remove_header(&self, key: &str) {
+        if let Ok(key) = HeaderName::from_str(key) {
+            self.headers.lock().remove(key);
+        }
+    }
+
     ///  线程安全的写入Http响应体，默认序号为0
     pub async fn write(&self, body: Vec<u8>) -> Result<()> {
         self.producor.send(Some((0, body))).await
+    }
+
+    /// 同步非阻塞地尝试写入 HTTP 响应体，默认序号为 0。
+    ///
+    /// 本方法服务于 `pi_http::sse::SseSender::try_send`，成功只表示响应体块进入
+    /// `pi_http` 的响应队列，不表示已写到 socket 或客户端已收到。队列满时立即返回
+    /// `ErrorKind::WouldBlock`。
+    ///
+    /// 时间复杂度 `O(1)`；空间复杂度 `O(1)`，不额外复制 `body`。本方法有副作用，
+    /// 不是幂等操作；线程安全和异步安全由内部 channel 保证。
+    ///
+    /// 测试入口：`sse_sender_try_send_reports_queue_full` 和
+    /// `sse_real_network_get_stream_receives_chunked_event` 覆盖该非阻塞写入路径。
+    pub fn try_write(&self, body: Vec<u8>) -> Result<()> {
+        self.producor.try_send(Some((0, body)))
     }
 
     /// 线程安全的写入序号和Http响应体，用于按指定顺序写入响应体块
@@ -208,9 +257,30 @@ impl ResponseHandler {
         self.producor.send(Some((index, body))).await
     }
 
+    /// 同步非阻塞地尝试写入序号和 HTTP 响应体。
+    ///
+    /// 与 `write_index` 相同，本方法只负责把块放入响应队列；队列满、队列断开时立即返回。
+    /// 时间复杂度 `O(1)`；空间复杂度 `O(1)`；不是幂等操作。
+    ///
+    /// 测试入口：当前 SSE 第一版不直接使用序号写入，后续有有序分片需求时应补充专项测试。
+    pub fn try_write_index(&self, index: u64, body: Vec<u8>) -> Result<()> {
+        self.producor.try_send(Some((index, body)))
+    }
+
     /// 线程安全的结束Http响应句柄的写入
     pub async fn finish(&self) -> Result<()> {
         self.producor.send(None).await
+    }
+
+    /// 同步非阻塞地尝试结束 HTTP 响应体写入。
+    ///
+    /// 成功会向响应队列发送结束标记。队列满时返回 `ErrorKind::WouldBlock`；队列断开时
+    /// 返回 `ErrorKind::BrokenPipe`。时间复杂度和空间复杂度均为 `O(1)`。
+    ///
+    /// 测试入口：`sse_sender_send_and_finish_are_ordered`、
+    /// `sse_hub_close_removes_and_finishes` 和真实网络 SSE 测试覆盖该结束路径。
+    pub fn try_finish(&self) -> Result<()> {
+        self.producor.try_send(None)
     }
 }
 
@@ -348,7 +418,7 @@ impl HttpResponse {
 
     /// 允许将块响应修改为流响应，修改后无法再修改为块响应
     pub fn enable_stream(&mut self) {
-        self.header(TRANSFER_ENCODING.as_str(), DEFAULT_STREAM_TRANSFER_ENCODING); //设置流响应的流传输头
+        self.insert_header(TRANSFER_ENCODING.as_str(), DEFAULT_STREAM_TRANSFER_ENCODING); //设置流响应的流传输头
         self.is_stream.store(true, Ordering::Relaxed)
     }
 
@@ -413,6 +483,40 @@ impl HttpResponse {
             if let Ok(value) = HeaderValue::from_str(value) {
                 self.headers.lock().append(key, value);
             }
+        }
+
+        self
+    }
+
+    /// 覆盖设置 HTTP 响应头。
+    ///
+    /// 本方法用于需要单值语义的响应头，例如 SSE 的 `Content-Type`、`Transfer-Encoding`、
+    /// `Cache-Control` 和代理缓冲控制头。它不会执行 I/O，只会短暂持有响应头同步锁。
+    ///
+    /// 时间复杂度均摊 `O(1)`；空间复杂度 `O(k + v)`。本方法有副作用；用相同值重复调用的
+    /// 最终头部结果相同。
+    ///
+    /// 测试入口：`sse_real_network_get_stream_receives_chunked_event` 覆盖 SSE 相关头。
+    pub fn insert_header(&mut self, key: &str, value: &str) -> &mut Self {
+        if let Ok(key) = HeaderName::from_str(key) {
+            if let Ok(value) = HeaderValue::from_str(value) {
+                self.headers.lock().insert(key, value);
+            }
+        }
+
+        self
+    }
+
+    /// 删除 HTTP 响应头。
+    ///
+    /// SSE 响应会调用本方法移除 `Content-Length` 和 `Content-Encoding`，避免长连接流被
+    /// 当作固定长度或压缩响应处理。时间复杂度均摊 `O(1)`；空间复杂度 `O(1)`。
+    /// 重复删除是安全且幂等的。
+    ///
+    /// 测试入口：真实网络 SSE 测试覆盖最终流响应语义。
+    pub fn remove_header(&mut self, key: &str) -> &mut Self {
+        if let Ok(key) = HeaderName::from_str(key) {
+            self.headers.lock().remove(key);
         }
 
         self

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use bytes::Buf;
 use futures::{future::{FutureExt, LocalBoxFuture}};
-use flume::{Sender, Receiver, bounded};
+use flume::{Sender, Receiver, TrySendError, bounded};
 
 use tcp::{Socket, SocketHandle,
           utils::Ready};
@@ -74,6 +74,33 @@ impl<T: Send + Sync + 'static> HttpSender<T> {
         } else {
             //发送成功
             Ok(())
+        }
+    }
+
+    /// 同步非阻塞地尝试发送消息。
+    ///
+    /// 本方法用于 `ResponseHandler::try_*` 和 `pi_http::sse::SseSender::try_*`。
+    /// 它不会阻塞当前线程，也不会启动异步运行时；当内部 bounded channel 已满时，
+    /// 立即返回 `ErrorKind::WouldBlock`。发送空消息表示消息发送结束。
+    ///
+    /// 时间复杂度为 `O(1)`；空间复杂度为 `O(1)`，不额外复制 `msg`。本方法有副作用：
+    /// 成功时会把消息放入 HTTP 响应体队列。它不是幂等操作，重复调用会重复发送。
+    /// 线程安全和异步安全由 flume sender 保证。
+    ///
+    /// 测试入口：生产侧 `ResponseHandler::try_write`、`SseSender::try_send` 和
+    /// `SseHub::try_send_to_id` 间接覆盖该路径；真实网络 SSE 测试验证非阻塞写入后的
+    /// 响应体最终能被 HTTP/1.1 chunked 流发送。
+    pub fn try_send(&self, msg: Option<T>) -> Result<()> {
+        match self.sender.try_send(msg) {
+            Ok(_) => Ok(()),
+            Err(TrySendError::Full(_)) => {
+                Err(Error::new(ErrorKind::WouldBlock,
+                               "Http channel try send failed, reason: channel full"))
+            },
+            Err(TrySendError::Disconnected(_)) => {
+                Err(Error::new(ErrorKind::BrokenPipe,
+                               "Http channel try send failed, reason: channel disconnected"))
+            },
         }
     }
 }

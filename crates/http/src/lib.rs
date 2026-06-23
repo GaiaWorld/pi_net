@@ -19,6 +19,8 @@ extern crate crossbeam_channel;
 extern crate base64;
 extern crate flate2;
 extern crate bytes;
+extern crate dashmap;
+extern crate wyhash;
 extern crate path_absolutize;
 extern crate log;
 
@@ -51,3 +53,4 @@ pub mod request;
 pub mod response;
 pub mod packet;
 pub mod utils;
+pub mod sse;

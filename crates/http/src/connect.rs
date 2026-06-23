@@ -156,9 +156,9 @@ impl<S: Socket, H: ServiceFactory<S, Service = HS>, HS: HttpService<S>> HttpConn
 
                     //首先发送响应头
                     if let Err(e) = self.reply(header_buf) {
-                        //发送响应头错误，则立即抛出回应异常
-                        let resp = HttpResponse::empty();
-                        let _ = self.throw(resp, StatusCode::INTERNAL_SERVER_ERROR, e);
+                        //发送响应头错误，则关闭连接并退出流响应，避免继续等待响应体导致资源悬挂
+                        let _ = self.close(Err(e));
+                        return;
                     } else {
                         //发送响应头成功
                         if let Some(body) = body {
@@ -166,19 +166,17 @@ impl<S: Socket, H: ServiceFactory<S, Service = HS>, HS: HttpService<S>> HttpConn
                             loop {
                                 match body.next().await {
                                     HttpRecvResult::Err(e) => {
-                                        //获取Http响应体错误，则立即发送回应异常
-                                        let error_info = format!("{:?}", e);
-                                        let error_info_len = error_info.as_bytes().len();
-                                        let _ = self.reply(error_info_len.to_string() + "\r\n" + error_info.as_str() + "\r\n");
+                                        //获取Http响应体错误，则关闭连接并退出流响应
+                                        let _ = self.close(Err(e));
+                                        break;
                                     },
                                     HttpRecvResult::Ok(Some((_index, part))) => {
                                         //获取到的是Http响应体块的后继，则立即向对端发送
                                         match encode_content(&content_encoding, part) {
                                             Err(e) => {
-                                                //编码响应体块的后续失败，则立即发送回应异常
-                                                let error_info = format!("{:?}", e);
-                                                let error_info_len = error_info.as_bytes().len();
-                                                let _ = self.reply(format!("{:x}", error_info_len) + "\r\n" + error_info.as_str() + "\r\n");
+                                                //编码响应体块的后续失败，则关闭连接并退出流响应
+                                                let _ = self.close(Err(e));
+                                                break;
                                             },
                                             Ok(encoded) => {
                                                 //编码响应体块的后续成功
@@ -187,25 +185,35 @@ impl<S: Socket, H: ServiceFactory<S, Service = HS>, HS: HttpService<S>> HttpConn
                                                 buf.put(encoded.as_slice());
                                                 buf.put("\r\n".as_bytes());
 
-                                                let _ = self.reply(buf);
+                                                if let Err(e) = self.reply(buf) {
+                                                    //写响应体块失败，则关闭连接并退出流响应
+                                                    let _ = self.close(Err(e));
+                                                    break;
+                                                }
                                             },
                                         }
                                     },
                                     HttpRecvResult::Ok(None) => {
                                         //获取到的是Http响应体块的尾部，则发送流响应结束帧，并退出循环
-                                        let _ = self.reply("0\r\n\r\n");
+                                        if let Err(e) = self.reply("0\r\n\r\n") {
+                                            let _ = self.close(Err(e));
+                                        }
                                         break;
                                     },
                                     HttpRecvResult::Fin(_) => {
                                         //获取到的是Http响应体块的尾部，则发送流响应结束帧，并退出循环
-                                        let _ = self.reply("0\r\n\r\n");
+                                        if let Err(e) = self.reply("0\r\n\r\n") {
+                                            let _ = self.close(Err(e));
+                                        }
                                         break;
                                     },
                                 }
                             }
                         } else {
                             //响应体不存在，则立即发送流响应结束帧
-                            let _ = self.reply("0\r\n\r\n");
+                            if let Err(e) = self.reply("0\r\n\r\n") {
+                                let _ = self.close(Err(e));
+                            }
                         }
                     }
                 } else {

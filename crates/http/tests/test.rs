@@ -15,8 +15,6 @@ use futures::future::{FutureExt, LocalBoxFuture};
 use flate2::{Compression, FlushCompress, Compress, Status};
 use brotli::{CompressorReader, Decompressor};
 use twoway::{find_bytes, rfind_bytes};
-use isahc::{HttpClient, Request,
-            prelude::*};
 use env_logger;
 
 use pi_async_rt::rt::{AsyncRuntime, startup_global_time_loop,

@@ -137,6 +137,13 @@ impl<S: Socket> Middleware<S, GatewayContext> for DefaultParser {
                     -> LocalBoxFuture<'a, MiddlewareResult<S>> {
         let mut response = resp;
         let future = async move {
+            if response.is_stream() {
+                // 流响应（包括 SSE）已经由构建方负责设置传输语义。
+                // 默认解析器不能为其补 Content-Length，也不能根据 Accept-Encoding 做压缩，
+                // 否则会破坏 HTTP/1.1 chunked 长连接响应。
+                return MiddlewareResult::ContinueResponse((req, response));
+            }
+
             if response.as_body().is_none() {
                 //本次Http响应没有响应体，则忽略编码
                 return MiddlewareResult::ContinueResponse((req, response));
