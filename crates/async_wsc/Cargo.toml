@@ -28,6 +28,7 @@ async-lock = "~3.4"
 pi-async-rt = "0.3"
 pi_rand = "~0.3"
 bytestring = "1.0"
+time = "=0.3.45"
 
 [dev-dependencies]
 env_logger = "0.11"
