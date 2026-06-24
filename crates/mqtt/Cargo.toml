@@ -24,7 +24,7 @@ udp = { version = "0.6", path = "../blocking_udp", package = "pi_blocking_udp" }
 quic = { version = "0.9", path = "../quic", package = "pi_quic" }
 pi_atom = "0.6"
 quinn-proto = "0.8"
-httparse = "~1.8"
+httparse = "1.8"
 bytes = "~1.11"
 log = "0.4"
 
