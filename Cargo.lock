@@ -2653,9 +2653,9 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pi-async-rt"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ce3ce006144aa89bdbc201edbe2962fcd20dfc40e176b3c348c60b92751ff3"
+checksum = "d54bcfef741737141c6d861561ecaa6225b21c3b6b9f726161d088500b9353ba"
 dependencies = [
  "async-stream",
  "backtrace",
@@ -2669,9 +2669,9 @@ dependencies = [
  "log",
  "num_cpus",
  "parking_lot 0.12.5",
- "pi_cancel_timer 0.3.3",
+ "pi_cancel_timer 0.4.0",
  "pi_hash",
- "pi_slotmap 0.2.1",
+ "pi_slotmap 0.3.0",
  "pi_timer",
  "pi_wrr",
  "polling",
@@ -2714,9 +2714,9 @@ dependencies = [
 
 [[package]]
 name = "pi_async_buffer"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31903b8d9e5b6dd870081b40cb267fc8a0ec14744595d296d0c22ea461cafc91"
+checksum = "4a1dd7f9002d6cacf1b7ccf53517e2af29b239cea38df94605fe0bcd2cfbf2c2"
 dependencies = [
  "bytes",
  "crossbeam-queue",
@@ -2726,9 +2726,9 @@ dependencies = [
 
 [[package]]
 name = "pi_async_file"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5212bb83ddcf39c83054fd1499e202a5e96b8ba15fa310919d50ea77e586ada0"
+checksum = "3993639d44fa260960324ab85b1fce4eebfd497d779388e055c27fcefa573788"
 dependencies = [
  "crossbeam-utils",
  "normpath",
@@ -2739,7 +2739,7 @@ dependencies = [
 
 [[package]]
 name = "pi_async_httpc"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "bytes",
  "env_logger 0.11.10",
@@ -2761,7 +2761,7 @@ dependencies = [
 
 [[package]]
 name = "pi_async_wsc"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "actix-codec",
  "actix-http",
@@ -2791,16 +2791,16 @@ dependencies = [
 
 [[package]]
 name = "pi_atom"
-version = "0.6.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f26072bd89e041fa0ddd11b6a29c04c0bfad92d1423fa6eaa4e8720a34a53b34"
+checksum = "32b801eae3cc2a44ed23d004975119a261e7fee4026bcb0a8e1fb63f1259bf25"
 dependencies = [
  "dashmap",
  "fxhash",
  "lazy_static",
  "pi_bon",
  "pi_hash",
- "pi_share 0.5.2",
+ "pi_share 0.6.0",
  "serde",
  "smol_str",
  "twox-hash",
@@ -2854,7 +2854,7 @@ dependencies = [
 
 [[package]]
 name = "pi_blocking_udp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-channel",
  "bytes",
@@ -2895,15 +2895,15 @@ dependencies = [
 
 [[package]]
 name = "pi_cancel_timer"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fb0b07459a5613afe4ae244047cdb95214e400fa5b8b53824784e726d663bdc"
+checksum = "709b368d338fcd9d08a9a7c2e25f60c7944a31a04b1248e5dc485fa2c654d382"
 dependencies = [
  "pi_ext_heap",
  "pi_null",
- "pi_slot_deque 0.3.1",
- "pi_slot_wheel 0.3.1",
- "pi_slotmap 0.2.1",
+ "pi_slot_deque 0.4.0",
+ "pi_slot_wheel 0.4.0",
+ "pi_slotmap 0.3.0",
 ]
 
 [[package]]
@@ -2929,7 +2929,7 @@ dependencies = [
 
 [[package]]
 name = "pi_dns_resolver"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "crossbeam-channel",
  "dashmap",
@@ -2955,9 +2955,9 @@ dependencies = [
 
 [[package]]
 name = "pi_handler"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "faf596cfe6576fb24194dbc6662a95cf7a24a125009681314441783d174dfc53"
+checksum = "fbc0c82a73e610d8746aa49d1e0e039441a6b1fe8fdd02b645502cbb9af4fcb6"
 dependencies = [
  "fnv",
  "futures",
@@ -2986,7 +2986,7 @@ dependencies = [
 
 [[package]]
 name = "pi_http"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "base64 0.13.1",
  "brotli 3.5.0",
@@ -3035,18 +3035,18 @@ dependencies = [
 
 [[package]]
 name = "pi_key_alloter"
-version = "0.6.4"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e496a285c7624243c2672704886d3839a5a979ed098178d9bf5838f372ea0ceb"
+checksum = "f84a6bc9a84ba2d421a7a851b861bd5e9771e295c9490b1ca2e8da4883efa2b6"
 dependencies = [
  "crossbeam",
  "pi_null",
- "pi_share 0.5.2",
+ "pi_share 0.6.0",
 ]
 
 [[package]]
 name = "pi_mqtt"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "bytes",
  "dashmap",
@@ -3072,7 +3072,7 @@ dependencies = [
 
 [[package]]
 name = "pi_mqtt_proxy"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "env_logger 0.11.10",
  "futures",
@@ -3104,7 +3104,7 @@ checksum = "eb60132f102822a4e019cdd9f714b0da56ba4d155493c4b132868356044a8e39"
 
 [[package]]
 name = "pi_quic"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bytes",
  "crossbeam-channel",
@@ -3118,9 +3118,9 @@ dependencies = [
  "pem 2.0.1",
  "pi-async-rt",
  "pi_blocking_udp",
- "pi_cancel_timer 0.3.3",
+ "pi_cancel_timer 0.4.0",
  "pi_hash",
- "pi_slotmap 0.2.1",
+ "pi_slotmap 0.3.0",
  "quinn",
  "quinn-proto",
  "rustls 0.20.9",
@@ -3149,9 +3149,9 @@ checksum = "bb2bd575b1ebe837b9c802fe30192212299e45d3f3774b2fdae15833b7f61974"
 
 [[package]]
 name = "pi_share"
-version = "0.5.2"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d05f49f68abc528bb2a0a766e34e3e3cda3d4c4aeebb9dd985d6e0bff437d117"
+checksum = "42acba54bce78f384061956419995ed20ff6a133eeba42b693b9a096044c1656"
 dependencies = [
  "pi_null",
 ]
@@ -3167,11 +3167,11 @@ dependencies = [
 
 [[package]]
 name = "pi_slot_deque"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bac22f8f7dd48734e67f7d843486751400f298c9cd0513f519a0b56d2efdd81"
+checksum = "93bd2534b7d01e0037948e7ea89c02cc07753df4e1ac12ba167c2c73aaef865d"
 dependencies = [
- "pi_slotmap 0.2.1",
+ "pi_slotmap 0.3.0",
 ]
 
 [[package]]
@@ -3186,13 +3186,13 @@ dependencies = [
 
 [[package]]
 name = "pi_slot_wheel"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86555d08b8d969ed27d346214a21aaa4dbcf7dea6f2cc848e5df76b0544a5dc1"
+checksum = "8f2902ade37fbb0d56808e54d03ee836cae070be13e2b9315e0ec4f64fcc1966"
 dependencies = [
  "pi_null",
- "pi_slot_deque 0.3.1",
- "pi_slotmap 0.2.1",
+ "pi_slot_deque 0.4.0",
+ "pi_slotmap 0.3.0",
 ]
 
 [[package]]
@@ -3209,11 +3209,11 @@ dependencies = [
 
 [[package]]
 name = "pi_slotmap"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ab05d4f3957915f5d9d553f62d0e3a3f412ee2f79bbfcb86e4a8f405b860989"
+checksum = "815436b407c8c88663e86f155634b8544b12c0f147f6f651d59727f8cf322333"
 dependencies = [
- "pi_key_alloter 0.6.4",
+ "pi_key_alloter 0.7.0",
  "pi_null",
  "serde",
  "version_check",
@@ -3221,7 +3221,7 @@ dependencies = [
 
 [[package]]
 name = "pi_tcp"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bytes",
  "crossbeam-channel",
@@ -3236,9 +3236,9 @@ dependencies = [
  "parking_lot 0.12.5",
  "pi-async-rt",
  "pi_async_buffer",
- "pi_cancel_timer 0.3.3",
+ "pi_cancel_timer 0.4.0",
  "pi_hash",
- "pi_slotmap 0.2.1",
+ "pi_slotmap 0.3.0",
  "rustls 0.20.9",
  "rustls-pemfile 1.0.4",
  "spin_sleep_util",
@@ -3304,7 +3304,7 @@ checksum = "90cd43372a1924678d6753b559a1b416880da067912eb0dc8d2478ec451e03c2"
 
 [[package]]
 name = "pi_ws"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
