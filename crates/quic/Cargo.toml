@@ -1,6 +1,6 @@
 [package]
 name = "pi_quic"
-version = "0.9.0"
+version = "0.10.0"
 authors = ["vmos <vmosone007@gmail.com>"]
 edition = "2021"
 description = "Quic client/server"
@@ -12,7 +12,7 @@ keywords = ["pi", "quic"]
 futures = "0.3"
 parking_lot = "0.12"
 quinn-proto = "0.8"
-pi-async-rt = "0.3"
+pi-async-rt = "0.5"
 rustls = { version = "0.20", features = ["dangerous_configuration"] }
 rustls-pemfile = "1.0"
 bytes = "~1.11"
@@ -21,10 +21,10 @@ crossbeam-utils = "0.8"
 pi_hash = "0.1"
 dashmap = "6.1"
 log = "0.4"
-pi_cancel_timer = "0.3"
-slotmap = { version = "0.2", package = "pi_slotmap" }
+pi_cancel_timer = "0.4"
+slotmap = { version = "0.3", package = "pi_slotmap" }
 tracing = "0.1"
-udp = { version = "0.6", path = "../blocking_udp", package = "pi_blocking_udp" }
+udp = { version = "0.7", path = "../blocking_udp", package = "pi_blocking_udp" }
 
 [dev-dependencies]
 tokio = { version = "1.21", features = ["full"] }
