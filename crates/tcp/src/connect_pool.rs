@@ -104,7 +104,11 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
         let mut pool = self;
         pool.driver = Some(driver);
         let rt_copy = rt.clone();
-        rt.spawn(async move {
+        // `run` 由监听器启动流程调用，不保证运行在本地运行时所属线程上。
+        // 因此首个连接池事件循环必须通过线程安全的外部队列投递；
+        // 当该异步任务已经在所属线程上被轮询后，`event_loop` 内部仍可继续使用
+        // 本地 `spawn` 完成自调度。
+        rt.send(async move {
             //启动Tcp连接事件循环
             let (helper, poll_timeout) = if let Some(poll_timeout) = timeout {
                 if cfg!(windows) && poll_timeout < 15000 {
