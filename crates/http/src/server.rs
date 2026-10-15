@@ -7,7 +7,7 @@ use https::{Version, HeaderMap, header::HOST, Method};
 use httparse::{EMPTY_HEADER, Request};
 use futures::future::{FutureExt, LocalBoxFuture};
 use bytes::Buf;
-use log::warn;
+use log::{warn, debug};
 
 use tcp::{Socket, AsyncService, SocketStatus, SocketHandle, SocketEvent,
           utils::SocketContext};
@@ -295,7 +295,7 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 if let Err(e) = result {
                     if e.kind() != ErrorKind::UnexpectedEof {
                         // Http连接非正常关闭
-                        warn!("Http Connect Close by Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
+                        debug!("Http Connect Close by Error, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                             handle.get_token(),
                             handle.get_remote(),
                             handle.get_local(),
