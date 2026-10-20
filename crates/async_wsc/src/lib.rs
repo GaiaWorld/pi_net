@@ -1,3 +1,8 @@
+//! 异步WebSocket客户端；外部运行时只在原客户端启动成功/返回前冷登记。
+//! 高级用法可在冷初始化调用prepare_runtime_metrics准备另一个普通运行时核心；
+//! 连接、消息、辅助Future、Clone/Drop/关闭不增加指标操作，Actix本身不接入。
+//! NET-MET-BATCH-DESIGN-001/B-WSC；本次参数/Ok专项见batch_runtime_metrics_tests。
+
 #[macro_use]
 extern crate lazy_static;
 
@@ -33,6 +38,136 @@ use log::{info, warn, error};
 use pi_async_rt::rt::{TaskId, AsyncTaskPool, AsyncTaskPoolExt, AsyncRuntime, AsyncWaitResult};
 use async_lock::Mutex;
 use pi_rand::{SecureRng, xor_unencrypt_clarity};
+
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+mod batch_runtime_metrics_tests {
+    //! 验证本库prepare_runtime_metrics及自动冷入口实际调用参数/原Ok。
+    //! 普通Single/Multi/Worker均使用真实公开装配，不采集、不安装SDK、不测试上游算法。
+    //! 测试专用TLS不持核心；实际成功ID取自本次调用，断言前显式注销测试自有登记。
+
+    use super::*;
+
+    /// 仅观测本次真实调用并核对原编号/完整名称/原Ok；不是手动预登记或生产查询。
+    /// expected_id和kind是测试独立期望，O(L)命名核对，无await/锁借用/采样或生命周期推断。
+    fn assert_registration(expected_id: usize, kind: &str) {
+        let observed = WSC_RUNTIME_METRICS_TEST_RESULT.with(|value| value.borrow_mut().take());
+        if let Some((_, _, Ok(id))) = &observed {
+            let _ = pi_async_rt::runtime_metrics::unregister_runtime_metrics(*id);
+        }
+        let (actual_id, actual_name, registration) = observed.expect("原冷入口必须实际登记");
+        assert_eq!(actual_id, expected_id, "必须使用原注入核心");
+        assert_eq!(actual_name, format!("pi_async_wsc-{}-{}", kind, expected_id));
+        assert!(registration.is_ok(), "真实登记必须成功: {:?}", registration);
+    }
+
+    /// 被测生产：prepare_runtime_metrics的三种安全Any识别，保留各自原Pool和编号。
+    /// 只创建一个空Multi worker；Single/Worker使用真实Runner，不创建采集运行时。
+    /// 无网络/采集/业务任务，不重复容量/别名/SDK测试；原Multi worker由测试进程退出回收。
+    #[test]
+    fn test_prepare_runtime_metrics_supported_types() {
+        let _clock = pi_async_rt::rt::startup_global_time_loop(10);
+        let single_runner = pi_async_rt::rt::single_thread::SingleTaskRunner::<()>::default();
+        let single = single_runner.startup().expect("真实Single启动");
+        prepare_runtime_metrics(&single);
+        assert_registration(single.get_id(), "single");
+
+        let multi = pi_async_rt::rt::AsyncRuntimeBuilder::default_multi_thread(
+            Some("cold-metrics-unit"), None, Some(1), Some(1),
+        );
+        prepare_runtime_metrics(&multi);
+        assert_registration(multi.get_id(), "multi");
+
+        let worker_runner = pi_async_rt::rt::worker_thread::WorkerTaskRunner::<()>::default();
+        let worker = worker_runner.get_runtime();
+        prepare_runtime_metrics(&worker);
+        assert_registration(worker.get_id(), "worker");
+    }
+
+    /// 被测生产入口：AsyncWebsocketClient::new原握手成功后的自动冷登记。
+    /// 真实Actix初始化但不建立网络连接；原close由测试所属Single执行一次用于清理，
+    /// 不声称测试了网络/退出join。命令另有600秒硬截止防止原同步握手永久等待。
+    #[test]
+    fn test_wsc_client_registers_runtime_metrics() {
+        let _clock = pi_async_rt::rt::startup_global_time_loop(10);
+        let runner = pi_async_rt::rt::single_thread::SingleTaskRunner::<()>::default();
+        let runtime = runner.startup().expect("真实Single启动");
+        let client = AsyncWebsocketClient::new(runtime.clone(), "metrics-unit".to_string(), 32)
+            .expect("真实客户端原启动握手");
+        let closed = client.close();
+        let dispatched = runner.run_once();
+        assert_registration(runtime.get_id(), "single");
+        closed.expect("原客户端关闭指令应能投递");
+        dispatched.expect("原Single推进关闭任务");
+    }
+}
+
+// 仅单元测试观测真实调用，纯参数/原Result不持核心，普通生产完全移除。
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+std::thread_local! {
+    static WSC_RUNTIME_METRICS_TEST_RESULT: std::cell::RefCell<Option<(usize, String,
+        std::result::Result<pi_async_rt::runtime_metrics::RuntimeMetricId,
+            pi_async_rt::runtime_metrics::RuntimeMetricRegistrationError>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// 在服务冷初始化中为WebSocket所用的外部普通运行时指定名称并登记。
+///
+/// runtime仅借用，不保存、不创建或接管核心；返回()不是登记成功回执。
+/// 自动冷构造/配置也复用此函数；直接使用另一核心时，在逐连接/消息调用以前准备：
+/// ```no_run
+/// fn prepare(runtime: &pi_async_rt::rt::multi_thread::MultiTaskRuntime<()>) {
+///     pi_async_wsc::prepare_runtime_metrics(runtime);
+/// }
+/// ```
+///
+/// 安全识别普通Single/Multi/Worker及原R::Pool，按pi_async_wsc-类型-原get_id命名；
+/// 不增加原AsyncRuntime的公开约束，不强转、读私有槽或改变调度。不支持的自定义实现
+/// 以及上游登记错误只中文告警，原业务继续；关闭本crate功能/wasm条件时无操作。
+///
+/// 此函数非纯：上游登记会强保活，重复同名幂等归上游；不保存生产ID/结果，不在
+/// Drop/业务失败/关闭时自动注销。宿主负责采集、Provider、共享核心生命周期，
+/// 不应在热路径反复调用或从这里恢复被宿主注销的核心；不安装时钟/采集器。
+///
+/// 本层名称处理O(L)时间/空间；上游登记另含O(C+A*L+M+L)时间和O(C+A+M+L)
+/// 分配上界，C为历史核心数，A为名称数，M为旧合并名长度。同步短锁/分配器和
+/// 宿主logger可能等待或panic，不保证硬实时/严格非阻塞；无await/异步锁/业务任务，
+/// 不在持业务锁时调用。普通运行时原Send/Sync合同不变，不新增unsafe或本地线程权限。
+/// 关联单元：batch_runtime_metrics_tests::test_prepare_runtime_metrics_supported_types。
+pub fn prepare_runtime_metrics<R: AsyncRuntime<()>>(runtime: &R) {
+    #[cfg(all(feature = "runtime_metrics", not(target_arch = "wasm32")))]
+    {
+        use std::any::Any;
+        use pi_async_rt::rt::{single_thread::SingleTaskRuntime,
+            multi_thread::MultiTaskRuntime, worker_thread::WorkerRuntime};
+        use pi_async_rt::runtime_metrics::register_runtime_metrics;
+
+        let any = runtime as &dyn Any;
+        let (metric_name, registration) = if let Some(rt) = any.downcast_ref::<SingleTaskRuntime<(), R::Pool>>() {
+            let name = format!("pi_async_wsc-single-{}", rt.get_id());
+            let result = register_runtime_metrics(rt, &name);
+            (name, result)
+        } else if let Some(rt) = any.downcast_ref::<MultiTaskRuntime<(), R::Pool>>() {
+            let name = format!("pi_async_wsc-multi-{}", rt.get_id());
+            let result = register_runtime_metrics(rt, &name);
+            (name, result)
+        } else if let Some(rt) = any.downcast_ref::<WorkerRuntime<(), R::Pool>>() {
+            let name = format!("pi_async_wsc-worker-{}", rt.get_id());
+            let result = register_runtime_metrics(rt, &name);
+            (name, result)
+        } else {
+            log::warn!("WebSocket 运行时指标未注册, 不支持的外部类型: {}", std::any::type_name::<R>());
+            return;
+        };
+        #[cfg(test)]
+        WSC_RUNTIME_METRICS_TEST_RESULT.with(|value| {
+            *value.borrow_mut() = Some((runtime.get_id(), metric_name.clone(), registration));
+        });
+        if let Err(error) = registration {
+            log::warn!("WebSocket 运行时指标注册失败, 名称: {}, 原因: {}", metric_name, error);
+        }
+    }
+    #[cfg(not(all(feature = "runtime_metrics", not(target_arch = "wasm32"))))]
+    let _ = runtime;
+}
 
 // 用于加密随机数种子的密钥
 // 注意如需修改，则必须同时修改客户端
@@ -72,7 +207,16 @@ impl<
     P: AsyncTaskPoolExt<()> + AsyncTaskPool<(), Pool = P>,
     RT: AsyncRuntime<(), Pool = P>,
 > AsyncWebsocketClient<P, RT> {
-    //构建异步Websocket客户端
+    /// 构建异步WebSocket客户端并在原启动握手成功后冷登记外部运行时。
+    ///
+    /// rt按原逻辑保存，name为客户端日志名称；queue_len不在32..=65535时仍按原规则取32。
+    /// 返回原Result，原握手错误不登记；指标失败/未知泛型只warn，不新增业务错误/字段。
+    /// 构造仍按原逻辑建Actix线程并同步等握手，不是非阻塞API；登记不代表业务任务完成。
+    /// 命名O(L)时间/空间，加上游短同步锁/分配/logger成本；不新增线程/await/异步锁。
+    /// 使用已准备的普通Single/Multi/Worker可自动登记，原自定义AsyncRuntime签名仍兼容。
+    /// 仅冷初始化调用；成功强保活不转移外部核心所有权，客户端关闭/Drop不自动注销。
+    /// 示例：AsyncWebsocketClient::new(runtime, "client".to_string(), 32)?；
+    /// 对应专项batch_runtime_metrics_tests::test_wsc_client_registers_runtime_metrics，非网络验收。
     pub fn new(rt: RT,
                name: String,
                mut queue_len: usize) -> Result<AsyncWebsocketClient<P, RT>> {
@@ -99,6 +243,7 @@ impl<
                 Err(Error::new(ErrorKind::Other, format!("Build websocket client failed, reason: {:?}", e)))
             },
             Ok(_) => {
+                prepare_runtime_metrics(&rt);
                 Ok(AsyncWebsocketClient {
                     rt,
                     sender,

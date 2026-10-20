@@ -1,3 +1,7 @@
+//! TCP连接池；只在run的原驱动准备后/首个send前登记外部Local核心。
+//! 无生产ID存储、注销、等待或热路径指标逻辑，原事件循环及关闭保持。
+//! NET-MET-BATCH-DESIGN-001/B-TCP；参数/Ok专项见batch_runtime_metrics_tests。
+
 use std::rc::Rc;
 use std::sync::Arc;
 use std::cell::UnsafeCell;
@@ -23,9 +27,51 @@ use slotmap::{Key, DefaultKey, KeyData, SlotMap};
 use crate::{Socket, Stream, SocketAdapter, SocketConfig, SocketEvent, SocketDriver,
             utils::register_close_sender};
 
-///
-/// Tcp连接池
-///
+// 测试专用纯观测，不持核心/锁/回调，不进入普通生产构建。
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+std::thread_local! {
+    static TCP_METRICS_TEST_RESULT: std::cell::RefCell<Option<(usize, String,
+        std::result::Result<pi_async_rt::runtime_metrics::RuntimeMetricId,
+            pi_async_rt::runtime_metrics::RuntimeMetricRegistrationError>)>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+mod batch_runtime_metrics_tests {
+    //! 仅验证TcpSocketPool::run真实首投递前的登记参数/Ok，不打开网络或执行池循环。
+    //! 使用真实原生Local及真实空池/驱动；原首任务已排队，局部单元不宣称网络或关闭验收。
+    //! 原Local没有公开取消排队任务接口，未推进的首任务由独立测试进程退出回收，不新增
+    //! 生产清理入口或测试侧伪造排空；登记自有ID在参数断言前显式注销。
+
+    use super::*;
+    use crate::{connect::TcpSocket, server::PortsAdapter};
+
+    /// 被测生产：TcpSocketPool::run，不手动预登记，不将run的Ok冒充登记Ok。
+    /// 只分配真实mio轮询器，不绑定端口；不跨所属线程调用本地队列方法，无采集/SDK。
+    /// 命名核对O(L)，测试入口严格串行/有界，不保护原事件循环或资源析构的全部语义。
+    #[test]
+    fn test_tcp_pool_registers_runtime_metrics() {
+        TCP_METRICS_TEST_RESULT.with(|value| { value.borrow_mut().take(); });
+        let runner = pi_async_rt::rt::serial_local_thread::LocalTaskRunner::<()>::new();
+        let runtime = runner.get_runtime();
+        let expected_id = runtime.get_id();
+        let (_sender, receiver) = crossbeam_channel::unbounded::<TcpSocket>();
+        let pool = TcpSocketPool::<TcpSocket, PortsAdapter<TcpSocket>>::new(
+            254, "metrics-unit".to_string(), receiver, SocketConfig::default(),
+        ).expect("真实空TCP池构造");
+        let driver = SocketDriver::<TcpSocket, PortsAdapter<TcpSocket>>::new(&[]);
+        pool.run(runtime, driver, 1, Some(0)).expect("原首任务投递");
+        let observed = TCP_METRICS_TEST_RESULT.with(|value| value.borrow_mut().take());
+        if let Some((_, _, Ok(id))) = &observed {
+            let _ = pi_async_rt::runtime_metrics::unregister_runtime_metrics(*id);
+        }
+        let (actual_id, actual_name, registration) = observed.expect("原run必须实际登记");
+        assert_eq!(actual_id, expected_id);
+        assert_eq!(actual_name, format!("pi_tcp-local-{}", expected_id));
+        assert!(registration.is_ok(), "真实登记必须成功: {:?}", registration);
+    }
+}
+
+/// TCP连接池，运行时冷登记边界见run；其它池状态及热路径保持原逻辑。
 pub struct TcpSocketPool<S: Socket + Stream, A: SocketAdapter<Connect = S>> {
     uid:            u8,                                                             //Tcp连接池唯一id
     name:           String,                                                         //Tcp连接池名称
@@ -96,6 +142,15 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
     }
 
     /// 运行Tcp连接池，并设置Socket驱动
+    ///
+    /// rt是外部已准备的原生Local，driver移动到原池，event_size/timeout保持原事件容量/
+    /// 轮询时间单位及合法范围；成功返回Ok仅表示原首任务已投递，不表示任务或采样完成。
+    /// 默认冷登记pi_tcp-local-原get_id，失败只告警继续，不增加业务错误、ID字段或注销。
+    /// 名称O(L)时间/空间，另有上游登记/原send及logger成本；同步锁可能等待，无新增await/
+    /// 异步锁/线程。只在冷启动使用，原send跨线程边界不变，不能从外部线程改用spawn。
+    /// 登记由上游强保活，不转移外部核心所有权；原关闭/Drop不因本次增量自动注销。
+    /// 生产参数/Ok：batch_runtime_metrics_tests::test_tcp_pool_registers_runtime_metrics；
+    /// 原真实网络启动边界另由tests/connect_pool_startup.rs保护，不属本单元结论。
     pub fn run(self,
                rt: LocalTaskRuntime<()>,
                driver: SocketDriver<S, A>,
@@ -103,6 +158,18 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
                timeout: Option<usize>) -> Result<()> {
         let mut pool = self;
         pool.driver = Some(driver);
+        #[cfg(all(feature = "runtime_metrics", not(target_arch = "wasm32")))]
+        {
+            let metric_name = format!("pi_tcp-local-{}", rt.get_id());
+            let registration = pi_async_rt::runtime_metrics::register_runtime_metrics(&rt, &metric_name);
+            #[cfg(test)]
+            TCP_METRICS_TEST_RESULT.with(|value| {
+                *value.borrow_mut() = Some((rt.get_id(), metric_name.clone(), registration));
+            });
+            if let Err(error) = registration {
+                warn!("TCP 运行时指标注册失败, 名称: {}, 原因: {}", metric_name, error);
+            }
+        }
         let rt_copy = rt.clone();
         // `run` 由监听器启动流程调用，不保证运行在本地运行时所属线程上。
         // 因此首个连接池事件循环必须通过线程安全的外部队列投递；

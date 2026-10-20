@@ -26,9 +26,27 @@ lazy_static! {
     pub static ref MQTT_RESPONSE_SYS_TOPIC: String = "$r".to_string();
 }
 
-// Mqtt代理的公共异步运行时
+// TCP/TLS代理共用的进程级私有Worker，仍按原时机按需构建；普通借用/Clone不登记。
+// 原Builder成功返回后、句柄发布和首次业务spawn前，仅在本初始化冷路径登记一次。
+// 名称采用原get_id，真实核心判重/指标身份/强保活归上游；本库不保存结果或新增关闭权限。
+// 默认runtime_metrics开启；关闭feature或wasm32不生成名称/登记代码，不自动开启trace。
+// 冷格式化O(n)，登记沿上游O(C+A*n+L+n)时间/O(C+A+L+n)空间，n为名称字节数，
+// C为历史核心数、A为本核原名数、L为合并名长度。含同步短锁/分配，不是无等待操作；无await。
+// Err仅走既有同步logger，不改变业务返回/派发，也不关闭/注销/重试；logger不可重入同一
+// 正在初始化的单例，可能阻塞/panic的边界由宿主负责。成功不增加本库状态或后台任务。
+// 验证：本文件runtime_metrics_tests；tests/runtime_metrics_real_network.rs的两个独立专项。
 lazy_static! {
-    static ref PUBLIC_BROKER_RUNTIME: WorkerRuntime<()> = AsyncRuntimeBuilder::default_worker_thread(Some("MQTT-BROKER-RT"), None, None, Some(Some(1)));
+    static ref PUBLIC_BROKER_RUNTIME: WorkerRuntime<()> = {
+        let rt = AsyncRuntimeBuilder::default_worker_thread(Some("MQTT-BROKER-RT"), None, None, Some(Some(1)));
+        #[cfg(all(feature = "runtime_metrics", not(target_arch = "wasm32")))]
+        {
+            let metric_name = format!("pi_mqtt-worker-{}", rt.get_id());
+            if let Err(error) = pi_async_rt::runtime_metrics::register_runtime_metrics(&rt, &metric_name) {
+                log::error!("MQTT 运行时指标注册失败, 名称: {}, 原因: {}", metric_name, error);
+            }
+        }
+        rt
+    };
 }
 
 ///
@@ -717,5 +735,84 @@ fn save_topic<S: Socket>(broker: &MqttBroker<S>,
     } else {
         //指定会话的已订阅主题不存在
         broker.topics.insert(session.clone(), vec![topic.clone()]);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) mod runtime_metrics_tests {
+    //! 只隔离验证本模块私有Worker的冷登记；不创建网络，不代表协议端到端验收。
+    //! 与quic_broker单元共用一个有效官方SDK及宿主初始化，所有测试须串行执行。
+    //! 不手动登记被测Worker、不增加生产查询出口、不关闭或注销进程级私有单例。
+    //! 需显式启用上游pi-async-rt/trace并用--ignored执行，防止开发依赖把trace带入普通构建。
+
+    use super::*;
+    use opentelemetry_sdk::metrics::{ManualReader, SdkMeterProvider};
+    use pi_async_rt::runtime_metrics::{collect_and_report_runtime_metrics,
+        init_runtime_metrics_reporting, RuntimeMetricCollectionOptions,
+        RuntimeMetricInstanceStatus, RuntimeMetricKind};
+    use std::sync::OnceLock;
+
+    /// 测试宿主一次安装带真实读取器的SDK及共享记录器；不会为生产功能补登记。
+    /// 仅测试代码使用OnceLock，首次有同步初始化/分配成本，后续O(1)；禁止递归调用。
+    /// 全局SDK保留到测试进程退出，网络/运输在独立真实网络target核验。
+    pub(crate) fn initialize_reporting() {
+        static PROVIDER: OnceLock<SdkMeterProvider> = OnceLock::new();
+        PROVIDER.get_or_init(|| {
+            let provider = SdkMeterProvider::builder()
+                .with_reader(ManualReader::default()).build();
+            opentelemetry::global::set_meter_provider(provider.clone());
+            init_runtime_metrics_reporting("pi_mqtt-单元宿主").expect("测试记录器初始化失败");
+            provider
+        });
+    }
+
+    /// 被测生产入口为PUBLIC_BROKER_RUNTIME原初始化块。
+    /// 两个调用线程竞争首次初始化，精确核对原get_id三段名、Worker类别、正指标ID，
+    /// 以及重复借用/Clone后身份和原名不变；两线程是有界功能竞争，不是压力测试。
+    /// 关闭本crate feature时同一真实Worker仍可构建，但报告不得出现该名称。
+    /// 从不调用register替生产补功能；同步采集位于不推进目标Worker的测试线程。
+    /// O(C)报告成本，C为全局已登记核心数；不证明SDK运输或TCP/TLS完整语义。
+    #[test]
+    #[ignore = "需测试宿主显式开启pi-async-rt/trace，串行执行此专项"]
+    fn test_broker_runtime_metrics_name_and_reuse() {
+        initialize_reporting();
+        let start = std::sync::Barrier::new(2);
+        let ids = std::thread::scope(|scope| {
+            let first = scope.spawn(|| { start.wait(); PUBLIC_BROKER_RUNTIME.get_id() });
+            let second = scope.spawn(|| { start.wait(); PUBLIC_BROKER_RUNTIME.get_id() });
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        assert_eq!(ids.0, ids.1, "并发首次使用只能构建同一个原Worker");
+        let rt = &*PUBLIC_BROKER_RUNTIME;
+        assert_eq!(rt.get_id(), ids.0);
+        let name = format!("pi_mqtt-worker-{}", rt.get_id());
+        let first = collect_and_report_runtime_metrics(RuntimeMetricCollectionOptions::default())
+            .expect("采集测试Worker失败");
+        let matches: Vec<_> = first.instances().iter()
+            .filter(|entry| entry.names().any(|value| value == name)).collect();
+        if cfg!(feature = "runtime_metrics") {
+            assert_eq!(matches.len(), 1, "MQTT原初始化块必须自动登记一次");
+            let entry = matches[0];
+            assert_eq!(entry.name(), name);
+            assert_eq!(entry.names().collect::<Vec<_>>(), vec![name.as_str()]);
+            assert_eq!(entry.kind(), RuntimeMetricKind::Worker);
+            assert_eq!(entry.status(), RuntimeMetricInstanceStatus::RecordInvoked);
+            assert!(entry.id().as_u64() > 0);
+            assert_eq!(entry.counts(), Some((rt.len(), Some(rt.wait_len()))));
+        } else {
+            assert!(matches.is_empty(), "关闭feature不得自动登记MQTT单例");
+        }
+        let cloned = rt.clone();
+        assert_eq!(cloned.get_id(), rt.get_id());
+        assert_eq!(PUBLIC_BROKER_RUNTIME.get_id(), rt.get_id());
+        let second = collect_and_report_runtime_metrics(RuntimeMetricCollectionOptions::default())
+            .expect("重复采集失败");
+        let again: Vec<_> = second.instances().iter()
+            .filter(|entry| entry.names().any(|value| value == name)).collect();
+        assert_eq!(again.len(), matches.len());
+        if let Some(entry) = matches.first() {
+            assert_eq!(again[0].id(), entry.id());
+            assert_eq!(again[0].names().collect::<Vec<_>>(), vec![name.as_str()]);
+        }
     }
 }

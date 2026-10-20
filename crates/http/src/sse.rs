@@ -36,6 +36,11 @@
 //! 断线补偿存储、HTTP/2 server push、TLS 类型擦除或普通 HTTP 连接透明升级。`TcpSocket`
 //! 与 `TlsSocket` 应分别使用各自的 `SseHub<K, S>` 类型。
 //!
+//! 指标登记只在冷配置中进行：`SseMiddlewareBuilder::heartbeat_runtime` 自动准备；
+//! 直接调用 `build_with_heartbeat` 时，可在服务启动阶段对所用运行时调用一次
+//! `prepare_runtime_metrics`。不要在每个请求中重复准备；未准备只影响该入口的指标登记，
+//! 不影响原 SSE 建连或心跳功能。本模块不初始化采集或上报设施。
+//!
 //! # Safety and performance
 //!
 //! `SseSender` and `SseHub` are `Clone + Send + Sync` as long as the underlying
@@ -88,6 +93,132 @@ use wyhash::WyHasherBuilder;
 use crate::gateway::GatewayContext;
 use crate::middleware::{Middleware, MiddlewareResult};
 use crate::request::HttpRequest;
+
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+mod batch_runtime_metrics_tests {
+    //! 验证本库prepare_runtime_metrics及自动冷入口实际调用参数/原Ok。
+    //! 普通Single/Multi/Worker均使用真实公开装配，不采集、不安装SDK、不测试上游算法。
+    //! 测试专用TLS不持核心；实际成功ID取自本次调用，断言前显式注销测试自有登记。
+
+    use super::*;
+
+    /// 仅观测本次真实调用并核对原编号/完整名称/原Ok；不是手动预登记或生产查询。
+    /// expected_id和kind是测试独立期望，O(L)命名核对，无await/锁借用/采样或生命周期推断。
+    fn assert_registration(expected_id: usize, kind: &str) {
+        let observed = SSE_RUNTIME_METRICS_TEST_RESULT.with(|value| value.borrow_mut().take());
+        if let Some((_, _, Ok(id))) = &observed {
+            let _ = pi_async_rt::runtime_metrics::unregister_runtime_metrics(*id);
+        }
+        let (actual_id, actual_name, registration) = observed.expect("原冷入口必须实际登记");
+        assert_eq!(actual_id, expected_id, "必须使用原注入核心");
+        assert_eq!(actual_name, format!("pi_http-{}-{}", kind, expected_id));
+        assert!(registration.is_ok(), "真实登记必须成功: {:?}", registration);
+    }
+
+    /// 被测生产：prepare_runtime_metrics的三种安全Any识别，保留各自原Pool和编号。
+    /// 只创建一个空Multi worker；Single/Worker使用真实Runner，不创建采集运行时。
+    /// 无网络/采集/业务任务，不重复容量/别名/SDK测试；原Multi worker由测试进程退出回收。
+    #[test]
+    fn test_prepare_runtime_metrics_supported_types() {
+        let _clock = pi_async_rt::rt::startup_global_time_loop(10);
+        let single_runner = pi_async_rt::rt::single_thread::SingleTaskRunner::<()>::default();
+        let single = single_runner.startup().expect("真实Single启动");
+        prepare_runtime_metrics(&single);
+        assert_registration(single.get_id(), "single");
+
+        let multi = pi_async_rt::rt::AsyncRuntimeBuilder::default_multi_thread(
+            Some("cold-metrics-unit"), None, Some(1), Some(1),
+        );
+        prepare_runtime_metrics(&multi);
+        assert_registration(multi.get_id(), "multi");
+
+        let worker_runner = pi_async_rt::rt::worker_thread::WorkerTaskRunner::<()>::default();
+        let worker = worker_runner.get_runtime();
+        prepare_runtime_metrics(&worker);
+        assert_registration(worker.get_id(), "worker");
+    }
+
+    /// 被测生产入口：SseMiddlewareBuilder::heartbeat_runtime的自动冷登记。
+    /// 只构造真实Builder，不打开连接/创建心跳，不使用Socket测试桩；
+    /// 核对实际原Single参数及Ok，配置捕获/放弃不授予生产组件注销权限。
+    #[test]
+    fn test_sse_builder_registers_runtime_metrics() {
+        let _clock = pi_async_rt::rt::startup_global_time_loop(10);
+        let runner = pi_async_rt::rt::single_thread::SingleTaskRunner::<()>::default();
+        let runtime = runner.startup().expect("真实Single启动");
+        let hub = SseHub::<SseConnectionId, tcp::connect::TcpSocket>::builder().build();
+        let _builder = SseMiddleware::builder(hub).heartbeat_runtime(runtime.clone());
+        assert_registration(runtime.get_id(), "single");
+    }
+}
+
+// 仅单元测试观测真实调用，纯参数/原Result不持核心，普通生产完全移除。
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+std::thread_local! {
+    static SSE_RUNTIME_METRICS_TEST_RESULT: std::cell::RefCell<Option<(usize, String,
+        std::result::Result<pi_async_rt::runtime_metrics::RuntimeMetricId,
+            pi_async_rt::runtime_metrics::RuntimeMetricRegistrationError>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// 在服务冷初始化中为SSE所用的外部普通运行时指定名称并登记。
+///
+/// runtime仅借用，不保存、不创建或接管核心；返回()不是登记成功回执。
+/// 自动冷构造/配置也复用此函数；直接使用另一核心时，在逐连接/消息调用以前准备：
+/// ```no_run
+/// fn prepare(runtime: &pi_async_rt::rt::multi_thread::MultiTaskRuntime<()>) {
+///     pi_http::sse::prepare_runtime_metrics(runtime);
+/// }
+/// ```
+///
+/// 安全识别普通Single/Multi/Worker及原R::Pool，按pi_http-类型-原get_id命名；
+/// 不增加原AsyncRuntime的公开约束，不强转、读私有槽或改变调度。不支持的自定义实现
+/// 以及上游登记错误只中文告警，原业务继续；关闭本crate功能/wasm条件时无操作。
+///
+/// 此函数非纯：上游登记会强保活，重复同名幂等归上游；不保存生产ID/结果，不在
+/// Drop/业务失败/关闭时自动注销。宿主负责采集、Provider、共享核心生命周期，
+/// 不应在热路径反复调用或从这里恢复被宿主注销的核心；不安装时钟/采集器。
+///
+/// 本层名称处理O(L)时间/空间；上游登记另含O(C+A*L+M+L)时间和O(C+A+M+L)
+/// 分配上界，C为历史核心数，A为名称数，M为旧合并名长度。同步短锁/分配器和
+/// 宿主logger可能等待或panic，不保证硬实时/严格非阻塞；无await/异步锁/业务任务，
+/// 不在持业务锁时调用。普通运行时原Send/Sync合同不变，不新增unsafe或本地线程权限。
+/// 关联单元：batch_runtime_metrics_tests::test_prepare_runtime_metrics_supported_types。
+pub fn prepare_runtime_metrics<R: AsyncRuntime<()>>(runtime: &R) {
+    #[cfg(all(feature = "runtime_metrics", not(target_arch = "wasm32")))]
+    {
+        use std::any::Any;
+        use pi_async_rt::rt::{single_thread::SingleTaskRuntime,
+            multi_thread::MultiTaskRuntime, worker_thread::WorkerRuntime};
+        use pi_async_rt::runtime_metrics::register_runtime_metrics;
+
+        let any = runtime as &dyn Any;
+        let (metric_name, registration) = if let Some(rt) = any.downcast_ref::<SingleTaskRuntime<(), R::Pool>>() {
+            let name = format!("pi_http-single-{}", rt.get_id());
+            let result = register_runtime_metrics(rt, &name);
+            (name, result)
+        } else if let Some(rt) = any.downcast_ref::<MultiTaskRuntime<(), R::Pool>>() {
+            let name = format!("pi_http-multi-{}", rt.get_id());
+            let result = register_runtime_metrics(rt, &name);
+            (name, result)
+        } else if let Some(rt) = any.downcast_ref::<WorkerRuntime<(), R::Pool>>() {
+            let name = format!("pi_http-worker-{}", rt.get_id());
+            let result = register_runtime_metrics(rt, &name);
+            (name, result)
+        } else {
+            log::warn!("SSE 运行时指标未注册, 不支持的外部类型: {}", std::any::type_name::<R>());
+            return;
+        };
+        #[cfg(test)]
+        SSE_RUNTIME_METRICS_TEST_RESULT.with(|value| {
+            *value.borrow_mut() = Some((runtime.get_id(), metric_name.clone(), registration));
+        });
+        if let Err(error) = registration {
+            log::warn!("SSE 运行时指标注册失败, 名称: {}, 原因: {}", metric_name, error);
+        }
+    }
+    #[cfg(not(all(feature = "runtime_metrics", not(target_arch = "wasm32"))))]
+    let _ = runtime;
+}
 use crate::response::{HttpResponse, ResponseHandler};
 
 const DEFAULT_CHANNEL_SIZE: usize = 16;
@@ -724,6 +855,8 @@ impl<'a, S: Socket> SseResponseBuilder<'a, S> {
     ///
     /// `runtime` 必须能执行 `Send + 'static` 任务。心跳间隔为 0 时不启动任务。
     /// 心跳任务在 sender 关闭或心跳发送失败后退出。该方法会 clone runtime 和 sender。
+    /// 本方法不执行指标登记；需要观测时在服务冷初始化中调用一次
+    /// `prepare_runtime_metrics(&runtime)`，不要把冷准备放入逐连接请求路径。
     pub fn build_with_heartbeat<R>(self, runtime: R) -> SseResult<(HttpResponse, SseSender<S>)>
     where
         R: AsyncRuntime<()>,
@@ -1372,7 +1505,8 @@ where
 /// - Builder 不注册连接；只有中间件处理请求时才会建立 SSE sender。
 ///
 /// 性能与安全：
-/// - setter 均为 `O(1)`，不执行 I/O，不阻塞。
+/// - 除heartbeat_runtime外setter为O(1)；该冷配置方法还包括指定名称的指标登记成本，
+///   其上游短同步锁/分配及失败logger可能等待，不保证严格非阻塞。
 /// - `build` 校验 `SseConfig` 并返回可 clone 的中间件。
 ///
 /// 测试入口：
@@ -1412,12 +1546,17 @@ where
     /// Hub 注册成功并且 `on_open` 成功后启动心跳任务。未配置运行时时不会自动启动心跳，
     /// 调用方仍可通过 `SseSender::heartbeat` 或 `try_heartbeat` 自行发送心跳。
     ///
-    /// 调用成本 `O(1)` 加 runtime clone 成本；不启动任务、不注册连接。实际任务启动发生在
-    /// 每条 SSE 连接打开时，失败会回滚 Hub 注册并返回普通 HTTP 错误响应。
+    /// runtime按原逻辑捕获；默认在捕获前通过prepare_runtime_metrics冷登记普通
+    /// Single/Multi/Worker，未知外部实现/登记失败只告警，不改变原Builder或业务。
+    /// 配置后覆盖/放弃Builder也不注销；不创建核心/结果字段，不启动任务或注册连接。
+    /// 成本除原闭包/克隆外含准备函数的名称/同步锁/分配，不能在逐连接热路径反复配置。
+    /// 实际心跳任务仍只在连接打开时启动，原失败回滚/HTTP错误保持。
+    /// 对应专项：batch_runtime_metrics_tests::test_sse_builder_registers_runtime_metrics。
     pub fn heartbeat_runtime<R>(mut self, runtime: R) -> Self
     where
         R: AsyncRuntime<()>,
     {
+        prepare_runtime_metrics(&runtime);
         self.heartbeat_starter = Some(Arc::new(move |sender, interval_ms| {
             sender.start_heartbeat(runtime.clone(), interval_ms)
         }));

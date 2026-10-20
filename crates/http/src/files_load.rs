@@ -1,3 +1,9 @@
+//! 批量文件响应中间件：保存外部普通Multi句柄，原请求流程负责文件选择、读取及缓存。
+//! FilesLoad::new仅在初始化冷路径登记所用核心，不依赖FileLoad先构建，不创建运行时。
+//! 成功登记的身份/名称/强保活归pi_async_rt，共享核心的注销/关闭由宿主统一协调。
+//! 原请求中的目录遍历/metadata含同步文件访问，本次不改动，也不新增采集器或任务。
+//! 冻结边界见本地FLS-MET-DESIGN-001/D19；参数/Ok验证见下方独立单元FLS-MET-U01。
+
 use std::ffi::OsStr;
 use std::fs::DirEntry;
 use std::io::{Error, ErrorKind, Result};
@@ -34,6 +40,19 @@ use pi_async_rt::rt::{AsyncRuntime, multi_thread::MultiTaskRuntime};
 use std::time::SystemTime;
 use tcp::Socket;
 
+// D19仅单元测试观测：保存真实登记的原编号、名称和原Result，不持运行时。
+// 同步构造线程写入、单元取走，借用不跨await/线程；普通生产构建完全移除。
+// 验证入口：runtime_metrics_tests::test_files_load_registers_runtime_metrics。
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+std::thread_local! {
+    static FILES_LOAD_METRICS_TEST_RESULT: std::cell::RefCell<Option<(
+        usize,
+        String,
+        std::result::Result<pi_async_rt::runtime_metrics::RuntimeMetricId,
+            pi_async_rt::runtime_metrics::RuntimeMetricRegistrationError>,
+    )>> = const { std::cell::RefCell::new(None) };
+}
+
 ///
 /// 默认的附件名
 ///
@@ -44,14 +63,18 @@ pub(crate) const FILES_LOAD_SIZE_HEADER: &str = "PI-FILES-LOAD-SIZE";
 // 批量加载的文件数量头信息关键字
 pub(crate) const FILES_LOAD_COUNT_HEADER: &str = "PI-FILES-LOAD-COUNT";
 
+/// 使用外部注入的普通Multi批量加载文件并生成HTTP响应的中间件。
 ///
-/// Http文件批量加载器
-///
+/// `new`按原字段保存运行时/缓存句柄及响应策略，不创建或独占运行时核心。
+/// 指标登记只发生于构造冷路径，不进入原目录扫描、逐文件读取或响应派发路径；
+/// 组件释放不注销共享核心，成功登记的强保活须由宿主生命周期协调者处理。
+/// 关联验证：`runtime_metrics_tests::test_files_load_registers_runtime_metrics`仅核对登记参数/Ok，
+/// 不代表原文件业务、缓存及既有unsafe实现已经由本专项完整验证。
 pub struct FilesLoad {
     files_async_runtime:    MultiTaskRuntime<()>,       //异步文件运行时
     root:                   PathBuf,                    //文件根路径
     cache:                  Option<Arc<StaticCache>>,   //文件缓存
-    is_cache:               bool,                       //是否要求客户端每次请求强制验证资源是否过期
+    is_cache:               bool,                       //为false时，原缓存响应头逻辑追加no-cache
     is_store:               bool,                       //设置是否缓存资源
     is_transform:           bool,                       //设置是否允许客户端更改前端资源内容
     is_only_if_cached:      bool,                       //设置是否要求代理有缓存，则只由代理向客户端提供资源
@@ -412,7 +435,58 @@ impl<S: Socket> Middleware<S, GatewayContext> for FilesLoad {
 }
 
 impl FilesLoad {
-    /// 构建指定根目录的文件批量加载器
+    /// 使用外部普通Multi构造批量文件加载器，原路径准备后/返回Self前执行冷登记。
+    ///
+    /// # 参数与返回
+    /// - `files_async_runtime`：外部已构建并完成必要启动的普通Multi句柄，按值保存；
+    ///   可传clone与其它组件共享，原文件任务继续使用其clone，不创建或独占新核心。
+    ///   调用方负责维持原运行时的合法线程/资源生命周期。
+    /// - `dir`：按原Into<PathBuf>转换并逐分量重组后保存，不新增空/相对路径检查；
+    ///   内置路径处理不访问文件系统，不保证目录存在、权限、符号链接或安全隔离。
+    ///   自定义Into的成本、副作用、阻塞及panic由其实现负责。
+    /// - `cache`：按值保存原Option<Arc<StaticCache>>；None不使用本缓存，Some不独占缓存。
+    ///   本构造不查询/写入缓存，不启动缓存整理或文件读取。
+    /// - `is_cache`：原响应策略，false时原缓存头helper追加no-cache，true时不追加。
+    /// - `is_store`：保存原缓存写入/响应策略标记；false不执行本中间件中受该标记
+    ///   控制的缓存写入，原缓存头helper在对应路径追加no-store，本构造只保存标记。
+    /// - `is_transform`：原响应策略，false时原缓存头helper追加no-transform。
+    /// - `is_only_if_cached`：保存并传给原缓存头helper的提示标记，不在本构造查缓存，
+    ///   不保证后续缓存未命中禁止文件I/O，也不修正原报头格式。
+    /// - `max_age`：原缓存有效秒数，按原as u64保存，0原样保留，不新增范围校验。
+    /// 返回新的FilesLoad，持有传入句柄和原策略；不是登记回执或健康/任务完成证明。
+    /// 登记失败仅沿已有warn设施告警，仍返回原对象，不新增业务Err、重试、关闭或注销。
+    ///
+    /// # 登记、生命周期与安全边界
+    /// runtime_metrics默认开启，非wasm32时以pi_http-multi-{原get_id}直接登记。
+    /// 同核同名复用由上游负责，不要求先构造FileLoad，原编号不替代指标身份；
+    /// 构造仍创建新对象且登记改变外部状态，非纯、非幂等，不能当作登记续租。
+    /// 成功后上游强保活核心，本库不保存生产ID/结果，不新增Drop注销或管理API。
+    /// 宿主唯一协调者负责停轮/禁止重登记、注销、在途采样收尾及原关闭；
+    /// 销毁一个共享中间件不授予整体注销权，原Multi::close也不提供停止worker能力。
+    /// 关闭feature或wasm32不编译名称/登记；不启trace/Provider、时钟或周期采集。
+    /// 构造同步无await/取消点，不派发任务；上游有同步冷锁/分配，失败logger可能
+    /// 同步等待或panic，应在服务初始化调用，不在请求/逐文件或异步poll中反复构造。
+    /// logger不得处理本告警时递归构造并再次触发同一告警；不捕获用户日志重入或panic。
+    /// 原路径Err分支保留panic，当前trim_path只重组并返回Ok；Into/分配器边界不变。
+    /// 并发构造只使用局部状态、上游线程安全登记及原logger，不增本库锁/unsafe，
+    /// 无借用或锁跨await；原FilesLoad/缓存/运行时的整体使用仍遵守其既有安全合同。
+    /// 原请求目录遍历/metadata存在同步I/O，不因登记而成为全流程非阻塞。
+    ///
+    /// # 成本与示例
+    /// 路径m字节/k分量，原重组最坏O(k*m)时间/O(m)额外空间，自定义Into成本另计。
+    /// 新增名称n字节格式化为O(n)时间/空间；上游登记O(C+A*n+L+n)时间/额外空间，
+    /// C为历史核心数、A为本核原名数、L为旧合并名长度。锁争用、分配器/logger等待
+    /// 没有本入口保证的时长上限，不声称构造零成本，也不改变原文件热路径。
+    /// 示例仅装配中间件；实际运行时启动、时钟、进程采集及最终注销由宿主负责：
+    /// ```no_run
+    /// use pi_async_rt::rt::multi_thread::MultiTaskRuntime;
+    /// use pi_http::files_load::FilesLoad;
+    /// fn build_files(runtime: MultiTaskRuntime<()>) -> FilesLoad {
+    ///     FilesLoad::new(runtime, "./htdocs", None, true, true, false, false, 60)
+    /// }
+    /// ```
+    /// 验证：files_load::runtime_metrics_tests::test_files_load_registers_runtime_metrics，
+    /// FLS-MET-U01只验证实际参数/原Ok，边界与冻结来源为本地FLS-MET-DESIGN-001。
     pub fn new<P: Into<PathBuf>>(
         files_async_runtime: MultiTaskRuntime<()>,
         dir: P,
@@ -427,15 +501,34 @@ impl FilesLoad {
             Err(e) => {
                 panic!("Create Http Files Load Failed, reason: {:?}", e);
             }
-            Ok(root) => FilesLoad {
-                files_async_runtime,
-                root,
-                cache,
-                is_cache,
-                is_store,
-                is_transform,
-                is_only_if_cached,
-                max_age: max_age as u64,
+            Ok(root) => {
+                #[cfg(all(feature = "runtime_metrics", not(target_arch = "wasm32")))]
+                {
+                    // FLS-REGISTER：只借原外部句柄冷登记，身份/强保活归上游，不取得注销权。
+                    let metric_name = format!("pi_http-multi-{}", files_async_runtime.get_id());
+                    let registration = pi_async_rt::runtime_metrics::register_runtime_metrics(
+                        &files_async_runtime, &metric_name,
+                    );
+                    #[cfg(test)]
+                    FILES_LOAD_METRICS_TEST_RESULT.with(|value| {
+                        // FLS-OBSERVE：仅复制本次实际参数/纯Result，借用在原日志调用前结束。
+                        *value.borrow_mut() = Some((files_async_runtime.get_id(), metric_name.clone(), registration));
+                    });
+                    if let Err(error) = registration {
+                        // 指标失败只告警继续原构造，不重试/关闭/注销共享核心或改变业务返回。
+                        warn!("HTTP 批量文件加载运行时指标注册失败, 名称: {}, 原因: {}", metric_name, error);
+                    }
+                }
+                FilesLoad {
+                    files_async_runtime,
+                    root,
+                    cache,
+                    is_cache,
+                    is_store,
+                    is_transform,
+                    is_only_if_cached,
+                    max_age: max_age as u64,
+                }
             },
         }
     }
@@ -897,4 +990,46 @@ async fn async_load_files(files_async_runtime: MultiTaskRuntime<()>,
         ErrorKind::NotFound,
         "Load files error, reason: invalid response body",
     ))
+}
+
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+mod runtime_metrics_tests {
+    //! 只验证FilesLoad::new对外部普通Multi的真实冷登记参数及原Result为Ok。
+    //! 记录来自本构造内的实际调用，不依赖先构建FileLoad、不手动预登记或模拟上游。
+    //! 不启trace/Provider/SDK、不采集或访问网络/文件，不覆盖原文件业务与上游算法。
+    //! 只精确选择本单元串行执行；冻结设计与证据入口为本地FLS-MET-DESIGN-001。
+
+    use super::*;
+
+    /// 被测生产入口：files_load::FilesLoad::new，原Ok(root)内发布前登记外部Multi。
+    /// 测试宿主启动原时钟并创建一个worker的真实空Multi，只构造一次无缓存FilesLoad，
+    /// 核对真实参数原编号、精确三段名和原Result为Ok，不以返回Self替代登记成功。
+    /// 该新核心归测试独占，取走记录后、参数断言前显式注销自己的成功ID；
+    /// 不加Drop注销，不测试上游注销算法，不使用原Multi::close伪造停止worker。
+    /// 槽只持纯元数据，当前线程同步取走，无跨await借用或在途采样；
+    /// 参数核对O(n)时间/空间，n为短名称字节数，原Builder/时钟沿测试进程生命周期退出。
+    /// 不承诺原文件解析/缓存/异步读取、SDK、容量、去重或其它HTTP入口已被本单元验证。
+    #[test]
+    fn test_files_load_registers_runtime_metrics() {
+        FILES_LOAD_METRICS_TEST_RESULT.with(|value| { value.borrow_mut().take(); });
+        let _timer = pi_async_rt::rt::startup_global_time_loop(10);
+        let runtime = pi_async_rt::rt::AsyncRuntimeBuilder::default_multi_thread(
+            Some("http-filesload-metrics-unit"), None, Some(1), Some(1),
+        );
+        let expected_runtime_id = runtime.get_id();
+        let expected_name = format!("pi_http-multi-{}", expected_runtime_id);
+
+        let _files = FilesLoad::new(runtime.clone(), ".", None, false, false, false, false, 0);
+
+        let observed = FILES_LOAD_METRICS_TEST_RESULT.with(|value| value.borrow_mut().take());
+        if let Some((_, _, Ok(id))) = &observed {
+            // 本测试明确拥有新核心，清理先于断言；不授予业务组件注销共享核心的权力。
+            let _ = pi_async_rt::runtime_metrics::unregister_runtime_metrics(*id);
+        }
+        let (actual_runtime_id, actual_name, registration) = observed
+            .expect("FilesLoad::new必须调用真实登记并记录本次原始结果");
+        assert_eq!(actual_runtime_id, expected_runtime_id, "必须登记外部实际注入的运行时");
+        assert_eq!(actual_name, expected_name, "登记名称必须精确使用库名、真实类型和原编号");
+        assert!(registration.is_ok(), "实际登记必须成功，原始结果: {:?}", registration);
+    }
 }

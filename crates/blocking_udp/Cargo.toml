@@ -1,11 +1,16 @@
 [package]
 name = "pi_blocking_udp"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 description = "pi_blocking_udp"
 repository = "https://github.com/GaiaWorld/pi_net/tree/crateio"
 license = "MIT OR Apache-2.0"
 keywords = ["pi", "blocking_udp"]
+
+[features]
+default = ["runtime_metrics"]
+# 仅控制本库冷初始化登记，不启用采集或上报。
+runtime_metrics = []
 
 [dependencies]
 futures = "0.3"
@@ -17,7 +22,7 @@ bytes = "~1.11"
 lazy_static = "1.5"
 log = "0.4"
 pi_hash = "0.1"
-pi-async-rt = "0.5"
+pi-async-rt = "0.5.17"
 async-channel = "2.3"
 
 [dev-dependencies]

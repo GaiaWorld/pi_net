@@ -23,9 +23,27 @@ lazy_static! {
     pub static ref MQTT_RESPONSE_SYS_TOPIC: String = "$r".to_string();
 }
 
-// Quic Mqtt代理的公共异步运行时
+// QUIC代理共用的进程级私有普通Worker，与TCP/TLS Worker独立，使用前不提前构建。
+// 原Builder返回后/句柄发布及业务spawn前，在本冷初始化块登记一次；不按代理/连接登记。
+// 原get_id只用于稳定命名；上游管理真实指标身份及强保活，本库不新增结果/管理/关闭接口。
+// runtime_metrics默认开启，关闭feature或wasm32不生成登记代码，不自动开启trace/Provider。
+// 冷格式化O(n)，上游登记O(C+A*n+L+n)时间/O(C+A+L+n)空间；n为名称字节数，C为历史
+// 核心数、A为本核原名数、L为合并名长度。沿上游同步短锁/分配边界，无await或业务热路径操作。
+// 登记Err只记录原同步日志并返回原Worker，不关闭/注销/重试；宿主logger不得重入正在
+// 初始化的同一单例，其阻塞/panic不由本块屏蔽。static仍按原进程生命周期持有该核心。
+// 验证：本文件runtime_metrics_tests及tests/runtime_metrics_real_network.rs（QUIC构造登记）。
 lazy_static! {
-    static ref PUBLIC_QUIC_BROKER_RUNTIME: WorkerRuntime<()> = AsyncRuntimeBuilder::default_worker_thread(Some("QUIC-BROKER-RT"), None, None, Some(Some(1)));
+    static ref PUBLIC_QUIC_BROKER_RUNTIME: WorkerRuntime<()> = {
+        let rt = AsyncRuntimeBuilder::default_worker_thread(Some("QUIC-BROKER-RT"), None, None, Some(Some(1)));
+        #[cfg(all(feature = "runtime_metrics", not(target_arch = "wasm32")))]
+        {
+            let metric_name = format!("pi_mqtt-worker-{}", rt.get_id());
+            if let Err(error) = pi_async_rt::runtime_metrics::register_runtime_metrics(&rt, &metric_name) {
+                log::error!("QUIC MQTT 运行时指标注册失败, 名称: {}, 原因: {}", metric_name, error);
+            }
+        }
+        rt
+    };
 }
 
 ///
@@ -714,5 +732,57 @@ fn save_topic(broker: &MqttBroker,
     } else {
         //指定会话的已订阅主题不存在
         broker.topics.insert(session.clone(), vec![topic.clone()]);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod runtime_metrics_tests {
+    //! 验证QUIC专用私有Worker的自动登记，与broker单元共用真实SDK宿主。
+    //! 不手动登记被测核心，不建立测试专用生产getter；协议网络验证由独立target承担。
+    //! 需显式启用pi-async-rt/trace并用--ignored串行执行，不由开发依赖隐式开启trace。
+    use super::*;
+    use pi_async_rt::runtime_metrics::{collect_and_report_runtime_metrics,
+        RuntimeMetricCollectionOptions, RuntimeMetricInstanceStatus, RuntimeMetricKind};
+
+    /// 被测生产入口为PUBLIC_QUIC_BROKER_RUNTIME原初始化块。
+    /// 精确核对原get_id命名及Worker类别；重复访问/Clone不生成新名称或指标身份。
+    /// 与TCP/TLS单例都已创建时，所有pi_mqtt名称必须对应两个不同指标ID。
+    /// feature关闭仍构建原核心但没有本库登记。O(C)纯报告核对，无网络/注销/关闭。
+    #[test]
+    #[ignore = "需测试宿主显式开启pi-async-rt/trace，串行执行此专项"]
+    fn test_quic_broker_runtime_metrics_name_and_independence() {
+        crate::broker::runtime_metrics_tests::initialize_reporting();
+        let rt = &*PUBLIC_QUIC_BROKER_RUNTIME;
+        let name = format!("pi_mqtt-worker-{}", rt.get_id());
+        let report = collect_and_report_runtime_metrics(RuntimeMetricCollectionOptions::default())
+            .expect("采集QUIC Worker失败");
+        let entries: Vec<_> = report.instances().iter()
+            .filter(|entry| entry.names().any(|value| value == name)).collect();
+        if cfg!(feature = "runtime_metrics") {
+            assert_eq!(entries.len(), 1, "QUIC原初始化块必须自动登记一次");
+            let entry = entries[0];
+            assert_eq!(entry.name(), name);
+            assert_eq!(entry.names().collect::<Vec<_>>(), vec![name.as_str()]);
+            assert_eq!(entry.kind(), RuntimeMetricKind::Worker);
+            assert_eq!(entry.status(), RuntimeMetricInstanceStatus::RecordInvoked);
+            assert_eq!(entry.counts(), Some((rt.len(), Some(rt.wait_len()))));
+        } else {
+            assert!(entries.is_empty());
+        }
+        assert_eq!(rt.clone().get_id(), rt.get_id());
+        assert_eq!(PUBLIC_QUIC_BROKER_RUNTIME.get_id(), rt.get_id());
+        let next = collect_and_report_runtime_metrics(RuntimeMetricCollectionOptions::default())
+            .expect("重复采集QUIC Worker失败");
+        let again: Vec<_> = next.instances().iter()
+            .filter(|entry| entry.names().any(|value| value == name)).collect();
+        assert_eq!(again.len(), entries.len());
+        if let Some(entry) = entries.first() {
+            assert_eq!(again[0].id(), entry.id());
+            assert_eq!(again[0].names().collect::<Vec<_>>(), vec![name.as_str()]);
+        }
+        let mqtt: Vec<_> = next.instances().iter()
+            .filter(|entry| entry.name().starts_with("pi_mqtt-worker-")).collect();
+        let unique: std::collections::BTreeSet<_> = mqtt.iter().map(|entry| entry.id().as_u64()).collect();
+        assert_eq!(unique.len(), mqtt.len(), "不同单例不能合并为同一指标身份");
     }
 }

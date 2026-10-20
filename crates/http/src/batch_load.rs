@@ -1,3 +1,7 @@
+//! HTTP批量文件加载；仅在原构造准备完成/发布前登记外部普通Multi。
+//! 不修改请求、批次编码、文件派发、缓存或关闭；本次冷登记边界为F01/B-BATCH。
+//! 参数/Ok专项：batch_runtime_metrics_tests::test_batch_load_registers_runtime_metrics。
+
 use std::ffi::OsStr;
 use std::fs::DirEntry;
 use std::io::{Error, ErrorKind, Result};
@@ -447,8 +451,62 @@ impl<S: Socket> Middleware<S, GatewayContext> for BatchLoad {
     }
 }
 
+// 仅测试观测真实参数/原Result；不持核心，不生成生产状态或公开查询。
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+std::thread_local! {
+    static BATCH_METRICS_TEST_RESULT: std::cell::RefCell<Option<(usize, String,
+        std::result::Result<pi_async_rt::runtime_metrics::RuntimeMetricId,
+            pi_async_rt::runtime_metrics::RuntimeMetricRegistrationError>)>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+mod batch_runtime_metrics_tests {
+    //! 只验证BatchLoad::new实际自动登记的原Multi/名称参数及Ok，不以Self成功代替登记。
+    //! 使用测试自有真实空Multi，无网络/采集/SDK/容量/去重测试，不代表文件业务通过。
+    //! 槽仅纯测试可见，断言前显式注销本测试自己的ID；原worker沿测试进程生命周期退出。
+
+    use super::*;
+
+    /// 被测生产入口：BatchLoad::new的原准备完成/发布前冷登记。
+    /// "."只用于原路径重组，不验证目录存在/权限，不执行文件任务；
+    /// 命名核对O(L)时间/空间，无跨await借用，严格串行且只断言实际参数与原Ok。
+    #[test]
+    fn test_batch_load_registers_runtime_metrics() {
+        BATCH_METRICS_TEST_RESULT.with(|value| { value.borrow_mut().take(); });
+        let _clock = pi_async_rt::rt::startup_global_time_loop(10);
+        let runtime = pi_async_rt::rt::AsyncRuntimeBuilder::default_multi_thread(
+            Some("http-cold-metrics-unit"), None, Some(1), Some(1),
+        );
+        let expected_id = runtime.get_id();
+        let _middleware = BatchLoad::new(runtime.clone(), ".", None, false, false, false, false, 0);
+        let observed = BATCH_METRICS_TEST_RESULT.with(|value| value.borrow_mut().take());
+        if let Some((_, _, Ok(id))) = &observed {
+            let _ = pi_async_rt::runtime_metrics::unregister_runtime_metrics(*id);
+        }
+        let (actual_id, actual_name, registration) = observed.expect("原构造必须实际执行冷登记");
+        assert_eq!(actual_id, expected_id, "必须使用实际注入核心");
+        assert_eq!(actual_name, format!("pi_http-multi-{}", expected_id));
+        assert!(registration.is_ok(), "真实登记必须成功: {:?}", registration);
+    }
+}
+
 impl BatchLoad {
     /// 构建指定根目录的文件改进的批量加载器
+    ///
+    /// files_async_runtime是外部共享普通Multi，按原逻辑移动保存；dir转换并重组路径，
+    /// 不检查目录存在/权限。cache允许None；is_cache/is_store/is_transform/
+    /// is_only_if_cached及max_age沿原缓存语义保存，max_age单位秒、0不新增校验。
+    /// 返回原Self，原trim_path错误仍panic；默认发布前登记pi_http-multi-原编号，
+    /// 失败仅原warn，不加业务错误/字段/注销。示例：
+    /// ```no_run
+    /// # fn build(rt: pi_async_rt::rt::multi_thread::MultiTaskRuntime<()>) {
+    /// let middleware = pi_http::batch_load::BatchLoad::new(rt, ".", None, false, false, false, false, 0);
+    /// # }
+    /// ```
+    /// 名称处理O(L)时间/空间，路径沿原trim_path成本，另有上游短同步锁/分配/logger等待；
+    /// 无新增await/异步锁/任务。不在请求热路径构造；同名登记幂等归上游，构造不是纯函数。
+    /// 登记强保活而不转移核心所有权，Drop/原关闭不自动注销；不新增unsafe或线程权限。
+    /// 专项batch_runtime_metrics_tests::test_batch_load_registers_runtime_metrics仅参数/Ok。
     pub fn new<P: Into<PathBuf>>(
         files_async_runtime: MultiTaskRuntime<()>,
         dir: P,
@@ -463,15 +521,29 @@ impl BatchLoad {
             Err(e) => {
                 panic!("Create Http Batch Load Failed, reason: {:?}", e);
             }
-            Ok(root) => BatchLoad {
-                files_async_runtime,
-                root,
-                cache,
-                is_cache,
-                is_store,
-                is_transform,
-                is_only_if_cached,
-                max_age: max_age as u64,
+            Ok(root) => {
+                #[cfg(all(feature = "runtime_metrics", not(target_arch = "wasm32")))]
+                {
+                    let metric_name = format!("pi_http-multi-{}", files_async_runtime.get_id());
+                    let registration = pi_async_rt::runtime_metrics::register_runtime_metrics(&files_async_runtime, &metric_name);
+                    #[cfg(test)]
+                    BATCH_METRICS_TEST_RESULT.with(|value| {
+                        *value.borrow_mut() = Some((files_async_runtime.get_id(), metric_name.clone(), registration));
+                    });
+                    if let Err(error) = registration {
+                        warn!("HTTP 批量加载运行时指标注册失败, 名称: {}, 原因: {}", metric_name, error);
+                    }
+                }
+                BatchLoad {
+                    files_async_runtime,
+                    root,
+                    cache,
+                    is_cache,
+                    is_store,
+                    is_transform,
+                    is_only_if_cached,
+                    max_age: max_age as u64,
+                }
             },
         }
     }

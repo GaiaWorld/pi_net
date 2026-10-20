@@ -1,11 +1,16 @@
 [package]
 name = "pi_tcp"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2021"
 description = "pi_tcp"
 repository = "https://github.com/GaiaWorld/pi_net/tree/crateio"
 license = "MIT OR Apache-2.0"
 keywords = ["pi",  "tcp"]
+
+[features]
+default = ["runtime_metrics"]
+# 仅控制本库冷初始化登记，不启用采集或上报。
+runtime_metrics = []
 
 [dependencies]
 futures = "0.3"
@@ -21,7 +26,7 @@ rustls = "0.20"
 rustls-pemfile = "1.0"
 spin_sleep_util = "~0.1"
 log = "0.4"
-pi-async-rt = "0.5"
+pi-async-rt = "0.5.17"
 pi_async_buffer = "0.11"
 pi_hash = { version = "0.1", features = ["xxhash"] }
 pi_cancel_timer = "0.4"

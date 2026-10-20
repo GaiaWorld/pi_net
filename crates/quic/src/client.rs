@@ -68,8 +68,10 @@ impl Clone for QuicClient {
 }
 
 impl AsyncService for QuicClient {
+    /// 原UDP冷绑定/重绑定时只登记借入Local，不保存或接管核心，不改事件派发。
+    /// 返回()不表示采样成功；成本/线程及专项见crate::register_local_runtime_metrics。
     fn bind_runtime(&mut self, _rt: LocalTaskRuntime<()>) {
-
+        crate::register_local_runtime_metrics(&_rt);
     }
 
     fn handle_binded(&self,
@@ -468,6 +470,8 @@ impl QuicClient {
         init_udp_terminal(Box::new(client.clone()));
 
         //用最后一个Quic运行时启动客户端定时器
+        // 该原派发早于pool.run，只在此冷点先登记；重复同名交上游，不改原派发。
+        crate::register_local_runtime_metrics(runtimes.last().unwrap());
         runtimes
             .last()
             .unwrap()

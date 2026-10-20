@@ -1,6 +1,6 @@
 [package]
 name = "pi_mqtt"
-version = "0.8.1"
+version = "0.8.2"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_mqtt"
@@ -8,8 +8,13 @@ repository = "https://github.com/GaiaWorld/pi_net/tree/crateio"
 license = "MIT OR Apache-2.0"
 keywords = ["pi", "mqtt"]
 
+[features]
+default = ["runtime_metrics"]
+# 只控制本库初始化时的登记，不启用上游采集、运输或全局设施。
+runtime_metrics = []
+
 [dependencies]
-pi-async-rt = "0.5"
+pi-async-rt = "0.5.17"
 fnv = "1.0"
 futures = "0.3"
 mio = "0.8"
@@ -31,3 +36,12 @@ log = "0.4"
 [dev-dependencies]
 twox-hash = "1.5"
 env_logger = "0.11"
+# 测试命令显式传入pi-async-rt/trace，避免resolver=1把开发依赖功能合并到普通构建。
+# 以下仅为测试宿主的官方SDK/真实回环OTLP依赖，不进入生产依赖。
+opentelemetry = { version = "=0.33.1", default-features = false, features = ["metrics"] }
+opentelemetry_sdk = { version = "=0.33.1", default-features = false, features = ["metrics", "experimental_metrics_custom_reader"] }
+opentelemetry-otlp = { version = "=0.33.1", default-features = false, features = ["grpc-tonic", "metrics"] }
+opentelemetry-proto = { version = "=0.33.1", default-features = false, features = ["gen-tonic", "metrics"] }
+tonic = { version = "=0.14.6", default-features = false, features = ["server"] }
+tokio = { version = "1.50", default-features = false, features = ["rt-multi-thread", "net", "sync", "time"] }
+tokio-stream = { version = "0.1.19", default-features = false, features = ["net"] }

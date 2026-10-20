@@ -1,6 +1,6 @@
 [package]
 name = "pi_quic"
-version = "0.10.0"
+version = "0.10.1"
 authors = ["vmos <vmosone007@gmail.com>"]
 edition = "2021"
 description = "Quic client/server"
@@ -8,11 +8,16 @@ repository = "https://github.com/GaiaWorld/pi_net/tree/crateio"
 license = "MIT OR Apache-2.0"
 keywords = ["pi", "quic"]
 
+[features]
+default = ["runtime_metrics"]
+# 仅控制本库冷初始化登记，不启用采集或上报。
+runtime_metrics = []
+
 [dependencies]
 futures = "0.3"
 parking_lot = "0.12"
 quinn-proto = "0.8"
-pi-async-rt = "0.5"
+pi-async-rt = "0.5.17"
 rustls = { version = "0.20", features = ["dangerous_configuration"] }
 rustls-pemfile = "1.0"
 bytes = "~1.11"

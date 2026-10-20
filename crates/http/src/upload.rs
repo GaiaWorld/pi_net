@@ -1,3 +1,7 @@
+//! HTTP文件上传；仅在原根目录准备成功后/发布前登记外部普通Multi。
+//! 不改变上传/删除、目录创建、原错误或派发逻辑，无生产结果/ID或生命周期管理。
+//! F01/B-UPLOAD；参数/Ok专项：batch_runtime_metrics_tests::test_upload_registers_runtime_metrics。
+
 use std::fs::create_dir_all;
 use std::io::{Error, ErrorKind, Result};
 use std::path::PathBuf;
@@ -247,8 +251,60 @@ impl<S: Socket> Middleware<S, GatewayContext> for UploadFile {
     }
 }
 
+// 仅测试观测真实参数/原Result；不持核心，不生成生产状态或公开查询。
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+std::thread_local! {
+    static UPLOAD_METRICS_TEST_RESULT: std::cell::RefCell<Option<(usize, String,
+        std::result::Result<pi_async_rt::runtime_metrics::RuntimeMetricId,
+            pi_async_rt::runtime_metrics::RuntimeMetricRegistrationError>)>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+mod batch_runtime_metrics_tests {
+    //! 只验证UploadFile::new实际自动登记的原Multi/名称参数及Ok，不以Self成功代替登记。
+    //! 使用测试自有真实空Multi，无网络/采集/SDK/容量/去重测试，不代表文件业务通过。
+    //! 槽仅纯测试可见，断言前显式注销本测试自己的ID；原worker沿测试进程生命周期退出。
+
+    use super::*;
+
+    /// 被测生产入口：UploadFile::new的原准备完成/发布前冷登记。
+    /// "."只用于原构造，UploadFile可能读取目录元数据但不新建目录，不执行文件任务；
+    /// 命名核对O(L)时间/空间，无跨await借用，严格串行且只断言实际参数与原Ok。
+    #[test]
+    fn test_upload_registers_runtime_metrics() {
+        UPLOAD_METRICS_TEST_RESULT.with(|value| { value.borrow_mut().take(); });
+        let _clock = pi_async_rt::rt::startup_global_time_loop(10);
+        let runtime = pi_async_rt::rt::AsyncRuntimeBuilder::default_multi_thread(
+            Some("http-cold-metrics-unit"), None, Some(1), Some(1),
+        );
+        let expected_id = runtime.get_id();
+        let _middleware = UploadFile::new(runtime.clone(), ".");
+        let observed = UPLOAD_METRICS_TEST_RESULT.with(|value| value.borrow_mut().take());
+        if let Some((_, _, Ok(id))) = &observed {
+            let _ = pi_async_rt::runtime_metrics::unregister_runtime_metrics(*id);
+        }
+        let (actual_id, actual_name, registration) = observed.expect("原构造必须实际执行冷登记");
+        assert_eq!(actual_id, expected_id, "必须使用实际注入核心");
+        assert_eq!(actual_name, format!("pi_http-multi-{}", expected_id));
+        assert!(registration.is_ok(), "真实登记必须成功: {:?}", registration);
+    }
+}
+
 impl UploadFile {
     /// 构建指定根目录的文件上传处理器
+    ///
+    /// files_async_runtime为外部共享普通Multi，dir按原Into<PathBuf>/trim_path重组；
+    /// 目录不存在仍同步创建，失败沿原panic。准备成功后默认冷登记pi_http-multi-原编号，
+    /// 指标失败只warn后返回原Self，不新增字段/业务错误/注销。简单装配：
+    /// ```no_run
+    /// # fn build(rt: pi_async_rt::rt::multi_thread::MultiTaskRuntime<()>) {
+    /// let middleware = pi_http::upload::UploadFile::new(rt, ".");
+    /// # }
+    /// ```
+    /// 原目录I/O可能阻塞；名称O(L)时间/空间，加上游短同步锁/分配和logger成本。
+    /// 无新增await/异步锁/任务，非纯函数；重复构造不等于新核心，登记幂等归上游。
+    /// 仅冷初始化使用，不进入请求热路径；强保活由上游持有，宿主负责共享核心生命周期，
+    /// 本组件不在Drop/失败中注销，原unsafe/线程域不变。专项仅验证实际登记参数/Ok。
     pub fn new<P: Into<PathBuf>>(files_async_runtime: MultiTaskRuntime<()>,
                                  dir: P) -> Self {
         match trim_path(dir) {
@@ -264,6 +320,18 @@ impl UploadFile {
                     }
                 }
 
+                #[cfg(all(feature = "runtime_metrics", not(target_arch = "wasm32")))]
+                {
+                    let metric_name = format!("pi_http-multi-{}", files_async_runtime.get_id());
+                    let registration = pi_async_rt::runtime_metrics::register_runtime_metrics(&files_async_runtime, &metric_name);
+                    #[cfg(test)]
+                    UPLOAD_METRICS_TEST_RESULT.with(|value| {
+                        *value.borrow_mut() = Some((files_async_runtime.get_id(), metric_name.clone(), registration));
+                    });
+                    if let Err(error) = registration {
+                        warn!("HTTP 上传运行时指标注册失败, 名称: {}, 原因: {}", metric_name, error);
+                    }
+                }
                 UploadFile {
                     files_async_runtime,
                     root,

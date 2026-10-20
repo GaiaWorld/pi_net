@@ -1,3 +1,7 @@
+//! QUIC协议库；指标增量仅在池启动、UDP冷绑定及首次客户端定时器前登记原Local。
+//! 身份/去重/强保活归pi_async_rt，采集归宿主；不增加ID字段、注销或热路径操作。
+//! NET-MET-BATCH-DESIGN-001/B-QUIC；纯登记专项见batch_runtime_metrics_tests。
+
 use std::ptr;
 use std::sync::Arc;
 use std::task::Waker;
@@ -29,8 +33,67 @@ pub mod utils;
 use crate::connect::QuicSocket;
 use crate::utils::{QuicSocketStatus, QuicSocketReady, Hibernate, ContextHandle};
 
-///
-/// Quic连接异步服务
+// 仅测试构建观测真实登记的原参数/Result，不新增生产状态或可见性。
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+std::thread_local! {
+    static QUIC_METRICS_TEST_RESULT: std::cell::RefCell<Option<(usize, String,
+        std::result::Result<pi_async_rt::runtime_metrics::RuntimeMetricId,
+            pi_async_rt::runtime_metrics::RuntimeMetricRegistrationError>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// 供本crate冷装配复用的原生Local登记；不创建核心、不读队列、不派发任务。
+/// runtime仅借用，返回()不表示成功；同名重复及真实核心身份由上游判断。
+/// 名称O(L)时间/空间，另有上游短同步锁/分配/强保活及失败logger可能等待的成本；
+/// 无await/异步锁，不持业务锁调用，不处理close/Drop/失败注销。功能关闭时无操作。
+/// 专项：batch_runtime_metrics_tests::test_quic_registers_runtime_metrics，仅参数/Ok。
+fn register_local_runtime_metrics(runtime: &LocalTaskRuntime<()>) {
+    #[cfg(all(feature = "runtime_metrics", not(target_arch = "wasm32")))]
+    {
+        let metric_name = format!("pi_quic-local-{}", runtime.get_id());
+        let registration = pi_async_rt::runtime_metrics::register_runtime_metrics(runtime, &metric_name);
+        #[cfg(test)]
+        QUIC_METRICS_TEST_RESULT.with(|value| {
+            *value.borrow_mut() = Some((runtime.get_id(), metric_name.clone(), registration));
+        });
+        if let Err(error) = registration {
+            log::warn!("QUIC 运行时指标注册失败, 名称: {}, 原因: {}", metric_name, error);
+        }
+    }
+    #[cfg(not(all(feature = "runtime_metrics", not(target_arch = "wasm32"))))]
+    let _ = runtime;
+}
+
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+mod batch_runtime_metrics_tests {
+    //! 只验证register_local_runtime_metrics向上游传入真实Local/稳定名称且原Result为Ok。
+    //! 这是无网络局部单元，不执行UDP/QUIC循环，不声称完整网络冷装配已动态测试。
+    //! 各实际调用点/原顺序由整批源码审查核对，注册算法/SDK/生命周期不重复测试。
+
+    use super::*;
+
+    /// 被测生产入口：register_local_runtime_metrics，与冷启动实际共用，不手动预登记或模拟上游。
+    /// 本测试自有真实空Local，不派发采样/业务任务，不读本地队列；取真实返回ID后
+    /// 在断言前显式注销清理，再随空runner释放，不为观测扩大生产可见性。
+    /// O(L)命名核对，严格串行，无await/网络/无界等待。
+    #[test]
+    fn test_quic_registers_runtime_metrics() {
+        QUIC_METRICS_TEST_RESULT.with(|value| { value.borrow_mut().take(); });
+        let runner = pi_async_rt::rt::serial_local_thread::LocalTaskRunner::<()>::new();
+        let runtime = runner.get_runtime();
+        let expected_id = runtime.get_id();
+        register_local_runtime_metrics(&runtime);
+        let observed = QUIC_METRICS_TEST_RESULT.with(|value| value.borrow_mut().take());
+        if let Some((_, _, Ok(id))) = &observed {
+            let _ = pi_async_rt::runtime_metrics::unregister_runtime_metrics(*id);
+        }
+        let (actual_id, actual_name, registration) = observed.expect("实际冷登记必须发生");
+        assert_eq!(actual_id, expected_id);
+        assert_eq!(actual_name, format!("pi_quic-local-{}", expected_id));
+        assert!(registration.is_ok(), "真实登记必须成功: {:?}", registration);
+    }
+}
+
+/// QUIC连接异步服务；本次登记不改变其业务回调。
 ///
 pub trait AsyncService: Send + Sync + 'static {
     /// 异步处理已连接

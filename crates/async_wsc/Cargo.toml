@@ -1,12 +1,17 @@
 [package]
 name = "pi_async_wsc"
-version = "0.8.0"
+version = "0.8.1"
 authors = ["vmos <vmos@fairblock.io>"]
 edition = "2021"
 description = "pi_async_wsc"
 repository = "https://github.com/GaiaWorld/pi_net/tree/crateio"
 license = "MIT OR Apache-2.0"
 keywords = ["pi", "async_wsc"]
+
+[features]
+default = ["runtime_metrics"]
+# 仅控制本库冷初始化登记，不启用采集或上报。
+runtime_metrics = []
 
 [dependencies]
 futures = "0.3"
@@ -25,7 +30,7 @@ lazy_static = "1.5"
 parking_lot = "0.12"
 log = "0.4"
 async-lock = "~3.4"
-pi-async-rt = "0.5"
+pi-async-rt = "0.5.17"
 pi_rand = "~0.3"
 bytestring = "1.0"
 time = "=0.3.45"

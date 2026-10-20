@@ -1,3 +1,9 @@
+//! DNS解析服务；运行时只在join_dns_resolver的原构建后/全局发布前冷登记。
+//! 默认runtime_metrics功能不安装采集器/时钟，不保存生产ID，不处理关闭或替换。
+//! 登记会由上游强保活，原close不会注销；旧核及在途采样限制由使用者理解，
+//! 不因登记成功宣称线程就绪、采样完成或释放。本次边界为NET-MET-BATCH-DESIGN-001/B-DNS。
+//! 登记参数/成功验证：batch_runtime_metrics_tests::test_dns_registers_runtime_metrics。
+
 use std::str::FromStr;
 use std::fmt::Formatter;
 use std::sync::{Arc, OnceLock};
@@ -12,6 +18,48 @@ use hickory_proto::{rr::RecordType,
 use hickory_resolver::{Name, Hosts, Resolver,
                        config::{ResolverConfig, ResolverOpts},
                        lookup::Lookup};
+
+// 仅测试构建观测实际调用的纯参数/返回值，不持核心、不中转生产行为。
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+std::thread_local! {
+    static DNS_METRICS_TEST_RESULT: std::cell::RefCell<Option<(usize, String,
+        std::result::Result<pi_async_rt::runtime_metrics::RuntimeMetricId,
+            pi_async_rt::runtime_metrics::RuntimeMetricRegistrationError>)>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(all(test, feature = "runtime_metrics", not(target_arch = "wasm32")))]
+mod batch_runtime_metrics_tests {
+    //! 仅验证公开join_dns_resolver在真实构建/发布之间的登记参数及原Ok。
+    //! 局部单元只预备原全局空表，不替生产登记；使用真实系统解析器但不查询域名/网络。
+    //! 不验证替换/采集/SDK，原关闭不改；清理自有核心前用有界通知确认原线程已启动。
+
+    use super::*;
+
+    /// 被测生产：join_dns_resolver，必须库内登记pi_dns_resolver-local-原get_id。
+    /// 返回值来自真实调用，断言前注销自有ID、移除自有表项并沿原close清理；
+    /// 通知仅为夹具退出准备，不证明采样收尾；O(L)命名核对，最长等待2秒，无指标采集。
+    #[test]
+    fn test_dns_registers_runtime_metrics() {
+        DNS_METRICS_TEST_RESULT.with(|value| { value.borrow_mut().take(); });
+        let map = GLOBAL_DNS_RESOLVE_SERVICES.get_or_init(DashMap::new);
+        join_dns_resolver("runtime-metrics-unit", DNSResolver::with_system().expect("真实系统解析器构造"));
+        let observed = DNS_METRICS_TEST_RESULT.with(|value| value.borrow_mut().take());
+        if let Some((_, _, Ok(id))) = &observed {
+            let _ = pi_async_rt::runtime_metrics::unregister_runtime_metrics(*id);
+        }
+        let (owned, _) = map.remove("runtime-metrics-unit").expect("原join必须发布解析器").1;
+        let expected_id = owned.get_id();
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        owned.send(async move { let _ = ready_tx.send(()); });
+        let ready = ready_rx.recv_timeout(std::time::Duration::from_secs(2));
+        owned.close();
+        ready.expect("原DNS所属线程必须启动才能完成夹具清理");
+        let (actual_id, actual_name, registration) = observed.expect("原join必须实际登记");
+        assert_eq!(actual_id, expected_id);
+        assert_eq!(actual_name, format!("pi_dns_resolver-local-{}", expected_id));
+        assert!(registration.is_ok(), "真实登记必须成功: {:?}", registration);
+    }
+}
 
 // DNS解析器运行时
 struct DNSResolverRuntime(LocalTaskRuntime<()>);
@@ -56,12 +104,35 @@ pub fn init_global_dns_resolve_service() {
 ///
 /// 加入一个全局DNS解析器，每个解析器由一个异步运行时推动
 ///
+/// name是保存的业务键，允许空键/重复键；resolver按原逻辑移动保存。
+/// 未初始化全局服务时保持原无操作；重复键仍创建新核并立即close旧核，返回()不表示
+/// 线程就绪或指标成功。默认在构建器返回后、insert前登记pi_dns_resolver-local-原编号，
+/// 失败只告警继续，不新增ID字段/注销/等待/Drop或解析任务逻辑。
+/// 名称处理O(L)时间/空间，另有上游登记短同步锁、分配及宿主logger成本，可能等待；
+/// 无await/异步锁，不应在解析热路径反复调用。非纯、重复调用非幂等；线程与原表合同不变。
+/// 成功登记强保活，即使原close也不会自动撤销，反复替换可能保留旧核并消耗历史预算。
+/// 示例：全局服务初始化后join_dns_resolver("system", DNSResolver::with_system()?);
+/// 登记专项：batch_runtime_metrics_tests::test_dns_registers_runtime_metrics，仅参数/Ok。
 pub fn join_dns_resolver<N: AsRef<str>>(name: N,
                                         resolver: DNSResolver) {
     if let Some(map) = GLOBAL_DNS_RESOLVE_SERVICES.get() {
         let rt = AsyncRuntimeBuilder
         ::default_local_thread(Some(("DNS-Resolver-".to_string() + name.as_ref()).as_str()),
                                None);
+
+        #[cfg(all(feature = "runtime_metrics", not(target_arch = "wasm32")))]
+        {
+            // 只登记原核心，不改变原启动、发布、同名替换或关闭时序。
+            let metric_name = format!("pi_dns_resolver-local-{}", rt.get_id());
+            let registration = pi_async_rt::runtime_metrics::register_runtime_metrics(&rt, &metric_name);
+            #[cfg(test)]
+            DNS_METRICS_TEST_RESULT.with(|value| {
+                *value.borrow_mut() = Some((rt.get_id(), metric_name.clone(), registration));
+            });
+            if let Err(error) = registration {
+                log::warn!("DNS 运行时指标注册失败, 名称: {}, 原因: {}", metric_name, error);
+            }
+        }
 
         if let Some((last_rt, _last_resolver)) = map
             .insert(name.as_ref().to_string(),

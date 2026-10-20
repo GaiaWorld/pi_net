@@ -39,8 +39,10 @@ impl Clone for QuicListener {
 }
 
 impl AsyncService for QuicListener {
+    /// 原UDP冷绑定回调仅登记借入Local，不新增保存字段/派发/关闭；返回()不表示采样成功。
+    /// 成本与线程边界见crate::register_local_runtime_metrics；对应根batch_runtime_metrics_tests。
     fn bind_runtime(&mut self, _rt: LocalTaskRuntime<()>) {
-
+        crate::register_local_runtime_metrics(&_rt);
     }
 
     fn handle_binded(&self,

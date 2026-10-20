@@ -19,3 +19,5 @@
 /crates/mqtt_proxy/tests/*.pem
 /crates/mqtt_proxy/tests/*.key
 **/*.md
+# 本地开发记录和验证日志均不进入Git跟踪。
+/docs/

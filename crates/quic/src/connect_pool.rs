@@ -80,10 +80,15 @@ impl<P: EndPointPoller> QuicSocketPool<P> {
     }
 
     /// 在指定运行时上运行Quic连接池
+    ///
+    /// rt仍由外部维护，沿原spawn线程合同启动；仅在首派发前冷登记pi_quic-local-原编号。
+    /// 失败只告警继续，返回()不是任务/采样完成；不改变超时、事件循环或关闭。
+    /// 成本/强保活见crate::register_local_runtime_metrics；纯登记专项为根batch_runtime_metrics_tests。
     pub fn run(self,
                rt: LocalTaskRuntime<()>) {
         let mut pool = self;
         let timeout = Duration::from_millis(pool.timeout);
+        crate::register_local_runtime_metrics(&rt);
         rt.spawn(event_loop(rt.clone(), pool, timeout));
     }
 }
