@@ -2927,7 +2927,7 @@ dependencies = [
 
 [[package]]
 name = "pi_async_wsc"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "actix-codec",
  "actix-http",
@@ -3020,7 +3020,7 @@ dependencies = [
 
 [[package]]
 name = "pi_blocking_udp"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-channel",
  "bytes",
@@ -3095,7 +3095,7 @@ dependencies = [
 
 [[package]]
 name = "pi_dns_resolver"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "crossbeam-channel",
  "dashmap",
@@ -3153,7 +3153,7 @@ dependencies = [
 
 [[package]]
 name = "pi_http"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64 0.13.1",
  "brotli 3.5.0",
@@ -3213,7 +3213,7 @@ dependencies = [
 
 [[package]]
 name = "pi_mqtt"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "bytes",
  "dashmap",
@@ -3278,7 +3278,7 @@ checksum = "eb60132f102822a4e019cdd9f714b0da56ba4d155493c4b132868356044a8e39"
 
 [[package]]
 name = "pi_quic"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "bytes",
  "crossbeam-channel",
@@ -3395,7 +3395,7 @@ dependencies = [
 
 [[package]]
 name = "pi_tcp"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "bytes",
  "crossbeam-channel",
