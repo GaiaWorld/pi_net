@@ -26,6 +26,10 @@ use pi_hash::XHashMap;
 
 use crate::{Socket, SocketHandle, Stream};
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "hibernate_regression.rs"]
+mod hibernate_regression;
+
 ///
 /// Tcp连接池发送器表
 ///
@@ -629,7 +633,13 @@ impl<'a, S: Stream> DerefMut for SharedRefMut<'a, S> {
     }
 }
 
-/// 线程安全的异步休眠对象
+/// 连接的一次异步休眠，共享句柄的克隆指向同一次休眠状态，不是独立的广播订阅。
+///
+/// 由连接所属运行时轮询，使用连接句柄的 `wakeup` 发布成功或错误结果。Pending
+/// 不表示线程停止；每次轮询仍有短同步锁和原事件重新登记开销，锁竞争可能等待。
+/// 不应在完成后再次轮询，也不要持有该调用链需要的锁等待休眠完成。
+/// 关联 `hibernate_regression` 的 TCP/TLS 真实专项和局部分支单元，及外部唤醒基准。
+// TCP-HIB-REPAIR-001/D-HIB-07仅修订锁序/通知，不扩展原SocketHandle的整体引用边界。
 pub struct Hibernate<S: Socket>(Arc<InnerHibernate<S>>);
 
 impl<S: Socket> Clone for Hibernate<S> {
@@ -642,59 +652,63 @@ impl<S: Socket> Future for Hibernate<S> {
     type Output = IOResult<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut locked = self.0.waker.lock(); //由锁保护异步休眠对象的唤醒
+        // clone/drop可调用唤醒器实现，不能放在W或H的临界区。待销毁值的声明
+        // 在W守卫之前，即使登记出错或展开，也先释放守卫再销毁这些值。
+        // 提前准备避免为clone拆分两次W临界区；Ready分支也有一次clone/drop，
+        // 其实现可能分配或panic，相关额外成本由前后基准观察，不作零成本承诺。
+        let mut incoming = Some(cx.waker().clone());
+        let mut retired_waker = None;
+        let mut stored_result;
+        let (polled, run_tasks) = {
+            let mut locked = self.0.waker.lock();
 
-        //获取唤醒的结果值
-        let result = self
-            .0
-            .result
-            .0
-            .borrow_mut()
-            .take();
+            // 仅测试的阶段探针；正常库和基准完全不编译此调用。
+            #[cfg(all(test, target_os = "linux"))]
+            hibernate_regression::after_poll_waker_lock(&*self);
 
-        if let Some(result) = result {
-            //已设置唤醒的结果值，则立即返回就绪
-            if let Err(e) = self
-                .0
-                .handle
-                .reregister_interest(self.0.ready.clone()) {
-                //在唤醒后重置当前流感兴趣的事件失败，则立即返回错误原因
-                Poll::Ready(Err(e))
+            stored_result = self.0.result.0.borrow_mut().take();
+            // 保持原先先取结果、再重新登记事件的顺序，不持锁await或执行通知。
+            if let Err(e) = self.0.handle.reregister_interest(self.0.ready.clone()) {
+                (Poll::Ready(Err(e)), false)
+            } else if let Some(result) = stored_result.take() {
+                (Poll::Ready(result), true)
             } else {
-                //在唤醒后重置当前流感兴趣的事件成功
-                self.0.handle.run_hibernated_tasks(); //立即异步运行连接休眠时的所有任务
-                Poll::Ready(result)
-            }
-        } else {
-            //需要休眠，则立即返回挂起
-            if let Err(e) = self
-                .0
-                .handle
-                .reregister_interest(self.0.ready.clone()) {
-                //在休眠时重置当前流感兴趣的事件为只写失败，则立即返回错误原因
-                Poll::Ready(Err(e))
-            } else {
-                //在休眠时重置当前流感兴趣的事件为只写成功
+                // set_hibernate只短持H；获取为W→H，离开该调用先释放H。
                 if self.0.handle.set_hibernate(self.clone()) {
-                    //设置当前连接的休眠对象成功，则设置当前休眠的唤醒器
-                    *locked = Some(cx.waker().clone());
+                    retired_waker = locked.replace(incoming.take().unwrap());
                 } else {
-                    //当前连接已设置休眠对象，则将当前休眠对象写入当前连接的休眠对象的唤醒器
-                    self
-                        .0
-                        .handle
-                        .set_hibernate_wakers(cx.waker().clone());
-                    self.0.waker_status.store(1, Ordering::Relaxed); //设置唤醒器状态为被阻塞
+                    self.0.handle.set_hibernate_wakers(incoming.take().unwrap());
+                    self.0.waker_status.store(1, Ordering::Relaxed);
                 }
-
-                Poll::Pending
+                (Poll::Pending, false)
             }
+        };
+        if run_tasks {
+            // 原积压任务仍只在结果已取出且事件登记成功后派发；派发不占用W。
+            self.0.handle.run_hibernated_tasks();
         }
+        drop(retired_waker);
+        polled
     }
 }
 
 impl<S: Socket> Hibernate<S> {
-    /// 构建一个异步休眠对象
+    /// 为 `handle` 指向的连接构建一次休眠，恢复轮询时按 `ready` 重新登记关注事件。
+    ///
+    /// handle移入并保活连接，ready为原就绪选项，构建时不会安装连接休眠槽；首次
+    /// poll才尝试安装。返回对象和Clone共享一次结果，不是独立可重复使用的订阅。
+    /// 不做I/O或等待，不幂等地创建新对象，O(1)时间/空间并分配固定大小共享状态。
+    /// 应由所属运行时轮询；丢弃调用侧Future不等于自动唤醒或关闭连接。
+    /// 构建本身没有同步锁/异步锁等待，分配失败遵循全局分配器策略。
+    /// 关联hibernate_regression真实装配和unit身份测试。
+    ///
+    /// 下例仅构造，返回后应交给该连接所属运行时poll/await；构造不是已休眠确认，
+    /// 外部唤醒仍须遵循句柄wakeup的原调度/重试约定。示例只编译，不启动网络。
+    /// ```no_run
+    /// fn prepare<S: pi_tcp::Socket>(handle: pi_tcp::SocketHandle<S>) -> pi_tcp::utils::Hibernate<S> {
+    ///     pi_tcp::utils::Hibernate::new(handle, pi_tcp::utils::Ready::ReadWrite)
+    /// }
+    /// ```
     pub fn new(handle: SocketHandle<S>,
                ready: Ready) -> Self {
         let inner = InnerHibernate {
@@ -708,38 +722,51 @@ impl<S: Socket> Hibernate<S> {
         Hibernate(Arc::new(inner))
     }
 
-    /// 线程安全的设置结果值，并唤醒正在休眠的异步休眠对象，如果当前异步休眠对象未休眠则忽略，唤醒成功返回真
-    /// 唤醒过程可能会被阻塞，这不会导致线程阻塞而是返回假，调用者可以继续尝试唤醒，直到返回真
-    pub(crate) fn wakeup(&self, result: IOResult<()>) -> bool {
-        let mut locked = self
-            .0
-            .waker
-            .lock(); //由锁保护异步休眠对象的唤醒
+    // 本连接槽候选的身份比较，O(1)时间/空间，无锁、无分配、无副作用。
+    // 不比较UID；候选自身的Arc保活使并发槽换代不会复用候选地址。
+    pub(crate) fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 
-        if let Some(waker) = locked.take() {
-            //当前异步休眠对象正在休眠中，则设置结果值，并立即唤醒当前异步休眠对象
-            if self.0.waker_status.load(Ordering::Relaxed) > 0 {
-                //唤醒过程被阻塞，则立即返回假，需要调用者继续尝试唤醒
-                self.0.waker_status.store(0, Ordering::Relaxed); //设置唤醒器状态为可以完成唤醒
-                waker.wake();
+    // TCP-HIB-REPAIR-001/D-HIB-07：仅供TCP/TLS两个内部调用点协调一次唤醒。
+    // result由调用者移入；detach只在W内调用一次，必须同步短持本连接H，按
+    // 真实候选身份摘除并释放H。不得保存闭包、await、执行用户代码或反向取得W。
+    // 条件失败不动waker/result；成功则保留原status和bool含义，不替调用者重试。
+    // 状态工作量/额外空间O(1)，不含同步锁等待及锁外通知耗时；不新增分配。
+    // 可能同步等待锁，回调panic继续传播；所有通知/废弃结果析构在释放W后。
+    // 关联hibernate_regression真实专项和unit的条件失效/错误/通知/析构测试。
+    pub(crate) fn wakeup<F>(&self, result: IOResult<()>, detach: F) -> bool
+        where F: FnOnce(&Self) -> bool {
+        // 仅测试的第二阶段；不读写生产锁状态，不出现在正常库或基准产物。
+        #[cfg(all(test, target_os = "linux"))]
+        hibernate_regression::before_wakeup_waker_lock(self);
 
-                false
-            } else {
-                //唤醒过程完成，则立即返回真
-                *self.0.result.0.borrow_mut() = Some(result);
-                waker.wake();
-
-                true
+        let mut retired_result = None;
+        let (completed, waker) = {
+            let mut locked = self.0.waker.lock();
+            // 此操作内H的守卫先结束，再继续W内的结果发布；失效候选不碰新槽。
+            if !detach(self) {
+                return false;
             }
-        } else {
-            if self.0.result.0.borrow().is_none() {
-                //当前异步休眠对象还未休眠，则立即返回假，需要调用者继续尝试唤醒
-                false
+            if let Some(waker) = locked.take() {
+                if self.0.waker_status.load(Ordering::Relaxed) > 0 {
+                    self.0.waker_status.store(0, Ordering::Relaxed);
+                    (false, Some(waker))
+                } else {
+                    retired_result = self.0.result.0.borrow_mut().replace(result);
+                    (true, Some(waker))
+                }
             } else {
-                //当前异步休眠对象已被唤醒，则立即返回真
-                true
+                // RefCell守卫必须在W内随此语句结束，不能作为块末临时值跨出锁域。
+                let completed = self.0.result.0.borrow().is_some();
+                (completed, None)
             }
+        };
+        if let Some(waker) = waker {
+            waker.wake();
         }
+        drop(retired_result);
+        completed
     }
 }
 

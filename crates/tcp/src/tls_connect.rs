@@ -628,22 +628,46 @@ impl Socket for TlsSocket {
             .push_back(waker);
     }
 
+    // TCP-HIB-REPAIR-001/D-HIB-07：与TCP相同，独立H快照先释放；随后仅W→H，
+    // 先释放H再释放W，并在锁外通知。身份失效不误删下一次休眠，原bool语义保留。
+    // O(1)状态协调/O(k)其它等待者通知、O(1)额外空间；同步锁仍可能竞争等待。
+    // 无新增字段/任务/堆对象，不改变TLS握手/加密收发或原整体S引用边界。
+    // 关联hibernate_regression的TLS真实专项、局部分支单元及hibernate_wakeup基准。
     fn wakeup(&mut self, result: Result<()>) -> bool {
         if self.is_closed() {
             //连接已关闭，则忽略唤醒
             return true;
         }
 
-        let mut r = false;
-        if let Some(hibernate) = self.hibernate.lock().take() {
-            r = hibernate.wakeup(result); //唤醒休眠的当前连接
-        }
+        let candidate = {
+            let locked = self.hibernate.lock();
+            locked.as_ref().cloned()
+        };
+        let r = if let Some(hibernate) = candidate {
+            hibernate.wakeup(result, |candidate| {
+                let mut locked = self.hibernate.lock();
+                if locked.as_ref().is_some_and(|current| current.is_same(candidate)) {
+                    // 候选仍被wakeup保活，摘除这里只减一次Arc计数，不销毁唤醒器。
+                    locked.take();
+                    true
+                } else {
+                    false
+                }
+            })
+        } else {
+            false
+        };
 
         if r {
-            //当前连接成功唤醒后，再唤醒当前连接在休眠时生成的所有其它休眠对象
-            let mut locked = self.hibernate_wakers.lock();
-            while let Some(waker) = locked.pop_front() {
-                waker.wake();
+            // 通知可重入；只处理初始数量，锁外wake并保留原队列容量。
+            let count = { self.hibernate_wakers.lock().len() };
+            for _ in 0..count {
+                let waker = { self.hibernate_wakers.lock().pop_front() };
+                if let Some(waker) = waker {
+                    waker.wake();
+                } else {
+                    break;
+                }
             }
         }
 

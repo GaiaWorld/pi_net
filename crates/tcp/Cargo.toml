@@ -34,3 +34,7 @@ slotmap = { version = "0.3", package = "pi_slotmap" }
 
 [dev-dependencies]
 env_logger = "0.11"
+
+[[bench]]
+name = "hibernate_wakeup"
+harness = false

@@ -777,22 +777,48 @@ impl Socket for TcpSocket {
             .push_back(waker);
     }
 
+    // TCP-HIB-REPAIR-001/D-HIB-07：仅快照时独立持H，不持H等待W。
+    // 候选由Arc克隆保活；Hibernate持W后才在下面的同步操作中取得H并核验摘除。
+    // 无候选/失效或原阻挡分支返回false，关闭分支保留true；true不代表网络回包。
+    // O(1)状态协调/O(k)其它等待者通知，额外空间O(1)，保留短同步锁等待。
+    // 无新增字段/任务/堆对象；普通收发不加操作，原整体S引用边界未扩展。
+    // 关联hibernate_regression的TCP真实专项、局部分支单元及hibernate_wakeup基准。
     fn wakeup(&mut self, result: Result<()>) -> bool {
         if self.is_closed() {
             //连接已关闭，则忽略唤醒
             return true;
         }
 
-        let mut r = false;
-        if let Some(hibernate) = self.hibernate.lock().take() {
-            r = hibernate.wakeup(result); //唤醒休眠的当前连接
-        }
+        let candidate = {
+            let locked = self.hibernate.lock();
+            locked.as_ref().cloned()
+        };
+        let r = if let Some(hibernate) = candidate {
+            hibernate.wakeup(result, |candidate| {
+                let mut locked = self.hibernate.lock();
+                if locked.as_ref().is_some_and(|current| current.is_same(candidate)) {
+                    // 候选仍被wakeup保活，摘除这里只减一次Arc计数，不销毁唤醒器。
+                    locked.take();
+                    true
+                } else {
+                    false
+                }
+            })
+        } else {
+            false
+        };
 
         if r {
-            //当前连接成功唤醒后，再唤醒当前连接在休眠时生成的所有其它休眠对象
-            let mut locked = self.hibernate_wakers.lock();
-            while let Some(waker) = locked.pop_front() {
-                waker.wake();
+            // 通知可重入；每次提取后释放队列锁，只处理初始数量，不追赶并发追加。
+            // 保留原VecDeque容量，避免整队移出导致后续重新分配。
+            let count = { self.hibernate_wakers.lock().len() };
+            for _ in 0..count {
+                let waker = { self.hibernate_wakers.lock().pop_front() };
+                if let Some(waker) = waker {
+                    waker.wake();
+                } else {
+                    break;
+                }
             }
         }
 
