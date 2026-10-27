@@ -1,4 +1,5 @@
 #![allow(warnings)]
+#![doc(html_no_source)]
 #![feature(is_some_and)]
 #![feature(io_slice_advance)]
 

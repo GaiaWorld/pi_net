@@ -1582,6 +1582,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 
 [[package]]
+name = "hdrhistogram"
+version = "7.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "765c9198f173dd59ce26ff9f95ef0aafd0a0fe01fb9d72841bc5066a4c06511d"
+dependencies = [
+ "base64 0.21.7",
+ "byteorder",
+ "flate2",
+ "nom",
+ "num-traits",
+]
+
+[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2644,7 +2657,11 @@ version = "0.33.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c1f1a6ac9c875a4941e4c7c085b61e8f4daa326de03b4701768c3491a6ad9ee"
 dependencies = [
+ "futures-core",
+ "futures-sink",
  "js-sys",
+ "pin-project-lite",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2687,8 +2704,11 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "opentelemetry",
+ "percent-encoding",
  "portable-atomic",
+ "rand 0.9.2",
  "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]
@@ -3403,10 +3423,13 @@ dependencies = [
  "env_logger 0.11.10",
  "fnv",
  "futures",
+ "hdrhistogram",
  "lazy_static",
  "log",
  "mio 0.8.11",
  "num_cpus",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "parking_lot 0.12.5",
  "pi-async-rt",
  "pi_async_buffer",
@@ -3415,6 +3438,7 @@ dependencies = [
  "pi_slotmap 0.3.0",
  "rustls 0.20.9",
  "rustls-pemfile 1.0.4",
+ "serde_json",
  "spin_sleep_util",
 ]
 

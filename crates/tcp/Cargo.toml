@@ -1,6 +1,6 @@
 [package]
 name = "pi_tcp"
-version = "0.8.3"
+version = "0.8.5"
 edition = "2021"
 description = "pi_tcp"
 repository = "https://github.com/GaiaWorld/pi_net/tree/crateio"
@@ -11,6 +11,8 @@ keywords = ["pi",  "tcp"]
 default = ["runtime_metrics"]
 # 仅控制本库冷初始化登记，不启用采集或上报。
 runtime_metrics = []
+# 可选的每池发送队列长度观测；宿主负责先安装指标Provider及采集/导出。
+write_queue_metrics = ["dep:opentelemetry"]
 
 [dependencies]
 futures = "0.3"
@@ -21,6 +23,7 @@ bytes = "~1.11"
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
 fnv = "1.0"
+opentelemetry = { version = "0.33.1", default-features = false, features = ["metrics"], optional = true }
 num_cpus = "1.16"
 rustls = "0.20"
 rustls-pemfile = "1.0"
@@ -34,7 +37,15 @@ slotmap = { version = "0.3", package = "pi_slotmap" }
 
 [dev-dependencies]
 env_logger = "0.11"
+opentelemetry = { version = "0.33.1", default-features = false, features = ["metrics"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["metrics", "testing"] }
+hdrhistogram = { version = "~7.5", default-features = false, features = ["serialization"] }
+serde_json = "1.0"
 
 [[bench]]
 name = "hibernate_wakeup"
+harness = false
+
+[[bench]]
+name = "write_queue_metrics"
 harness = false
