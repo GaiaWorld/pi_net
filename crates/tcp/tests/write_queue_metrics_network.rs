@@ -1,6 +1,7 @@
 //! WQM-B01真实TCP/官方SDK专项，不是单元模拟或运行时采集器的重复测试。
 //! 验证connect_pool::run/handle_timer/handle_write_event真实装配、15秒后Gauge、
-//! 同核心多池隔离、外部线程发送和原控制指标。每项独立进程、45秒硬截止，必须串行。
+//! 单仪表普通target标签、同核心多池隔离、外部线程发送和原控制指标。
+//! 每项独立进程、45秒硬截止，必须串行。
 //! 不执行TLS或test.rs；不把SDK重复输出旧值当作生产又采了一次，也不声称线上后端验证。
 //! 监控依赖Linux的/proc与进程组，本目标仅在Linux构建，不宣称其它平台已经验证。
 
@@ -31,7 +32,7 @@ fn test_write_queue_metrics_real_tcp() {
 }
 
 /// 前1秒确认未虚构初值，然后持续真实收发到17秒，至少跨过一个真实15秒周期。
-/// shared使用同一个外部Local的Clone形成两个池，Scope必须仍为两点且rt.name相同。
+/// shared使用同一个外部Local的Clone形成两个池，同一仪表必须保留两点且rt.name相同。
 fn run_case(case: &str) {
     assert!(matches!(case, "single" | "shared"));
     let host = Host::new();

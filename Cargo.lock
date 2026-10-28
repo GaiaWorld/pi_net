@@ -3429,6 +3429,8 @@ dependencies = [
  "mio 0.8.11",
  "num_cpus",
  "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry-proto",
  "opentelemetry_sdk",
  "parking_lot 0.12.5",
  "pi-async-rt",
@@ -3440,6 +3442,8 @@ dependencies = [
  "rustls-pemfile 1.0.4",
  "serde_json",
  "spin_sleep_util",
+ "tokio",
+ "tonic",
 ]
 
 [[package]]

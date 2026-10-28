@@ -8,7 +8,8 @@
 //! 启用方式是在本库依赖声明中添加`features = ["write_queue_metrics"]`；Cargo会合并
 //! 同一依赖构建中的feature，不能按连接动态切换。仪表名为`pi_tcp.write_queue.messages`，
 //! 单位`{message}`，来源名为`pi_tcp.connection_pool`。`process.pid`、`rt.name`、
-//! `pi_tcp.pool.id`和`target`位于来源属性，不在数据点标签中；后端必须保留这些属性。
+//! `pi_tcp.pool.id`和`target`是普通数据点标签；同一来源/版本下各池共用同名仪表，
+//! 后端可按`target`过滤各池，不要求把来源属性转换成查询标签。
 //! 运行时名沿用本库登记时的原名，不是OS线程名，也不追随上游合并别名的变化。
 //!
 //! 数量不包含已取走批次、Socket/TLS/内核缓冲或字节数，不是周期峰值、送达确认或
@@ -16,12 +17,15 @@
 //! 准点；停止后可能仍显示SDK保留的历史值，不能据此判断池存活或伪记为零。
 //!
 //! 未启用时不编译新增状态/分支；启用后正常轮仅本地比较，不增加读时钟、锁或分配，
-//! 实际采样另有原通道原子重试及SDK记录成本。冷准备可能等待SDK同步锁；任意自定义
-//! Provider/View及系统调度不受固定耗时保证。新增观测不访问业务Context或增加unsafe，
+//! 实际采样另有原通道原子重试、SDK标签哈希/同步锁及首次标签建项成本；并非严格
+//! 非阻塞，也不保证1毫秒上界。共享仪表的标签容量和旧池数据过期由宿主SDK管理，
+//! 宿主须为累计池数配置足够容量。冷准备、任意自定义Provider/View及系统调度也不受
+//! 固定耗时保证。新增观测不访问业务Context或增加unsafe，
 //! 不扩展原池的线程使用合同，也不修订原有收发/关闭语义。
 //!
 //! 原登记测试：`batch_runtime_metrics_tests`；新增状态单元：`write_queue_metrics_tests`；
-//! 真实TCP/SDK专项：`tests/write_queue_metrics_network.rs`；性能：`benches/write_queue_metrics.rs`。
+//! 真实TCP/SDK专项：`tests/write_queue_metrics_network.rs`；实际OTLP及记录耗时专项：
+//! `tests/write_queue_metrics_otlp.rs`；性能：`benches/write_queue_metrics.rs`。
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -53,11 +57,13 @@ use slotmap::{Key, DefaultKey, KeyData, SlotMap};
 use crate::{Socket, Stream, SocketAdapter, SocketConfig, SocketEvent, SocketDriver,
             utils::register_close_sender};
 
-// 内部设计，不进入API docs。WQM-B01/WQM-G01～03：同文件内的单向冷准备/记录职责。
+// 内部设计，不进入API docs。WQM-B02/F02/WQM-G01～03：冷准备/本地状态/SDK记录单向协作。
 // run先准备Gauge，首任务真正被owner推进时才建时钟；之后状态只随原pool移动。
 // handle_timer复用原时钟只置due，下轮写队列排空前才len/record并重计时。无补采任务、
 // 业务回调、接收器Clone、运行时持有或Drop处理；Socket/Context/Token不进入本状态。
-// PID/编号只在冷路径访问；SDK保留Scope的生命周期不是pool的生命周期。
+// PID/编号只在冷路径访问；固定Scope复用SDK仪表，四个不可变身份标签随本池状态移动。
+// 记录伪代码：未due直接返回；否则原Receiver.len→Gauge.record(缓存标签)→now重置。
+// 标签不含业务资源，SDK保留数据点不代表pool仍存活；不另建全局Gauge或共享状态表。
 #[cfg(all(feature = "write_queue_metrics", not(target_arch = "wasm32")))]
 const WRITE_QUEUE_METRICS_INTERVAL: Duration = Duration::from_secs(15);
 #[cfg(all(feature = "write_queue_metrics", not(target_arch = "wasm32")))]
@@ -78,13 +84,14 @@ fn next_write_queue_pool_id(sequence: &AtomicUsize) -> Option<usize> {
 }
 
 // 只由run在首send前调用：runtime_id取外部Local原get_id，不把它当指标登记ID。
-// 冷缓存PID，分配池编号，准备固定来源/仪表；只返回Gauge，不保存业务对象或登记结果。
+// 冷缓存PID，分配池编号，准备无池属性的固定来源/共享仪表及四个普通标签。
+// 返回Gauge及独占标签数组，不保存业务对象/登记结果；重复构造不申请新的指标名。
 // 耗尽仅告警降级None，不改变run返回；SDK API无任意Noop检测/导出确认，不伪称成功。
-// 名称构造O(L)，SDK另有冷锁/分配/Scope常驻成本；可能同步等待，无await/异步锁。
+// 名称构造O(L)时间/空间，SDK另有冷锁/分配/缓存成本；可能同步等待，无await/异步锁。
 // 非纯、非幂等；生产必须先安装宿主Provider，不捕获自定义Provider的panic。
-// 验证：test_scope_identity_and_sdk_gauge及真实TCP网络专项。
+// 验证：test_shared_gauge_identity_and_labels、真实TCP网络及OTLP专项。
 #[cfg(all(feature = "write_queue_metrics", not(target_arch = "wasm32")))]
-fn prepare_write_queue_gauge(runtime_id: usize) -> Option<Gauge<u64>> {
+fn prepare_write_queue_gauge(runtime_id: usize) -> Option<(Gauge<u64>, [KeyValue; 4])> {
     let Some(pool_id) = next_write_queue_pool_id(&NEXT_WRITE_QUEUE_POOL_ID) else {
         warn!("TCP发送队列指标池编号已耗尽，本池不启用长度观测，运行时原ID: {}", runtime_id);
         return None;
@@ -92,37 +99,43 @@ fn prepare_write_queue_gauge(runtime_id: usize) -> Option<Gauge<u64>> {
     let pid = *WRITE_QUEUE_METRICS_PID.get_or_init(std::process::id);
     let runtime_name = format!("pi_tcp-local-{}", runtime_id);
     let target = format!("{pid}:{runtime_name}:write-queue-{pool_id}");
+    let attributes = [
+        KeyValue::new("process.pid", i64::from(pid)),
+        KeyValue::new("rt.name", runtime_name),
+        KeyValue::new("pi_tcp.pool.id", pool_id.to_string()),
+        KeyValue::new("target", target),
+    ];
     let scope = InstrumentationScope::builder("pi_tcp.connection_pool")
         .with_version(env!("CARGO_PKG_VERSION"))
-        .with_attributes([
-            KeyValue::new("process.pid", i64::from(pid)),
-            KeyValue::new("rt.name", runtime_name),
-            KeyValue::new("pi_tcp.pool.id", pool_id.to_string()),
-            KeyValue::new("target", target),
-        ]).build();
-    Some(global::meter_with_scope(scope).u64_gauge("pi_tcp.write_queue.messages")
+        .build();
+    let gauge = global::meter_with_scope(scope).u64_gauge("pi_tcp.write_queue.messages")
         .with_unit("{message}")
         .with_description("本连接池发送通道中尚未取走的请求项数量")
-        .build())
+        .build();
+    Some((gauge, attributes))
 }
 
 // 每池唯一的私有采样状态，不是登记结果包装/任务表。gauge是SDK记录能力；
+// F03：attributes用本池唯一所有的Box缓存四个只读普通标签；冷分配一次，
+// 后续状态移动不搬动标签数组，常规记录只借用，不Clone/格式化，不加共享计数。
 // last_sample是首推进或上次记录调用返回后的时刻；due只承接到下轮排空前的一次尝试。
-// 本地独占&mut访问，无Clone/Drop/指针/业务资源；所有字段均只在新feature存在。
+// 本地独占&mut访问，无Clone/自定义Drop/裸指针或业务资源；仅开启feature时存在。
 #[cfg(all(feature = "write_queue_metrics", not(target_arch = "wasm32")))]
 struct WriteQueueMetrics {
     gauge: Gauge<u64>,
+    attributes: Box<[KeyValue; 4]>,
     last_sample: Instant,
     due: bool,
 }
 
 #[cfg(all(feature = "write_queue_metrics", not(target_arch = "wasm32")))]
 impl WriteQueueMetrics {
-    // gauge按值接收，started由首任务提供真实Instant；只初始化，不record虚构零值。
-    // O(1)时间/空间，无锁/读时钟/分配/await；返回本池独占状态，不改变业务生命周期。
-    // 验证：test_due_boundaries_and_reset、test_empty_queue_and_no_initial_sample。
-    fn new(gauge: Gauge<u64>, started: Instant) -> Self {
-        Self { gauge, last_sample: started, due: false }
+    // gauge/attributes按值接收，started由首任务提供真实Instant；不record虚构零值。
+    // 固定四项为O(1)时间/空间，新增一次冷Box分配；分配器可能同步等待，内存不足
+    // 按全局分配器策略处理，不新增可恢复业务错误。无读时钟/业务锁/await；随原状态释放。
+    // 验证：test_cached_labels_survive_state_move及原到期/无初值单元。
+    fn new(gauge: Gauge<u64>, attributes: [KeyValue; 4], started: Instant) -> Self {
+        Self { gauge, attributes: Box::new(attributes), last_sample: started, due: false }
     }
 
     // now仅复用原定时器位置读数；未到期不变，满15秒置due且不累计，不回调/取长。
@@ -135,15 +148,16 @@ impl WriteQueueMetrics {
     }
 
     // receiver只是本池原通道短借用，不Clone/保存/取走消息；未due不调用len或SDK。
-    // due时len→空标签record→低频now重计时→清due，无await或新增业务锁。
+    // due时len→缓存标签record→低频now重计时→清due，无await或新增业务锁。
     // 时间O(1)未到期，采样O(R+V)取决于通道重试和SDK出口；本地额外空间O(1)，
-    // 无新容器/字符串/消息复制。SDK默认Gauge原子路径不代表任意Provider都不等待。
+    // 不主动创建容器/字符串或复制消息；SDK的非空标签表可能同步等待，首次建项可分配。
+    // SDK共享标签容量由宿主配置，不保证固定阻塞上界，不在本函数捕获Provider panic。
     // 非纯、非幂等；返回仅说明本地尝试结束，不代表导出/送达。不重入同一份&mut状态，
     // 不增加取消/关闭/Drop操作。验证：test_records_without_consuming_queue及上述时间测试。
     fn record_if_due(&mut self, receiver: &Receiver<(Token, Vec<u8>)>) {
         if !self.due { return; }
         let count = receiver.len() as u64;
-        self.gauge.record(count, &[]);
+        self.gauge.record(count, self.attributes.as_ref());
         self.last_sample = Instant::now();
         self.due = false;
     }
@@ -311,8 +325,8 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> TcpSocketPool<S, A> {
         rt.send(async move {
             #[cfg(all(feature = "write_queue_metrics", not(target_arch = "wasm32")))]
             {
-                pool.write_queue_metrics = write_queue_gauge.map(|gauge| {
-                    WriteQueueMetrics::new(gauge, Instant::now())
+                pool.write_queue_metrics = write_queue_gauge.map(|(gauge, attributes)| {
+                    WriteQueueMetrics::new(gauge, attributes, Instant::now())
                 });
             }
             //启动Tcp连接事件循环
@@ -879,7 +893,7 @@ async fn handle_timer<S, A>(pool: &mut TcpSocketPool<S, A>)
 
 #[cfg(all(test, feature = "write_queue_metrics", not(target_arch = "wasm32")))]
 mod write_queue_metrics_tests {
-    //! WQM-B01局部状态/身份单元，不冒充真实网络或线上后端验证。
+    //! WQM-B02局部状态/身份单元，不冒充真实网络或线上后端验证。
     //! 使用官方SDK真实Gauge；只有时间输入/局部原子编号由单元控制，不修改生产全局编号。
     //! 本测试进程中的Provider由本组独占，必须--test-threads=1；退出恢复Noop并关停SDK。
     //! 真实原TCP装配另见write_queue_metrics_network，不在这里复制SDK聚合/登记算法。
@@ -924,7 +938,13 @@ mod write_queue_metrics_tests {
                         match metric.data() {
                             AggregatedMetrics::U64(MetricData::Gauge(gauge)) => {
                                 for point in gauge.data_points() {
-                                    assert_eq!(point.attributes().count(), 0, "必须走空数据点标签");
+                                    let actual = point.attributes().map(|kv| {
+                                        (kv.key.as_str().to_owned(), kv.value.as_str().into_owned())
+                                    }).collect::<BTreeMap<_, _>>();
+                                    let expected = attributes().into_iter().map(|kv| {
+                                        (kv.key.as_str().to_owned(), kv.value.as_str().into_owned())
+                                    }).collect::<BTreeMap<_, _>>();
+                                    assert_eq!(actual, expected);
                                     values.push(point.value());
                                 }
                             }
@@ -940,6 +960,13 @@ mod write_queue_metrics_tests {
         fn gauge(&self) -> Gauge<u64> {
             self.provider.meter("wqm.unit").u64_gauge("wqm.unit").build()
         }
+    }
+
+    /// 单元专用固定普通标签；不申请生产编号、不访问池或运行时，避免污染身份测试。
+    fn attributes() -> [KeyValue; 4] {
+        [KeyValue::new("process.pid", i64::from(std::process::id())),
+            KeyValue::new("rt.name", "unit-local"), KeyValue::new("pi_tcp.pool.id", "unit"),
+            KeyValue::new("target", "unit-target")]
     }
 
     impl Drop for Host {
@@ -979,7 +1006,7 @@ mod write_queue_metrics_tests {
     fn test_due_boundaries_and_reset() {
         let host = Host::new();
         let start = Instant::now();
-        let mut metrics = WriteQueueMetrics::new(host.gauge(), start);
+        let mut metrics = WriteQueueMetrics::new(host.gauge(), attributes(), start);
         let (_sender, receiver) = unbounded();
         metrics.mark_due(start);
         metrics.mark_due(start + Duration::from_millis(14_999));
@@ -999,12 +1026,32 @@ mod write_queue_metrics_tests {
         assert!(metrics.due);
     }
 
+    /// 被测F03的new/record：强制把整个状态移到另一个堆对象后，缓存标签地址不变，
+    /// 状态体积小于内联数组，真实SDK仍保留全部标签及数量。只比较地址，不解引用
+    /// 旧地址，不恢复对象；外层Box仅为单元强制移动，不进入生产或代补业务功能。
+    #[test]
+    fn test_cached_labels_survive_state_move() {
+        let host = Host::new();
+        let start = Instant::now();
+        let metrics = WriteQueueMetrics::new(host.gauge(), attributes(), start);
+        let address = metrics.attributes.as_ptr();
+        let mut moved = Box::new(metrics);
+        assert_eq!(address, moved.attributes.as_ptr());
+        assert!(std::mem::size_of::<WriteQueueMetrics>() < std::mem::size_of::<[KeyValue; 4]>());
+        let (sender, receiver) = unbounded();
+        sender.send((Token(1), vec![7; 256])).unwrap();
+        moved.mark_due(start + WRITE_QUEUE_METRICS_INTERVAL);
+        moved.record_if_due(&receiver);
+        assert_eq!(host.values(), [1]);
+        assert_eq!(receiver.len(), 1, "缓存布局不能消费生产通道");
+    }
+
     /// 被测延迟/重复标记：迟到十个周期也仅保留一次due，记录后重新等完整间隔。
     #[test]
     fn test_late_mark_has_no_catch_up() {
         let host = Host::new();
         let start = Instant::now();
-        let mut metrics = WriteQueueMetrics::new(host.gauge(), start);
+        let mut metrics = WriteQueueMetrics::new(host.gauge(), attributes(), start);
         let (_sender, receiver) = unbounded();
         metrics.mark_due(start + Duration::from_secs(150));
         metrics.mark_due(start + Duration::from_secs(300));
@@ -1024,7 +1071,7 @@ mod write_queue_metrics_tests {
     fn test_records_without_consuming_queue() {
         let host = Host::new();
         let start = Instant::now();
-        let mut metrics = WriteQueueMetrics::new(host.gauge(), start);
+        let mut metrics = WriteQueueMetrics::new(host.gauge(), attributes(), start);
         let (sender, receiver) = unbounded();
         for index in 0..3 { sender.send((Token(index), vec![index as u8; 256])).unwrap(); }
         metrics.mark_due(start + WRITE_QUEUE_METRICS_INTERVAL);
@@ -1044,7 +1091,7 @@ mod write_queue_metrics_tests {
     fn test_empty_queue_and_no_initial_sample() {
         let host = Host::new();
         let start = Instant::now();
-        let mut metrics = WriteQueueMetrics::new(host.gauge(), start);
+        let mut metrics = WriteQueueMetrics::new(host.gauge(), attributes(), start);
         assert!(host.values().is_empty());
         let (sender, receiver) = unbounded();
         drop(sender);
@@ -1054,38 +1101,47 @@ mod write_queue_metrics_tests {
         assert!(matches!(receiver.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected)));
     }
 
-    /// 被测冷准备的真实SDK身份：同运行时两池原名相同、池编号/target不同且数值互不覆盖。
+    /// 被测冷准备的真实SDK身份：同一来源/仪表中两池原名相同，普通标签区分且互不覆盖。
     /// 这里只向私有冷入口提供固定逻辑ID；真实Local的get_id对齐另由网络专项验证。
     #[test]
-    fn test_scope_identity_and_sdk_gauge() {
+    fn test_shared_gauge_identity_and_labels() {
         let host = Host::new();
-        let first = prepare_write_queue_gauge(123).expect("冷准备不应耗尽");
-        let second = prepare_write_queue_gauge(123).expect("第二池冷准备不应耗尽");
-        first.record(7, &[]);
-        second.record(11, &[]);
+        let (first, first_attrs) = prepare_write_queue_gauge(123).expect("冷准备不应耗尽");
+        let (second, second_attrs) = prepare_write_queue_gauge(123).expect("第二池冷准备不应耗尽");
+        first.record(5, &first_attrs);
+        second.record(11, &second_attrs);
+        first.record(7, &first_attrs);
         let mut pools = BTreeMap::new();
+        let mut scopes = 0;
         for report in host.collect() {
             for scope in report.scope_metrics().filter(|scope| scope.scope().name() == "pi_tcp.connection_pool") {
+                scopes += 1;
                 assert_eq!(scope.scope().version(), Some(env!("CARGO_PKG_VERSION")));
-                let attrs = scope.scope().attributes().map(|value| {
-                    (value.key.as_str().to_owned(), value.value.as_str().into_owned())
-                }).collect::<BTreeMap<_, _>>();
-                assert_eq!(attrs["process.pid"], std::process::id().to_string());
-                assert_eq!(attrs["rt.name"], "pi_tcp-local-123");
-                assert_eq!(attrs["target"], format!("{}:pi_tcp-local-123:write-queue-{}",
-                    std::process::id(), attrs["pi_tcp.pool.id"]));
-                let metric = scope.metrics().find(|metric| metric.name() == "pi_tcp.write_queue.messages")
-                    .expect("SDK缺少本池仪表");
+                assert_eq!(scope.scope().attributes().count(), 0);
+                let metrics = scope.metrics().filter(|metric| metric.name() == "pi_tcp.write_queue.messages")
+                    .collect::<Vec<_>>();
+                assert_eq!(metrics.len(), 1, "各池必须使用同一仪表");
+                let metric = metrics[0];
                 assert_eq!(metric.unit(), "{message}");
                 let AggregatedMetrics::U64(MetricData::Gauge(gauge)) = metric.data() else {
                     panic!("必须是u64 Gauge")
                 };
                 let points = gauge.data_points().collect::<Vec<_>>();
-                assert_eq!(points.len(), 1);
-                assert_eq!(points[0].attributes().count(), 0);
-                assert!(pools.insert(attrs["pi_tcp.pool.id"].clone(), points[0].value()).is_none());
+                assert_eq!(points.len(), 2);
+                for point in points {
+                    let attrs = point.attributes().map(|value| {
+                        (value.key.as_str().to_owned(), value.value.as_str().into_owned())
+                    }).collect::<BTreeMap<_, _>>();
+                    assert_eq!(attrs.len(), 4);
+                    assert_eq!(attrs["process.pid"], std::process::id().to_string());
+                    assert_eq!(attrs["rt.name"], "pi_tcp-local-123");
+                    assert_eq!(attrs["target"], format!("{}:pi_tcp-local-123:write-queue-{}",
+                        std::process::id(), attrs["pi_tcp.pool.id"]));
+                    assert!(pools.insert(attrs["pi_tcp.pool.id"].clone(), point.value()).is_none());
+                }
             }
         }
+        assert_eq!(scopes, 1, "各池必须复用固定来源");
         let mut values = pools.into_values().collect::<Vec<_>>();
         values.sort_unstable();
         assert_eq!(values, [7, 11]);

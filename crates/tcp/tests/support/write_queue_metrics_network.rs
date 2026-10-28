@@ -1,4 +1,4 @@
-//! WQM-B01的真实TCP测试装配，供网络专项与开关对照基准复用。
+//! WQM-B02的真实TCP测试装配，供网络专项与开关对照基准复用。
 //!
 //! 客户端发送256字节帧，所属Local消费真实接收缓冲，外部OS线程通过原
 //! SocketHandle::write_ready提交同一帧。每连接最多一个请求在途，不访问Context，
@@ -32,7 +32,7 @@ pub struct QueuePoint {
     pub value: u64,
 }
 
-/// 测试进程独占Provider；固定控制仪表用于核对新Scope没有污染既有来源/标签。
+/// 测试进程独占Provider；固定控制仪表用于核对共享仪表没有污染既有来源/标签。
 pub struct Host {
     provider: SdkMeterProvider,
     exporter: InMemoryMetricExporter,
@@ -61,6 +61,7 @@ impl Host {
         let reports = self.exporter.get_finished_metrics().expect("读取官方SDK报告失败");
         let mut points = Vec::new();
         let mut control_seen = false;
+        let mut queue_metrics = 0usize;
         for report in reports {
             for scope in report.scope_metrics() {
                 for metric in scope.metrics() {
@@ -82,26 +83,29 @@ impl Host {
                     if metric.name() != "pi_tcp.write_queue.messages" { continue; }
                     assert_eq!(scope.scope().name(), "pi_tcp.connection_pool");
                     assert_eq!(scope.scope().version(), Some(env!("CARGO_PKG_VERSION")));
+                    assert_eq!(scope.scope().attributes().count(), 0, "池身份必须位于普通数据点标签");
                     assert_eq!(metric.unit(), "{message}");
-                    let attrs = scope.scope().attributes().map(|kv| {
-                        (kv.key.as_str().to_owned(), kv.value.as_str().into_owned())
-                    }).collect::<BTreeMap<_, _>>();
-                    assert_eq!(attrs.len(), 4);
-                    assert_eq!(attrs["process.pid"], std::process::id().to_string());
-                    assert_eq!(attrs["target"], format!("{}:{}:write-queue-{}",
-                        std::process::id(), attrs["rt.name"], attrs["pi_tcp.pool.id"]));
-                    assert!(attrs["pi_tcp.pool.id"].parse::<usize>().expect("池编号非整数") > 0);
+                    queue_metrics += 1;
                     let AggregatedMetrics::U64(MetricData::Gauge(gauge)) = metric.data() else {
                         panic!("发送队列必须是u64 Gauge")
                     };
-                    let values = gauge.data_points().collect::<Vec<_>>();
-                    assert_eq!(values.len(), 1);
-                    assert_eq!(values[0].attributes().count(), 0, "属性只能位于新Scope");
-                    points.push(QueuePoint { attributes: attrs, value: values[0].value() });
+                    for point in gauge.data_points() {
+                        let attrs = point.attributes().map(|kv| {
+                            (kv.key.as_str().to_owned(), kv.value.as_str().into_owned())
+                        }).collect::<BTreeMap<_, _>>();
+                        assert_eq!(attrs.len(), 4);
+                        assert_eq!(attrs["process.pid"], std::process::id().to_string());
+                        assert_eq!(attrs["target"], format!("{}:{}:write-queue-{}",
+                            std::process::id(), attrs["rt.name"], attrs["pi_tcp.pool.id"]));
+                        assert!(attrs["pi_tcp.pool.id"].parse::<usize>().expect("池编号非整数") > 0);
+                        points.push(QueuePoint { attributes: attrs, value: point.value() });
+                    }
                 }
             }
         }
         assert!(control_seen, "原控制指标必须仍可用");
+        assert!(queue_metrics <= 1, "全部池必须复用同一来源下的同一指标仪表");
+        points.sort_unstable_by(|left, right| left.attributes["target"].cmp(&right.attributes["target"]));
         points
     }
 }
@@ -255,7 +259,7 @@ impl Server {
             close: Some(Box::new(move || { listener.close(Ok(())); drop(owners); })) }
     }
 
-    /// 验证收到的是本次真实池/运行时的Scope且不存在覆盖；允许真实瞬时队列长度为零。
+    /// 验证收到的是本次真实池/运行时的普通标签且不存在覆盖；允许真实瞬时长度为零。
     /// 最大值由每连接一个在途请求的负载约束给出，不拿它当生产队列容量。
     pub fn check_points(&self, points: &[QueuePoint], max_in_flight: usize) {
         if !FEATURE_ENABLED { assert!(points.is_empty(), "关闭feature不得产生队列仪表"); return; }

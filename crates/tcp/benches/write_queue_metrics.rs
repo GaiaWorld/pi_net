@@ -1,7 +1,11 @@
-//! 发送队列观测的真实TCP开关对比专项；WQM-B01/WQM-G03。
+//! 发送队列观测的真实TCP开关及普通标签对比专项；WQM-B02/WQM-G03。
 //! 四场景、20秒预热/60秒测量/各3轮，使用同源的开/关两份Release二进制。
 //! --matrix <off> <on> <新归档目录>按交替顺序串行运行24点，每点120秒截止，
 //! 原监控确认所属进程组清空后再继续；--point仅由此调度器在受监控子进程调用。
+//! --three-way <旧off> <旧Scope> <新标签> <新目录>沿用完全相同的点负载，
+//! 每轮轮换三种产物的执行顺序，共36点，分别比较新标签对off和旧Scope的差异。
+//! --cache-focus <旧Scope> <内联标签> <Box标签> <新目录>仅复验128/8/4，三轮9点；
+//! 原负载/阶段/统计不变，分别比较Box标签对旧Scope及内联标签，不重跑其它场景。
 //! --smoke <新目录>执行1秒预热/1秒测量的夹具检查，明确不是性能或采样验收数据。
 //!
 //! 被测生产：connect_pool原真实发送路径和可选write_queue_metrics，固定256字节、
@@ -225,7 +229,9 @@ fn run_point(scenario: Scenario, round: usize, output: &Path, smoke: bool) {
         "cpu_percent_one_core": cpu_used as f64 / ticks_per_second as f64 / actual_wall * 100.0,
         "rss_start_kib": rss_start, "rss_end_kib": rss_end, "peak_rss_kib": peak_rss,
         "rss_samples": rss_samples,
-        "queue_points": points.iter().map(|point| json!({"scope_attributes": point.attributes, "value": point.value})).collect::<Vec<_>>(),
+        "encoding": if FEATURE_ENABLED { "data-point-labels" } else { "disabled" },
+        "label_storage": if FEATURE_ENABLED { "box" } else { "disabled" },
+        "queue_points": points.iter().map(|point| json!({"attributes": point.attributes, "value": point.value})).collect::<Vec<_>>(),
         "sdk_control_unchanged": true, "owner_threads_exited": true,
     });
     fs::write(output.join("result.json"), serde_json::to_vec_pretty(&result).unwrap()).expect("保存点统计失败");
@@ -264,6 +270,47 @@ fn compare(rows: &[Value], root: &Path) -> bool {
     }
     fs::write(root.join("comparison.json"), serde_json::to_vec_pretty(&observations).unwrap()).unwrap();
     println!("{}", serde_json::to_string_pretty(&observations).unwrap());
+    accepted
+}
+
+/// 三产物的相同负载比较；原始点JSON/HDR不改写，variant只加在独立汇总数据中。
+/// 所有阈值沿用既定5%，一次超线也不能冒称通过；不把跨轮调度噪声归为纯SDK成本。
+fn compare_variants(rows: &[Value], root: &Path, scenarios: &[Scenario], baselines: &[&str]) -> bool {
+    assert_eq!(rows.len(), scenarios.len() * (baselines.len() + 1) * 3);
+    let mut csv = String::from("scenario,variant,round,messages_per_second,p50_ns,p95_ns,p99_ns,exact_max_ns,cpu_percent_one_core,peak_rss_kib,successes,late_completions\n");
+    for row in rows {
+        csv.push_str(&format!("{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            row["scenario"].as_str().unwrap(), row["variant"].as_str().unwrap(), row["round"],
+            row["messages_per_second"], row["p50_ns"], row["p95_ns"], row["p99_ns"], row["exact_max_ns"],
+            row["cpu_percent_one_core"], row["peak_rss_kib"], row["successes"], row["late_completions"]));
+    }
+    fs::write(root.join("rounds.csv"), csv).unwrap();
+    fs::write(root.join("rows.json"), serde_json::to_vec_pretty(rows).unwrap()).unwrap();
+    let mut comparisons = Vec::new();
+    let mut accepted = true;
+    for scenario in scenarios {
+        let med = |variant: &str, field: &str| median(rows.iter().filter(|row| {
+            row["scenario"] == scenario.name && row["variant"] == variant
+        }).map(|row| row[field].as_f64().unwrap()).collect());
+        for &baseline in baselines {
+            let throughput = (med("labels", "messages_per_second") / med(baseline, "messages_per_second") - 1.0) * 100.0;
+            let p99 = (med("labels", "p99_ns") / med(baseline, "p99_ns") - 1.0) * 100.0;
+            let within = throughput >= -5.0 && p99 <= 5.0;
+            accepted &= within;
+            comparisons.push(json!({"scenario": scenario.name, "baseline": baseline, "candidate": "labels",
+                "throughput_delta_percent": throughput, "p99_delta_percent": p99,
+                "within_observation_lines": within,
+                "baseline_throughput": med(baseline, "messages_per_second"),
+                "labels_throughput": med("labels", "messages_per_second"),
+                "baseline_p99_ns": med(baseline, "p99_ns"), "labels_p99_ns": med("labels", "p99_ns"),
+                "baseline_cpu_percent": med(baseline, "cpu_percent_one_core"),
+                "labels_cpu_percent": med("labels", "cpu_percent_one_core"),
+                "baseline_peak_rss_kib": med(baseline, "peak_rss_kib"),
+                "labels_peak_rss_kib": med("labels", "peak_rss_kib")}));
+        }
+    }
+    fs::write(root.join("comparison.json"), serde_json::to_vec_pretty(&comparisons).unwrap()).unwrap();
+    println!("{}", serde_json::to_string_pretty(&comparisons).unwrap());
     accepted
 }
 
@@ -317,6 +364,51 @@ fn main() {
             }
             if !compare(&rows, &root) { eprintln!("超过既定5%观察线，暂停性能验收并分析"); std::process::exit(2); }
         }
-        _ => panic!("参数：--matrix <off产物> <on产物> <新目录>；--smoke <新目录>；--point仅供受监控子进程"),
+        Some("--three-way" | "--cache-focus") if args.len() == 5 => {
+            assert!(cfg!(target_os = "linux"));
+            let focus = args[0] == "--cache-focus";
+            let variants = if focus { ["scope", "inline", "labels"] } else { ["off", "scope", "labels"] };
+            let scenarios = if focus { &SCENARIOS[3..] } else { &SCENARIOS[..] };
+            let binaries = args[1..4].iter().map(|path| fs::canonicalize(path).unwrap()).collect::<Vec<_>>();
+            let root = PathBuf::from(&args[4]);
+            fs::create_dir(&root).expect("整批归档目录必须不存在");
+            let mut rows = Vec::new();
+            for round in 0..3 {
+                for (index, scenario) in scenarios.iter().copied().enumerate() {
+                    for position in 0..3 {
+                        let mode = (round + index + position) % 3;
+                        let point = root.join(format!("{}-{}-{round}", variants[mode], scenario.name));
+                        println!("开始：{}", point.display());
+                        let mut command = Command::new(&binaries[mode]);
+                        command.arg("--point").arg(scenario.name).arg(round.to_string()).arg(&point);
+                        let child = process::run_child(&mut command, Duration::from_secs(120), "wqm-three-way");
+                        assert!(!child.timed_out && child.status.success(), "三产物真实TCP基准点失败: {}\n{}\n{}",
+                            child.artifacts.display(), child.stdout, child.stderr);
+                        let mut row: Value = serde_json::from_slice(&fs::read(point.join("result.json")).unwrap()).unwrap();
+                        assert_eq!(row["feature"], focus || mode != 0);
+                        assert_eq!(row["smoke"], false);
+                        assert_eq!(row["scenario"], scenario.name);
+                        assert_eq!(row["round"], round);
+                        assert_eq!(row["warm_seconds"], WARM_SECONDS);
+                        assert_eq!(row["measure_seconds"], MEASURE_SECONDS);
+                        assert_eq!(row["errors"], 0);
+                        assert_eq!(row["timeouts"], 0);
+                        if mode == 2 { assert_eq!(row["encoding"], "data-point-labels"); }
+                        if focus && mode > 0 { assert_eq!(row["encoding"], "data-point-labels"); }
+                        if focus && mode == 2 { assert_eq!(row["label_storage"], "box"); }
+                        row["variant"] = json!(variants[mode]);
+                        rows.push(row);
+                        println!("完成：{}，CPU ticks={} 阶段停推={}，进程组已清空",
+                            point.display(), child.cpu_ticks, child.stalled_after_probes);
+                    }
+                }
+            }
+            let baselines: &[&str] = if focus { &["scope", "inline"] } else { &["off", "scope"] };
+            if !compare_variants(&rows, &root, scenarios, baselines) {
+                eprintln!("三产物比较超过既定5%观察线，暂停验收并分析");
+                std::process::exit(2);
+            }
+        }
+        _ => panic!("参数：--matrix <off> <on> <新目录>；--three-way <旧off> <旧Scope> <新标签> <新目录>；--cache-focus <旧Scope> <内联标签> <Box标签> <新目录>；--smoke <新目录>；--point仅供受监控子进程"),
     }
 }
