@@ -16,7 +16,7 @@ use pi_atom::Atom;
 
 use tcp::{Socket, SocketEvent, SocketHandle,
           connect::TcpSocket,
-          utils::Ready};
+          utils::{ContextAccessError, Ready}};
 use ws::{connect::WsSocket,
          utils::{ChildProtocol, WsFrameType, WsSession}};
 
@@ -132,7 +132,7 @@ impl ChildProtocol<TcpSocket> for WsMqtt311 {
                       mut context: WsSession,
                       reason: Result<()>) -> LocalBoxFuture<'static, ()> {
         //连接已关闭，则立即释放Ws会话的上下文
-        match context.get_context_mut().remove::<BrokerSession>() {
+        match context.get_context_mut().try_remove::<BrokerSession>() {
             Err(e) => {
                 warn!("Free Context Failed of Mqtt Close, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                     connect.get_token(),
@@ -296,19 +296,17 @@ async fn accept(protocol: WsMqtt311,
                               "Mqtt connect failed, reason: invalid protocol version"));
     }
 
-    //在Ws连接会话中绑定当前连接与当前客户端会话
-    if let Some(mut handle) = connect.get_session() {
-        if let Some(ws_session) = handle.as_mut() {
-            ws_session
-                .get_context_mut()
-                .set::<BrokerSession>(
-                    BrokerSession::new(
-                        client_id.clone(),
-                        packet.keep_alive,
-                        packet.clean_session,
-                        packet.username.clone(),
-                        packet.password.clone()));
-        }
+    // 关联主线第43节：短访问许可（access permit）内完成嵌套绑定（binding），
+    // 原监听器（listener）等待（await）前归还许可（permit）及普通句柄（context handle）。
+    {
+        let handle = connect.get_session().ok_or_else(|| Error::new(
+            ErrorKind::ConnectionRefused, "Mqtt connect context unavailable"))?;
+        let mut view = handle.try_write().map_err(|error| Error::new(
+            if error == ContextAccessError::Busy { ErrorKind::WouldBlock } else { ErrorKind::ConnectionAborted },
+            format!("Mqtt connect context access rejected: {:?}", error)))?;
+        view.as_mut().get_context_mut().set::<BrokerSession>(BrokerSession::new(
+            client_id.clone(), packet.keep_alive, packet.clean_session,
+            packet.username.clone(), packet.password.clone()));
     }
 
     //重置当前客户端会话
@@ -366,12 +364,21 @@ fn reset_session(protocol: &WsMqtt311,
 // 获取Ws连接绑定的客户端id和客户端保持时长
 #[inline(always)]
 fn get_client_context(connect: &WsSocket<TcpSocket>) -> Result<(String, u16)> {
-    if let Some(handle) = connect.get_session().unwrap().as_ref().get_context().get::<BrokerSession>() {
-        //Ws连接绑定的客户端存在
-        let h = handle.as_ref();
-        Ok((h.get_client_id().clone(), h.get_keep_alive()))
+    let parent = connect.get_session().ok_or_else(|| Error::new(
+        ErrorKind::ConnectionRefused, "Mqtt subscribe failed, reason: invalid connect"))?;
+    let handle = {
+        let view = parent.try_read().map_err(|error| Error::new(
+            if error == ContextAccessError::Busy { ErrorKind::WouldBlock } else { ErrorKind::ConnectionAborted },
+            format!("Mqtt websocket context access rejected: {:?}", error)))?;
+        view.as_ref().get_context().get::<BrokerSession>()
+    };
+    drop(parent);
+    if let Some(handle) = handle {
+        let view = handle.try_read().map_err(|error| Error::new(
+            if error == ContextAccessError::Busy { ErrorKind::WouldBlock } else { ErrorKind::ConnectionAborted },
+            format!("Mqtt broker context access rejected: {:?}", error)))?;
+        Ok((view.as_ref().get_client_id().clone(), view.as_ref().get_keep_alive()))
     } else {
-        //Ws连接绑定的客户端不存在，则立即返回错误原因
         Err(Error::new(ErrorKind::ConnectionRefused,
                        "Mqtt subscribe failed, reason: invalid connect"))
     }

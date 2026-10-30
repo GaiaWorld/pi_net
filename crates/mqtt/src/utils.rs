@@ -270,6 +270,17 @@ fn all_values<V: ValueEq + Ord + Debug + Clone>(node: &PathNode<V>, values: &mut
 ///
 /// Mqtt代理会话
 ///
+/// 直接持有线程本地上下文（thread-local Context），仅在所属线程（owner thread）使用和归还。
+/// 普通句柄（context handle）可跨本地等待（await）；访问许可（access permit）须短期归还。
+/// 关联主线第43节及直接消费者（consumer）的连接（connection）测试（test）。
+/// ```compile_fail
+/// fn require_send<T: Send>() {}
+/// require_send::<pi_mqtt::utils::BrokerSession>();
+/// ```
+/// ```compile_fail
+/// fn require_sync<T: Sync>() {}
+/// require_sync::<pi_mqtt::utils::BrokerSession>();
+/// ```
 pub struct BrokerSession {
     client_id:  String,         //客户端id
     keep_alive: u16,            //连接保持间隔时长，单位秒，服务器端在1.5倍间隔时长内没有收到任何控制报文，则主动关闭连接
@@ -279,7 +290,8 @@ pub struct BrokerSession {
     context:    SocketContext,  //会话上下文
 }
 
-unsafe impl Send for BrokerSession {}
+// BrokerSession直接持有SocketContext，只在所属线程（owner thread）创建、使用和归还。
+// 不以外层跨线程标记（Send）绕过本地Rc边界；关联主线第43节。
 
 impl BrokerSession {
     /// 构建Mqtt代理会话

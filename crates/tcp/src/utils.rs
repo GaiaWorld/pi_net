@@ -1,4 +1,5 @@
-use std::ptr;
+use std::any::Any;
+use std::rc::Rc;
 use std::fs::File;
 use std::pin::Pin;
 use std::path::Path;
@@ -25,6 +26,10 @@ use pi_async_rt::{lock::spin_lock::SpinLock,
 use pi_hash::XHashMap;
 
 use crate::{Socket, SocketHandle, Stream};
+
+#[cfg(test)]
+#[path = "context_storage_regression.rs"]
+mod context_storage_regression;
 
 #[cfg(all(test, target_os = "linux"))]
 #[path = "hibernate_regression.rs"]
@@ -446,103 +451,451 @@ fn select_versions(versions: &[String]) -> Result<Vec<rustls::ProtocolVersion>, 
     Ok(result)
 }
 
-///
-/// 上下文句柄
-///
-pub struct ContextHandle<T: 'static>(Option<Arc<T>>);
+/// 业务对象的短访问许可（access permit）错误；不分配、不等待，也不改变原值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextAccessError {
+    /// 同一对象已有读或写许可（access permit），本次未取得访问权。
+    Busy,
+    /// 原对象已由try_remove移出；旧句柄（context handle）不会转向后来安装的对象。
+    Closed,
+}
 
-unsafe impl<T: 'static> Send for ContextHandle<T> {}
+/// try_remove的失败结果；两种错误均保持原槽（slot）及业务值不变。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextRemoveError {
+    /// 当前已安装对象的实际类型（type）与请求的T不符；优先于数据占用检查。
+    TypeMismatch,
+    /// 同一对象的数据许可（access permit）尚未归还，本次不移出、不等待。
+    Busy,
+}
 
-impl<T: 'static> Drop for ContextHandle<T> {
-    fn drop(&mut self) {
-        if let Some(shared) = self.0.take() {
-            //当前上下文指针存在，则释放
-            Arc::into_raw(shared);
-        }
-    }
+// 实现依据：docs/tcp_context_20261029/CORE_SHELL.md#ctx-core-branches。
+// 槽（slot）只保留当前Entry的真实Rc，类型擦除（type erasure）不擦除引用计数。
+// Entry的Some(T)/None分别表示对象仍在/已移出；新set总是创建另一个Entry。
+// get：短借用槽 → 核类型 → 克隆Rc → 结束槽借用 → 安全向下转换（downcast）。
+// 移出：核类型/持有数 → 取得数据许可 → 取T → 归还数据许可 → 摘除槽Rc
+//       → 归还槽借用 → 归还摘出的Rc → 返回T。
+// 分配（allocation）、失败输入和最后持有的用户析构（Drop）不放在内部借用中。
+struct ContextEntry<T: 'static> {
+    value: RefCell<Option<T>>,
+}
+
+/// 对一次安装对象的真实持有（ownership），由SocketContext::get取得。
+///
+/// 仅在所属线程（owner thread）使用，可跨本线程的异步等待（await）保活；本对象
+/// 不占用数据许可（access permit），不直接导出T引用（reference）。同一Entry
+/// 可有多个普通句柄（context handle），但同时只允许一份读或写许可（access permit）。
+/// 容器（container）归还不撤销本持有；try_remove成功后本对象只能取得Closed。
+///
+/// 归还本对象释放其真实Rc；若为最后持有且值未移出，会同步执行用户析构（Drop）。
+/// 无自动网络关闭、同步锁（synchronous lock）、任务派发（task dispatch）或等待；
+/// 析构（Drop）成本另计，遗忘对象或用户引用环（reference cycle）可保留资源。
+/// 关联测试（test）：CTX-U03/U06/U10～U12，编译约束（compile-time constraint）CTX-C02。
+///
+/// `ContextHandle`不能发送到其它线程（thread）：
+/// ```compile_fail,E0277
+/// use pi_tcp::utils::ContextHandle;
+/// fn require_send<T: Send>() {}
+/// require_send::<ContextHandle<u8>>();
+/// ```
+///
+/// `ContextHandle`不能在线程（thread）间共享：
+/// ```compile_fail,E0277
+/// use pi_tcp::utils::ContextHandle;
+/// fn require_sync<T: Sync>() {}
+/// require_sync::<ContextHandle<u8>>();
+/// ```
+///
+/// 业务引用（reference）必须来自许可（access permit），不提供原直接读取出口：
+/// ```compile_fail,E0599
+/// use pi_tcp::utils::SocketContext;
+/// let context = SocketContext::empty();
+/// context.set(1_u8);
+/// let handle = context.get::<u8>().unwrap();
+/// let _ = handle.as_ref();
+/// ```
+///
+/// 同样不提供原直接可变访问出口：
+/// ```compile_fail,E0599
+/// use pi_tcp::utils::SocketContext;
+/// let context = SocketContext::empty();
+/// context.set(1_u8);
+/// let mut handle = context.get::<u8>().unwrap();
+/// let _ = handle.as_mut();
+/// ```
+pub struct ContextHandle<T: 'static> {
+    entry: Rc<ContextEntry<T>>,
 }
 
 impl<T: 'static> ContextHandle<T> {
-    /// 获取上下文只读引用
-    pub fn as_ref(&self) -> &T {
-        self.0.as_ref().unwrap().as_ref()
-    }
-
-    /// 获取上下文可写引用
-    pub fn as_mut(&mut self) -> Option<&mut T> {
-        if let Some(shared) = self.0.as_mut() {
-            return Arc::get_mut(shared);
+    /// 尝试取得一份只读许可（read permit）；读读同样互斥（mutually exclusive）。
+    ///
+    /// 无额外入参；只借用本句柄（context handle），成功许可（access permit）不得比它
+    /// 活得更久。已有任意许可（access permit）时立即Busy；原对象已移出则Closed，
+    /// 两者不改变值、不自动重试。取得/归还O(1)时间和空间，无分配、用户代码或等待。
+    /// 许可（access permit）及其引用（reference）必须在异步等待（await）、网络操作、
+    /// 未知阻塞（blocking）或可重入回调（reentrant callback）前归还；展开会归还资格。
+    /// 关联测试（test）：CTX-U04/U05/U09/U10/U14及CTX-C04/C05。
+    ///
+    /// 许可（access permit）不能超出普通句柄（context handle）的借用期（borrow lifetime）：
+    /// ```compile_fail,E0597
+    /// use pi_tcp::utils::SocketContext;
+    /// let context = SocketContext::empty();
+    /// context.set(1_u8);
+    /// let permit = {
+    ///     let handle = context.get::<u8>().unwrap();
+    ///     handle.try_read().unwrap()
+    /// };
+    /// assert_eq!(*permit.as_ref(), 1);
+    /// ```
+    pub fn try_read(&self) -> Result<ContextRead<'_, T>, ContextAccessError> {
+        let value = self.entry.value.try_borrow_mut().map_err(|_| ContextAccessError::Busy)?;
+        match RefMut::filter_map(value, |value| value.as_mut()) {
+            Ok(value) => Ok(ContextRead { value }),
+            Err(value) => {
+                drop(value);
+                Err(ContextAccessError::Closed)
+            },
         }
+    }
 
-        None
+    /// 尝试取得一份写许可（write permit），不要求其它普通句柄（context handle）归还。
+    ///
+    /// 无额外入参；成功许可（access permit）借用本句柄（context handle），已有任意
+    /// 许可（access permit）立即Busy，值已移出则Closed，不改值、不等待或重试。
+    /// 取得/归还O(1)时间和空间，无分配或用户代码；普通归还不回滚已完成修改。
+    /// 线程（thread）、异步等待（await）、重入（reentrancy）禁忌与try_read相同。
+    /// 关联测试（test）：CTX-U03～U05/U09/U10/U14及CTX-C04/C05。
+    ///
+    /// 写许可（write permit）也不能超出普通句柄（context handle）：
+    /// ```compile_fail,E0597
+    /// use pi_tcp::utils::SocketContext;
+    /// let context = SocketContext::empty();
+    /// context.set(1_u8);
+    /// let permit = {
+    ///     let handle = context.get::<u8>().unwrap();
+    ///     handle.try_write().unwrap()
+    /// };
+    /// assert_eq!(*permit.as_ref(), 1);
+    /// ```
+    pub fn try_write(&self) -> Result<ContextWrite<'_, T>, ContextAccessError> {
+        let value = self.entry.value.try_borrow_mut().map_err(|_| ContextAccessError::Busy)?;
+        match RefMut::filter_map(value, |value| value.as_mut()) {
+            Ok(value) => Ok(ContextWrite { value }),
+            Err(value) => {
+                drop(value);
+                Err(ContextAccessError::Closed)
+            },
+        }
     }
 }
 
+/// 所属线程（owner thread）的一份短只读许可（read permit），仅由try_read取得。
 ///
-/// 通用上下文
-/// 注意，设置上下文后，需要移除当前上下文，上下文才会自动释放
+/// 归还时仅释放数据借用（data borrow），无分配、等待、回滚或用户析构（Drop），O(1)。
+/// 不可遗忘后继续依赖及时解除占用；不得跨异步等待（await）或未知回调（callback）。
+/// 关联测试（test）：CTX-U04/U09/U14，编译约束（compile-time constraint）CTX-C03/C05。
 ///
-pub struct SocketContext {
-    inner: *const (), //内部上下文
+/// 不能发送到其它线程（thread）：
+/// ```compile_fail,E0277
+/// use pi_tcp::utils::ContextRead;
+/// fn require_send<T: Send>() {}
+/// require_send::<ContextRead<'static, u8>>();
+/// ```
+///
+/// 不能在线程（thread）间共享：
+/// ```compile_fail,E0277
+/// use pi_tcp::utils::ContextRead;
+/// fn require_sync<T: Sync>() {}
+/// require_sync::<ContextRead<'static, u8>>();
+/// ```
+pub struct ContextRead<'a, T: 'static> {
+    value: RefMut<'a, T>,
 }
 
-unsafe impl Send for SocketContext {}
+impl<'a, T: 'static> ContextRead<'a, T> {
+    /// 返回仅在本次许可（access permit）借用期间有效的共享引用（shared reference）。
+    ///
+    /// 不转移所有权（ownership）、不授予第二份许可（access permit），无副作用；
+    /// O(1)时间和空间，无分配、等待或用户代码。继承本许可（access permit）的线程
+    /// （thread）及异步（async）限制。关联测试（test）：CTX-U03/U05，约束CTX-C05。
+    ///
+    /// 引用（reference）不能超出许可（access permit）：
+    /// ```compile_fail,E0597
+    /// use pi_tcp::utils::SocketContext;
+    /// let context = SocketContext::empty();
+    /// context.set(1_u8);
+    /// let handle = context.get::<u8>().unwrap();
+    /// let value;
+    /// {
+    ///     let permit = handle.try_read().unwrap();
+    ///     value = permit.as_ref();
+    /// }
+    /// assert_eq!(*value, 1);
+    /// ```
+    pub fn as_ref(&self) -> &T {
+        &self.value
+    }
+}
+
+/// 所属线程（owner thread）的一份短写许可（write permit），仅由try_write取得。
+///
+/// 可在自身借用期（borrow lifetime）内读取/修改T，不能分拆出冲突引用（reference）。
+/// 归还O(1)，只释放数据借用（data borrow），不回滚修改、不等待或执行用户析构（Drop）；
+/// 不得跨异步等待（await）或未知回调（callback），不能依赖遗忘许可（access permit）后恢复。
+/// 关联测试（test）：CTX-U03/U04/U09/U14，约束CTX-C03/C05。
+///
+/// 不能发送到其它线程（thread）：
+/// ```compile_fail,E0277
+/// use pi_tcp::utils::ContextWrite;
+/// fn require_send<T: Send>() {}
+/// require_send::<ContextWrite<'static, u8>>();
+/// ```
+///
+/// 不能在线程（thread）间共享：
+/// ```compile_fail,E0277
+/// use pi_tcp::utils::ContextWrite;
+/// fn require_sync<T: Sync>() {}
+/// require_sync::<ContextWrite<'static, u8>>();
+/// ```
+pub struct ContextWrite<'a, T: 'static> {
+    value: RefMut<'a, T>,
+}
+
+impl<'a, T: 'static> ContextWrite<'a, T> {
+    /// 借用本许可（access permit）取得共享引用（shared reference），不释放写资格。
+    ///
+    /// 无额外入参或状态（state）变化，不克隆T；返回值不能超出本次借用，也不能与
+    /// 冲突可变借用（mutable borrow）并存。O(1)时间/空间，无等待、分配或用户代码；
+    /// 继承本许可（access permit）限制。关联测试（test）：CTX-U03/U04及CTX-C05。
+    pub fn as_ref(&self) -> &T {
+        &self.value
+    }
+
+    /// 借用本许可（access permit）取得唯一可变引用（mutable reference）。
+    ///
+    /// 返回值同时受本次可变借用（mutable borrow）及许可（access permit）期限限制；
+    /// 不转移T或新增访问权，O(1)时间/空间，无分配、等待或用户代码。不允许跨异步等待
+    /// （await）或未知回调（callback）持有。关联测试（test）：CTX-U03/U04/U14及CTX-C05。
+    ///
+    /// 引用（reference）不能超出许可（access permit）：
+    /// ```compile_fail,E0597
+    /// use pi_tcp::utils::SocketContext;
+    /// let context = SocketContext::empty();
+    /// context.set(1_u8);
+    /// let handle = context.get::<u8>().unwrap();
+    /// let value;
+    /// {
+    ///     let mut permit = handle.try_write().unwrap();
+    ///     value = permit.as_mut();
+    /// }
+    /// *value = 2;
+    /// ```
+    ///
+    /// 同一写许可（write permit）不能导出两个同时使用的可变引用（mutable reference）：
+    /// ```compile_fail,E0499
+    /// use pi_tcp::utils::SocketContext;
+    /// let context = SocketContext::empty();
+    /// context.set(1_u8);
+    /// let handle = context.get::<u8>().unwrap();
+    /// let mut permit = handle.try_write().unwrap();
+    /// let first = permit.as_mut();
+    /// let second = permit.as_mut();
+    /// *first += *second;
+    /// ```
+    pub fn as_mut(&mut self) -> &mut T {
+        &mut self.value
+    }
+}
+
+/// 可复用的线程内上下文（Context）容器（container），一次只安装一个实际类型（type）。
+///
+/// T须为`'static`，不要求`Send/Sync/Clone`；本对象及其普通句柄（context handle）、
+/// 许可（access permit）均不能发送到其它线程（thread）或在线程（thread）间共享。
+/// 普通句柄（context handle）真实保活安装对象，容器（container）归还不撤销它们。
+/// 最后真实持有结束才同步析构（Drop）尚未移出的T；用户引用环（reference cycle）、
+/// 遗忘持有及运行时（runtime）停止不在及时回收保证中。
+///
+/// 这些同步操作（synchronous operation）不派发任务（task）、不操作网络（network）、
+/// 不等待同步锁（synchronous lock）或数据占用；普通数据冲突返回Busy。私有槽（slot）
+/// 的非法借用重入（borrow reentrancy）诊断为panic，不伪装成空值或业务Busy。
+/// 分配（allocation）及用户析构（Drop）时间另计，不承诺固定墙钟截止（deadline）；
+/// 失败输入及最后对象的析构（Drop）均在内部借用（borrow）外执行，可重入本地公开出口。
+/// 不提供网络连接（connection）的准备/解除或整体停止保证，绑定（binding）另行管理。
+/// 关联测试（test）：`context_storage_regression`中的CTX-U01～U17及下列CTX-C01/C02示例。
+///
+/// 非Send、非Clone的本地值可使用短许可（access permit），普通句柄（context handle）
+/// 不妨碍单份写资格，移出后旧句柄（context handle）只看到Closed：
+/// ```
+/// use std::{cell::Cell, rc::Rc};
+/// use pi_tcp::utils::{SocketContext, ContextAccessError};
+/// struct LocalValue(Cell<u8>, Rc<()>);
+/// let context = SocketContext::empty();
+/// assert!(context.set(LocalValue(Cell::new(1), Rc::new(()))));
+/// let first = context.get::<LocalValue>().unwrap();
+/// let second = context.get::<LocalValue>().unwrap();
+/// {
+///     let mut write = first.try_write().unwrap();
+///     write.as_mut().0.set(2);
+///     assert!(matches!(second.try_read(), Err(ContextAccessError::Busy)));
+/// }
+/// {
+///     let read = second.try_read().unwrap();
+///     assert_eq!(read.as_ref().0.get(), 2);
+/// }
+/// assert!(context.remove::<LocalValue>().is_err());
+/// let value = context.try_remove::<LocalValue>().unwrap().unwrap();
+/// assert_eq!(value.0.get(), 2);
+/// assert!(matches!(first.try_read(), Err(ContextAccessError::Closed)));
+/// assert!(context.is_empty());
+/// ```
+///
+/// 容器（container）不能发送到其它线程（thread）：
+/// ```compile_fail,E0277
+/// use pi_tcp::utils::SocketContext;
+/// fn require_send<T: Send>() {}
+/// require_send::<SocketContext>();
+/// ```
+///
+/// 容器（container）不能在线程（thread）间共享：
+/// ```compile_fail,E0277
+/// use pi_tcp::utils::SocketContext;
+/// fn require_sync<T: Sync>() {}
+/// require_sync::<SocketContext>();
+/// ```
+pub struct SocketContext {
+    slot: RefCell<Option<Rc<dyn Any>>>,
+}
 
 impl SocketContext {
-    /// 创建空的上下文
+    /// 创建可立即设置值的空槽（slot），不分配Entry、不持有T。
+    ///
+    /// 无入参，无外部状态（state）或用户副作用；每次返回独立容器（container），
+    /// O(1)时间和空间，无锁（lock）/等待/任务（task）。仅限所属线程（owner thread），
+    /// 分配器（allocator）及网络（network）均不参与。关联测试（test）：CTX-U01。
     pub fn empty() -> Self {
-        SocketContext {
-            inner: ptr::null(),
-        }
+        SocketContext { slot: RefCell::new(None) }
     }
 
-    /// 判断上下文是否为空
+    /// 观察当前槽（slot）是否为空；true不阻止后续set，也不反映旧句柄（context handle）。
+    ///
+    /// 无额外入参或状态（state）变化，仅同线程（thread）即时观察，O(1)时间和空间，
+    /// 无分配、等待或用户代码。非法私有槽借用（slot borrow）冲突为panic；
+    /// 数据许可（access permit）占用不影响本操作。关联测试（test）：CTX-U01/U10/U13。
     pub fn is_empty(&self) -> bool {
-        self.inner.is_null()
+        self.slot.try_borrow().expect("Context slot borrow conflict").is_none()
     }
 
-    /// 获取上下文的句柄
-    pub fn get<T>(&self) -> Option<ContextHandle<T>> {
-        if self.is_empty() {
-            return None;
-        }
-
-        Some(unsafe { ContextHandle(Some(Arc::from_raw(self.inner as *const T))) })
-    }
-
-    /// 设置上下文，如果当前上下文不为空，则设置失败
-    pub fn set<T>(&mut self, context: T) -> bool {
-        if !self.is_empty() {
+    /// 空槽（slot）安装owned T并返回true；非空返回false且不覆盖原对象。
+    ///
+    /// value总是移入；失败输入会在内部借用（borrow）外同步析构（Drop）。T须为
+    /// `'static`，无需`Send/Sync/Clone`。成功安装创建一份Rc Entry，T内联保存；
+    /// 管理O(1)，值移动及Entry空间O(sizeof(T))，分配（allocation）/用户析构（Drop）
+    /// 成本另计，无等待/重试。非法私有槽重入（slot reentrancy）为panic，分配
+    /// （allocation）失败沿分配器（allocator）策略，不保证用户析构（Drop）不展开。
+    /// 仅限所属线程（owner thread），不幂等（idempotent）地复制安装，不做异步工作
+    /// （async work）。关联测试（test）：CTX-U02/U13/U16/U17。
+    pub fn set<T: 'static>(&self, value: T) -> bool {
+        let occupied = {
+            let slot = self.slot.try_borrow().expect("Context slot borrow conflict");
+            slot.is_some()
+        };
+        if occupied {
             return false;
         }
 
-        self.inner = Arc::into_raw(Arc::new(context)) as *const T as *const ();
-        true
+        let entry: Rc<dyn Any> = Rc::new(ContextEntry { value: RefCell::new(Some(value)) });
+        let mut candidate = Some(entry);
+        let installed = {
+            let mut slot = self.slot.try_borrow_mut().expect("Context slot borrow conflict");
+            // 分配（allocation）可能允许外部重入（reentrancy），提交前再核空槽（slot）。
+            // 未安装的候选（candidate）保留至借用（borrow）结束，不在此处析构（Drop）T。
+            if slot.is_some() {
+                false
+            } else {
+                *slot = candidate.take();
+                true
+            }
+        };
+        drop(candidate);
+        installed
     }
 
-    /// 移除上下文，如果当前还有未释放的上下文句柄，则返回移除错误，如果当前有上下文，则返回被移除的上下文，否则返回空
-    pub fn remove<T>(&mut self) -> Result<Option<T>, &str> {
-        if self.is_empty() {
-            return Ok(None);
-        }
-
-        let inner = unsafe { Arc::from_raw(self.inner as *const T) };
-        if Arc::strong_count(&inner) > 1 {
-            Arc::into_raw(inner); //释放临时共享指针
-            Err("Remove context failed, reason: context shared exist")
-        } else {
-            match Arc::try_unwrap(inner) {
-                Err(inner) => {
-                    Arc::into_raw(inner); //释放临时共享指针
-                    Err("Remove context failed, reason: invalid shared")
-                },
-                Ok(context) => {
-                    //将当前内部上下文设置为空，并返回上下文
-                    self.inner = ptr::null();
-                    Ok(Some(context))
-                },
+    /// 按实际T取得普通句柄（context handle）；空槽（slot）或类型（type）不符返回None。
+    ///
+    /// T须为`'static`，成功只增加原Entry的一份真实Rc，不复制T、不取得数据许可
+    /// （access permit）；已有数据借用（data borrow）不妨碍本操作。O(1)时间/空间，
+    /// 无分配、等待、用户代码或状态（state）转换，重复取得产生各自真实持有。
+    /// 仅限所属线程（owner thread）；非法私有槽重入（slot reentrancy）为panic。
+    /// 关联测试（test）：CTX-U01/U03/U05/U08/U13。
+    pub fn get<T: 'static>(&self) -> Option<ContextHandle<T>> {
+        let erased = {
+            let slot = self.slot.try_borrow().expect("Context slot borrow conflict");
+            let entry = slot.as_ref()?;
+            if !entry.is::<ContextEntry<T>>() {
+                return None;
             }
+            entry.clone()
+        };
+        let entry = erased.downcast::<ContextEntry<T>>()
+            .unwrap_or_else(|_| panic!("Context entry type invariant violated"));
+        Some(ContextHandle { entry })
+    }
+
+    /// 无普通句柄（context handle）尚存时移出实际T；空槽（slot）返回Ok(None)。
+    ///
+    /// 类型（type）不符优先报错；有普通句柄（context handle）沿原共享错误文字拒绝；
+    /// 数据许可（access permit）占用也拒绝，失败不改原对象。外层容器（container）的
+    /// Rc数量不参与检查。成功返回owned T并使槽（slot）可复用，不执行T的析构（Drop）。
+    /// O(1)管理/额外空间，T移动成本另计；同线程（thread）、同步（synchronous）、
+    /// 无等待/重试/用户代码。重复空移出为Ok(None)，非法私有槽重入（slot reentrancy）
+    /// 或内部不变量（invariant）损坏为panic。关联测试（test）：CTX-U01/U06～U08/U12/U13/U15/U17。
+    pub fn remove<T: 'static>(&self) -> Result<Option<T>, &str> {
+        let mut slot = self.slot.try_borrow_mut().expect("Context slot borrow conflict");
+        let Some(current) = slot.as_ref() else {
+            return Ok(None);
+        };
+        let Some(entry) = current.downcast_ref::<ContextEntry<T>>() else {
+            return Err("Remove context failed, reason: type mismatch");
+        };
+        // 不先克隆Rc；计数（reference count）只包含槽及真正的普通句柄（context handle）。
+        if Rc::strong_count(current) > 1 {
+            return Err("Remove context failed, reason: context shared exist");
         }
+        let mut data = entry.value.try_borrow_mut()
+            .map_err(|_| "Remove context failed, reason: data access is busy")?;
+        let value = data.take().expect("Context entry value invariant violated");
+        drop(data);
+        let retired = slot.take();
+        drop(slot);
+        drop(retired);
+        Ok(Some(value))
+    }
+
+    /// 不要求普通句柄（context handle）归还，立即尝试移出实际T。
+    ///
+    /// 空槽（slot）Ok(None)；先核类型（type），不符TypeMismatch，任意数据许可
+    /// （access permit）尚存则Busy，失败均不改变原对象。成功返回owned T、清空槽
+    /// （slot），旧Entry变为Closed；新set总是新Entry，旧句柄（context handle）不能
+    /// 指向它。不能撤销仍有效的引用（reference），不等待、不自动重试或关闭网络。
+    /// 同线程（thread）同步（synchronous），O(1)管理/额外空间，值移动成本另计；
+    /// 无用户代码，非法私有槽重入（slot reentrancy）或内部不变量（invariant）损坏为panic。
+    /// 关联测试（test）：CTX-U01/U08～U10/U12/U13/U15/U17。
+    pub fn try_remove<T: 'static>(&self) -> Result<Option<T>, ContextRemoveError> {
+        let mut slot = self.slot.try_borrow_mut().expect("Context slot borrow conflict");
+        let Some(current) = slot.as_ref() else {
+            return Ok(None);
+        };
+        let Some(entry) = current.downcast_ref::<ContextEntry<T>>() else {
+            return Err(ContextRemoveError::TypeMismatch);
+        };
+        let mut data = entry.value.try_borrow_mut().map_err(|_| ContextRemoveError::Busy)?;
+        let value = data.take().expect("Context entry value invariant violated");
+        drop(data);
+        let retired = slot.take();
+        drop(slot);
+        drop(retired);
+        Ok(Some(value))
     }
 }
 

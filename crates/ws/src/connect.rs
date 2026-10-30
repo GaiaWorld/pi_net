@@ -4,11 +4,12 @@ use std::net::{SocketAddr, Shutdown};
 use std::io::{ErrorKind, Result, Error};
 
 use mio::Token;
+use futures::future::LocalBoxFuture;
 use bytes::Buf;
 use log::warn;
 
 use tcp::{Socket, SocketHandle, SocketEvent,
-          utils::{SocketContext, ContextHandle, Hibernate, Ready}};
+          utils::{SocketContext, ContextHandle, ContextAccessError, Hibernate, Ready}};
 
 use crate::{frame::{WsHead, WsPayload, WsFrame},
             utils::{ChildProtocol, WsFrameType, WsSession, WsStatus}};
@@ -102,9 +103,20 @@ impl<S: Socket> WsSocket<S> {
         &self.socket
     }
 
-    /// 获取连接会话的句柄
+    /// 在所属线程（owner thread）取得普通会话句柄（context handle），不占用访问许可（access permit）。
+    ///
+    /// 无额外入参；空值（None）表示无会话（session）或取得结果（result）不可用，后者保留诊断。
+    /// 返回值仅同线程（thread）使用；缓存（cache）可跨等待（await），视图（view）须短期归还。
+    /// 正常取得为O(1)管理工作，无等待或网络I/O；错误诊断（diagnostic）沿宿主日志器（logger），
+    /// 可有同步成本，不承诺固定时限。状态（state）边界沿SocketHandle::get_context。
     pub fn get_session(&self) -> Option<ContextHandle<WsSession>> {
-        return unsafe { (&*self.socket.get_context().get()).get::<WsSession>() }
+        match self.socket.get_context() {
+            Ok(context) => context.get::<WsSession>(),
+            Err(error) => {
+                warn!("Websocket session unavailable, token: {:?}, reason: {:?}", self.socket.get_token(), error);
+                None
+            },
+        }
     }
 
     /// 线程安全的设置Tcp连接超时定时器
@@ -188,242 +200,158 @@ impl<S: Socket> WsSocket<S> {
     pub async fn handle_readed(handle: &SocketHandle<S>,
                                window_bits: u8,
                                protocol: Arc<dyn ChildProtocol<S>>) {
-        let mut h: ContextHandle<WsSession> = unsafe { (&*handle.get_context().get()).get::<WsSession>().unwrap() };
-        if h.as_ref().is_closed() || h.as_ref().is_closing() {
-            //当前连接已关闭或正在关闭中，则忽略所有读
-            return;
-        }
+        let context = match handle.get_context() {
+            Ok(context) => context,
+            Err(error) => {
+                warn!("Websocket read context unavailable, token: {:?}, reason: {:?}", handle.get_token(), error);
+                return;
+            },
+        };
+        let h = match context.get::<WsSession>() {
+            Some(handle) => handle,
+            None => return,
+        };
+        drop(context);
+        let inactive = match h.try_read() {
+            Ok(view) => view.as_ref().is_closed() || view.as_ref().is_closing(),
+            Err(ContextAccessError::Closed) => return,
+            Err(error) => {
+                let _ = close::<S>(handle, Err(Error::new(ErrorKind::WouldBlock,
+                    format!("Websocket read context access rejected: {:?}", error))));
+                return;
+            },
+        };
+        if inactive { return; }
 
-        //读数据，并填充帧数据
         let mut frames = Vec::new();
         while unsafe { (&mut *handle.get_read_buffer().get()).as_ref().unwrap().remaining() } > 0 {
             let mut frame = WsFrame::<S>::default();
             WsFrame::read_head(handle, window_bits, &mut frame).await;
-
             frames.push(frame);
             if frames.len() > 128 {
-                //分帧过多，则立即关闭当前连接
-                close::<S>(handle, Err(Error::new(ErrorKind::Other,
-                                                  format!("Websocket Read Failed, token: {:?}, remote: {:?}, local: {:?}, frame_len: {:?}, reason: out of frames",
-                                                          handle.get_token(),
-                                                          handle.get_remote(),
-                                                          handle.get_local(),
-                                                          frames.len()))));
+                let _ = close::<S>(handle, Err(Error::new(ErrorKind::Other,
+                    format!("Websocket Read Failed, token: {:?}, remote: {:?}, local: {:?}, frame_len: {:?}, reason: out of frames",
+                        handle.get_token(), handle.get_remote(), handle.get_local(), frames.len()))));
                 return;
             }
         }
 
         for mut frame in frames {
-            if let Some(context) = h.as_mut() {
-                //根据帧类型，处理帧数据
+            let completed = frame.get_head().is_single() || frame.get_head().is_finish();
+            let strict = completed && protocol.is_strict();
+            // 原有子协议入口（child protocol entry）同步取得消息（message）并返回Future<'static>。
+            // 先结束短许可（access permit），再等待（await）该返回值；完成后只访问原Entry。
+            // 关联主线第43节；不把普通句柄（context handle）转为可长期持有的引用（reference）。
+            let prepared: Result<(bool, Option<LocalBoxFuture<'static, Result<()>>>)> = (|| {
+                let mut view = h.try_write().map_err(|error| Error::new(ErrorKind::WouldBlock,
+                    format!("Websocket read context access rejected: {:?}", error)))?;
+                let context = view.as_mut();
                 if let WsPayload::Raw(payload) = frame.payload() {
-                    //当前帧有祼负载，则缓冲负载
                     context.fill_msg(payload);
                 }
-
                 let head = frame.get_head();
-                if head.is_single() {
-                    //数据帧，且只有单帧，则设置帧类型，并开始消息处理
-                    if protocol.is_strict() {
-                        //需要检查对端的消息Nonce
-                        if context.as_msg().len() < 4 {
-                            //无效的对端消息Nonce长度，则立即关闭Ws连接
-                            let seed = context.get_seed();
-                            let nonce_count = context.get_nonce_count();
-                            close::<S>(handle, Err(Error::new(ErrorKind::Other,
-                                                              format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid message nonce length",
-                                                                      handle.get_token(),
-                                                                      handle.get_remote(),
-                                                                      handle.get_local(),
-                                                                      seed,
-                                                                      nonce_count))));
-                            continue;
+                if head.is_single() || head.is_finish() {
+                    if strict {
+                        let message = if head.is_single() { context.as_msg() } else { context.as_first_msg() };
+                        if message.len() < 4 {
+                            return Err(Error::new(ErrorKind::Other,
+                                format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid message nonce length",
+                                    handle.get_token(), handle.get_remote(), handle.get_local(), context.get_seed(), context.get_nonce_count())));
                         }
-
-                        let nonce = u32::from_le_bytes((&context.as_msg()[0..4]).try_into().unwrap());
+                        let nonce = u32::from_le_bytes(message[0..4].try_into().unwrap());
                         if !context.check_nonce(nonce) {
-                            //无效的对端消息Nonce，则立即关闭Ws连接
-                            let seed = context.get_seed();
-                            let nonce_count = context.get_nonce_count();
-                            close::<S>(handle, Err(Error::new(ErrorKind::Other,
-                                                              format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, nonce: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid message nonce",
-                                                                      handle.get_token(),
-                                                                      handle.get_remote(),
-                                                                      handle.get_local(),
-                                                                      nonce,
-                                                                      seed,
-                                                                      nonce_count))));
-                            continue;
+                            return Err(Error::new(ErrorKind::Other,
+                                format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, nonce: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid message nonce",
+                                    handle.get_token(), handle.get_remote(), handle.get_local(), nonce, context.get_seed(), context.get_nonce_count())));
                         }
                     }
-
-                    context.set_type(head.get_type());
+                    if head.is_single() { context.set_type(head.get_type()); }
                     context.finish_msg();
-
-                    if let Err(e) = protocol
-                        .decode_protocol(Self::new(handle.clone(), window_bits),
-                                         context).await {
-                        //协议处理失败，则立即关闭当前Ws连接
-                        close::<S>(handle, Err(e));
-                    }
-
-                    //重置当前连接的当前帧，并继续读后续帧
-                    context.reset();
-                    continue;
+                    let decoded = protocol.decode_protocol(Self::new(handle.clone(), window_bits), context);
+                    Ok((false, Some(decoded)))
                 } else if head.is_first() {
-                    //数据帧，当前是首帧，则设置帧类型，并继续读后续帧
                     context.set_type(head.get_type());
-                    continue;
+                    Ok((false, None))
                 } else if head.is_next() {
-                    //数据帧，当前是后续帧，则继续读后续帧
-                    continue;
-                } else if head.is_finish() {
-                    //数据帧，当前是结束帧，则开始消息处理
-                    if protocol.is_strict() {
-                        //需要检查对端的消息Nonce
-                        if context.as_first_msg().len() < 4 {
-                            //无效的对端消息Nonce长度，则立即关闭Ws连接
-                            let seed = context.get_seed();
-                            let nonce_count = context.get_nonce_count();
-                            close::<S>(handle, Err(Error::new(ErrorKind::Other,
-                                                              format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid message nonce length",
-                                                                      handle.get_token(),
-                                                                      handle.get_remote(),
-                                                                      handle.get_local(),
-                                                                      seed,
-                                                                      nonce_count))));
-                            continue;
-                        }
-
-                        let nonce = u32::from_le_bytes((&context.as_first_msg()[0..4]).try_into().unwrap());
-                        if !context.check_nonce(nonce) {
-                            //无效的对端消息Nonce，则立即关闭Ws连接
-                            let seed = context.get_seed();
-                            let nonce_count = context.get_nonce_count();
-                            close::<S>(handle, Err(Error::new(ErrorKind::Other,
-                                                              format!("Websocket check message nonce Failed, token: {:?}, remote: {:?}, local: {:?}, nonce: {:?}, seed: {:?}, nonce_count: {:?}, reason: invalid message nonce",
-                                                                      handle.get_token(),
-                                                                      handle.get_remote(),
-                                                                      handle.get_local(),
-                                                                      nonce,
-                                                                      seed,
-                                                                      nonce_count))));
-                            continue;
-                        }
-                    }
-
-                    context.finish_msg();
-
-                    if let Err(e) = protocol
-                        .decode_protocol(Self::new(handle.clone(), window_bits),
-                                         context).await {
-                        //协议处理失败，则立即关闭当前Ws连接
-                        close::<S>(handle, Err(e));
-                    }
-
-                    //重置当前连接的当前帧，并继续读后续帧
-                    context.reset();
-                    continue;
+                    Ok((false, None))
                 } else {
-                    //控制帧，则设置帧类型
                     context.set_type(head.get_type());
+                    Ok((true, None))
                 }
-            } else {
-                //无法获取会话的可写引用，则表示有异常，立即关闭Ws连接
-                close::<S>(handle, Err(Error::new(ErrorKind::Other,
-                                                  format!("Websocket Read Failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid writable context",
-                                                          handle.get_token(),
-                                                          handle.get_remote(),
-                                                          handle.get_local()))));
-                continue;
+            })();
+            let (control, decoded) = match prepared {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    let _ = close::<S>(handle, Err(error));
+                    continue;
+                },
+            };
+            if let Some(decoded) = decoded {
+                if let Err(error) = decoded.await {
+                    let _ = close::<S>(handle, Err(error));
+                }
+                let reset = h.try_write().map(|mut view| view.as_mut().reset());
+                if let Err(error) = reset {
+                    if error != ContextAccessError::Closed {
+                        let _ = close::<S>(handle, Err(Error::new(ErrorKind::WouldBlock,
+                            format!("Websocket reset context access rejected: {:?}", error))));
+                    }
+                }
+            } else if control {
+                Self::handle_control(handle, window_bits, &h).await;
             }
-
-            //控制帧，则开始控制处理
-            WsSocket::handle_control(handle, window_bits, &mut h).await;
         }
     }
 
     /// 异步处理控制帧
     async fn handle_control(handle: &SocketHandle<S>,
                             window_bits: u8,
-                            h: &mut ContextHandle<WsSession>) {
-        let frame_type = h.as_ref().get_type();
-        match frame_type {
-            wft@WsFrameType::Close => {
-                //处理关闭帧
-                if let Some(context) = h.as_mut() {
-                    //修改当前连接为正在关闭中
-                    context.set_status(WsStatus::Closing);
-
-                    //填充负载
-                    let payload;
-                    let bin = context.pop_msg();
-                    if bin.len() == 0 {
-                        //没有关闭状态码
-                        payload = None;
-                    } else {
-                        //有关闭状态码
-                        payload = Some(vec![bin[0], bin[1]]);
-                    }
-
-                    //响应关闭控制帧，并不再继续读连接的数据
-                    WsSocket::resp_control(handle,
-                                           window_bits,
-                                           wft,
-                                           payload).await;
-
-                    context.reset(); //重置当前连接的当前帧
-                } else {
-                    //无法获取会话的可写引用，则表示有异常，立即关闭Tcp连接
-                    handle.close(Err(Error::new(ErrorKind::Other,
-                                                format!("Websocket handle close frame failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid writable context",
-                                                        handle.get_token(),
-                                                        handle.get_remote(),
-                                                        handle.get_local()))));
-                    return;
-                }
+                            h: &ContextHandle<WsSession>) {
+        let frame_type = match h.try_read() {
+            Ok(view) => view.as_ref().get_type(),
+            Err(ContextAccessError::Closed) => return,
+            Err(error) => {
+                let _ = handle.close(Err(Error::new(ErrorKind::WouldBlock,
+                    format!("Websocket control context access rejected: {:?}", error))));
+                return;
             },
-            WsFrameType::Ping => {
-                if let Some(context) = h.as_mut() {
-                    //处理Ping帧
+        };
+        match frame_type {
+            wft@WsFrameType::Close | wft@WsFrameType::Ping => {
+                let payload = (|| {
+                    let mut view = h.try_write().map_err(|error| Error::new(ErrorKind::WouldBlock,
+                        format!("Websocket control context access rejected: {:?}", error)))?;
+                    let context = view.as_mut();
+                    if matches!(wft, WsFrameType::Close) { context.set_status(WsStatus::Closing); }
                     let bin = context.pop_msg();
-                    if bin.len() == 0 {
-                        //没有Ping负载，写入响应的Pong控制帧
-                        WsSocket::resp_control(handle,
-                                               window_bits,
-                                               WsFrameType::Pong,
-                                               None).await;
-                    } else {
-                        //有Ping负载，写入响应的Pong控制帧
-                        WsSocket::resp_control(handle,
-                                               window_bits,
-                                               WsFrameType::Pong,
-                                               Some(bin.to_vec())).await;
+                    let payload = if bin.is_empty() { None }
+                        else if matches!(wft, WsFrameType::Close) { Some(vec![bin[0], bin[1]]) }
+                        else { Some(bin.to_vec()) };
+                    Ok::<_, Error>(payload)
+                })();
+                let payload = match payload {
+                    Ok(payload) => payload,
+                    Err(error) => { let _ = handle.close(Err(error)); return; },
+                };
+                // 数据（data）已移入局部负载（payload）；网络（network）操作不保留访问许可（access permit）。
+                let reply_type = if matches!(wft, WsFrameType::Close) { WsFrameType::Close } else { WsFrameType::Pong };
+                Self::resp_control(handle, window_bits, reply_type, payload).await;
+                let reset = h.try_write().map(|mut view| view.as_mut().reset());
+                if let Err(error) = reset {
+                    if error != ContextAccessError::Closed {
+                        let _ = handle.close(Err(Error::new(ErrorKind::WouldBlock,
+                            format!("Websocket control reset access rejected: {:?}", error))));
                     }
-
-                    context.reset(); //重置当前连接的当前帧
-                } else {
-                    //无法获取会话的可写引用，则表示有异常，立即关闭Tcp连接
-                    handle.close(Err(Error::new(ErrorKind::Other,
-                                                format!("Websocket handle ping frame failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid writable context",
-                                                        handle.get_token(),
-                                                        handle.get_remote(),
-                                                        handle.get_local()))));
-                    return;
                 }
             },
             WsFrameType::Pong => {
-                //TODO 处理Pong帧
+                // 原Pong处理（Pong handling）不增加业务动作。
             },
             wft => {
-                //无效的控制帧，则立即关闭Tcp连接
-                handle.close(Err(Error::new(ErrorKind::Other,
-                                            format!("Websocket handle control frame failed, token: {:?}, remote: {:?}, local: {:?}, type: {:?}, reason: invalid control frame",
-                                                    handle.get_token(),
-                                                    handle.get_remote(),
-                                                    handle.get_local(),
-                                                    wft))));
-            }
+                let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                    format!("Websocket handle control frame failed, token: {:?}, remote: {:?}, local: {:?}, type: {:?}, reason: invalid control frame",
+                        handle.get_token(), handle.get_remote(), handle.get_local(), wft))));
+            },
         }
     }
 
@@ -451,42 +379,40 @@ impl<S: Socket> WsSocket<S> {
 
     /// 异步处理Tcp已写事件
     pub async fn handle_writed(handle: SocketHandle<S>) {
-        if let Some(mut h) = unsafe { (&*handle.get_context().get()).get::<WsSession>() } {
-            if let Some(context) = h.as_mut() {
-                if context.is_closed() || context.is_handshaked() {
-                    //当前连接已关闭或连接已握手，则忽略写成功事件
-                    return;
-                } else if context.is_closing() {
-                    //当前连接正在关闭，且已发送回应的关闭帧，则修改当前连接状态为已关闭，立即释放可写会话，并立即关闭Tcp连接
-                    context.set_status(WsStatus::Closed);
-                    handle.close(Ok(()));
+        let context = match handle.get_context() {
+            Ok(context) => context,
+            Err(error) => {
+                warn!("Websocket write context unavailable, token: {:?}, reason: {:?}", handle.get_token(), error);
+                return;
+            },
+        };
+        if let Some(h) = context.get::<WsSession>() {
+            let closing = {
+                let mut view = match h.try_write() {
+                    Ok(view) => view,
+                    Err(ContextAccessError::Closed) => return,
+                    Err(error) => {
+                        let _ = handle.close(Err(Error::new(ErrorKind::WouldBlock,
+                            format!("Websocket write context access rejected: {:?}", error))));
+                        return;
+                    },
+                };
+                let session = view.as_mut();
+                if session.is_closed() || session.is_handshaked() { return; }
+                if session.is_closing() {
+                    session.set_status(WsStatus::Closed);
+                    true
                 } else {
-                    //当前连接正在握手，则修改当前连接状态为已握手，并立即释放可写会话
-                    context.set_status(WsStatus::HandShaked);
+                    session.set_status(WsStatus::HandShaked);
+                    false
                 }
-            } else {
-                //无法获取会话的可写引用，则表示有异常，立即关闭Tcp连接
-                handle.close(Err(Error::new(ErrorKind::Other,
-                                            format!("Websocket write failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid writable context",
-                                                    handle.get_token(),
-                                                    handle.get_remote(),
-                                                    handle.get_local()))));
-                return;
-            }
-        } else {
-            if !handle.is_security() {
-                //非安全连接，且连接会话为空，则立即关闭Tcp连接
-                handle.close(Err(Error::new(ErrorKind::Other,
-                                            format!("Websocket write failed, token: {:?}, remote: {:?}, local: {:?}, reason: websocket context empty",
-                                                    handle.get_token(),
-                                                    handle.get_remote(),
-                                                    handle.get_local()))));
-                return;
-            }
+            };
+            if closing { let _ = handle.close(Ok(())); }
+        } else if !handle.is_security() {
+            let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                format!("Websocket write failed, token: {:?}, remote: {:?}, local: {:?}, reason: websocket context empty",
+                    handle.get_token(), handle.get_remote(), handle.get_local()))));
         }
-
-        //握手完成或连接正在关闭，准备异步接收客户端发送的Websocket数据帧，则预填充连接读缓冲区
-        // unsafe { (&mut *handle.get_read_buffer().get()).try_fill().await; }
     }
 
     /// 异步处理Tcp已关闭事件
@@ -495,7 +421,16 @@ impl<S: Socket> WsSocket<S> {
                                protocol: Arc<dyn ChildProtocol<S>>,
                                result: Result<()>) {
         //连接已关闭，则立即释放Tcp连接的上下文
-        match unsafe { (&mut *handle.get_context().get()).remove::<WsSession>() } {
+        let context = match handle.get_context() {
+            Ok(context) => context,
+            Err(error) => {
+                warn!("Websocket close context unavailable, token: {:?}, reason: {:?}", handle.get_token(), error);
+                return;
+            },
+        };
+        let removed = context.try_remove::<WsSession>();
+        drop(context);
+        match removed {
             Err(e) => {
                 warn!("Free Context Failed by Websocket Close, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                     handle.get_token(),
@@ -520,18 +455,28 @@ impl<S: Socket> WsSocket<S> {
                                   window_bits: u8,
                                   protocol: Arc<dyn ChildProtocol<S>>,
                                   event: SocketEvent) {
-        let mut h = unsafe { (&*handle.get_context().get()).get::<WsSession>().unwrap() };
-        if let Some(context) = h.as_mut() {
-            if let Err(e) = protocol
-                .protocol_timeout(Self::new(handle.clone(), window_bits),
-                                  context,
-                                  event).await {
-                //协议超时处理失败，则立即关闭当前Ws连接
-                close::<S>(&handle, Err(e));
-            } else {
-                //协议超时处理成功，则立即关闭当前Ws连接
-                close::<S>(&handle, Ok(()));
-            }
-        }
+        let context = match handle.get_context() {
+            Ok(context) => context,
+            Err(error) => {
+                warn!("Websocket timeout context unavailable, token: {:?}, reason: {:?}", handle.get_token(), error);
+                return;
+            },
+        };
+        let h = match context.get::<WsSession>() { Some(h) => h, None => return };
+        drop(context);
+        let timeout = {
+            let mut view = match h.try_write() {
+                Ok(view) => view,
+                Err(ContextAccessError::Closed) => return,
+                Err(error) => {
+                    let _ = close::<S>(&handle, Err(Error::new(ErrorKind::WouldBlock,
+                        format!("Websocket timeout context access rejected: {:?}", error))));
+                    return;
+                },
+            };
+            protocol.protocol_timeout(Self::new(handle.clone(), window_bits), view.as_mut(), event)
+        };
+        let result = timeout.await;
+        let _ = close::<S>(&handle, result);
     }
 }

@@ -361,7 +361,17 @@ impl<S: Socket> WsAcceptor<S> {
                         WsSession::default()
                     };
                     let seed = ws_session.get_seed();
-                    unsafe { (&mut *handle.get_context().get()).set(ws_session); } //握手前绑定Tcp连接上下文
+                    // 握手（handshake）前安装会话（session），取得失败保留具体结果（result）。
+                    let context = match handle.get_context() {
+                        Ok(context) => context,
+                        Err(error) => {
+                            let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                                format!("Websocket handshake context unavailable: {:?}", error))));
+                            return;
+                        },
+                    };
+                    context.set(ws_session);
+                    drop(context);
                     match acceptor.handshake(handle.clone(), &support_protocol, req) {
                         (_, Err(e)) => {
                             //握手异常

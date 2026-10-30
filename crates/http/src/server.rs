@@ -76,7 +76,15 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
             }.boxed_local();
         }
 
-        if unsafe { (&*handle.get_context().get()).is_empty() } {
+        let socket_context = match handle.get_context() {
+            Ok(context) => context,
+            Err(error) => return async move {
+                let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                    format!("Http context unavailable: {:?}", error))));
+            }.boxed_local(),
+        };
+        if socket_context.is_empty() {
+            drop(socket_context);
             // 当前是连接的首个Http请求
             let acceptor = self.acceptor.clone();
             let factory = self.hosts.clone();
@@ -92,20 +100,14 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
             // Http连接已建立
             async move {
                 // 获取Http请求绑定的Http连接
-                let mut context;
-                if let Some(cx) = unsafe {
-                    (
-                        &*handle
-                        .get_context()
-                        .get()
-                    ).get::<HttpConnect<
-                        S,
-                        <P as VirtualHostPool<S>>::Host,
-                        <<P as VirtualHostPool<S>>::Host as ServiceFactory<S>>::Service>
-                    >()
-                }
+                let context;
+                if let Some(cx) = socket_context.get::<HttpConnect<
+                    S,
+                    <P as VirtualHostPool<S>>::Host,
+                    <<P as VirtualHostPool<S>>::Host as ServiceFactory<S>>::Service>
+                >()
                 {
-                    // 需要将handle中获取的上下文句柄移动到外部，避免if let语句导致handle引用不会即时释放，从而导致在在后续使用handle的代码中出现编译时错误
+                    // 先取得普通句柄（context handle），随后结束容器（container）的临时持有。
                     context = cx;
                 } else {
                     // 请求没有连接上下文，则立即关闭当前Tcp连接
@@ -117,9 +119,20 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                     return;
                 }
 
+                drop(socket_context);
+                // 短读取许可（read permit）只用于原连接（connection）克隆（clone），不跨等待（await）。
+                // 普通句柄（context handle）也在等待（await）前归还，关联主线第43节。
+                let mut connect = match context.try_read() {
+                    Ok(view) => view.as_ref().clone(),
+                    Err(error) => {
+                        let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                            format!("Http context access rejected: {:?}", error))));
+                        return;
+                    },
+                };
+                drop(context);
                 // 解析上行请求
-                if let Some(connect_mut) = context.as_mut() {
-                    let mut connect = connect_mut.clone(); // 只允许使用上下文中Http连接的复制
+                {
                     let mut http_request_result = None;
                     let mut buf: &[u8] = &[]; // 初始化本地缓冲区
                     let mut last_bin_len = 0; // 初始化本地缓冲区上次长度
@@ -250,13 +263,6 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                         // 运行Http服务
                         connect.run_service(request).await;
                     }
-                } else {
-                    // 请求没有绑定Http连接，则立即关闭当前Tcp连接
-                    let _ = handle.close(Err(Error::new(ErrorKind::ConnectionRefused,
-                                                format!("Http server read failed, token: {:?}, remote: {:?}, local: {:?}, reason: invalid http connect",
-                                                        handle.get_token(),
-                                                        handle.get_remote(),
-                                                        handle.get_local()))));
                 }
             }.boxed_local()
         }
@@ -304,17 +310,15 @@ impl<S: Socket, P: VirtualHostPool<S>> AsyncService<S> for HttpListener<S, P> {
                 }
 
                 // 连接已关闭，则立即释放Tcp连接的上下文
-                if let Err(e) = unsafe {
-                    (
-                        &mut *handle
-                            .get_context()
-                            .get()
-                    ).remove::<HttpConnect<
+                let removed = match handle.get_context() {
+                    Ok(context) => context.try_remove::<HttpConnect<
                         S,
                         <P as VirtualHostPool<S>>::Host,
                         <<P as VirtualHostPool<S>>::Host as ServiceFactory<S>>::Service>
-                    >()
-                }
+                    >().map(|_| ()).map_err(|error| format!("{:?}", error)),
+                    Err(error) => Err(format!("{:?}", error)),
+                };
+                if let Err(e) = removed
                 {
                     warn!("Free Context Failed by Http Connect Close, token: {:?}, remote: {:?}, local: {:?}, reason: {:?}",
                         handle.get_token(),

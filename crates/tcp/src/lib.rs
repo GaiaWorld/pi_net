@@ -7,13 +7,14 @@ use std::mem;
 use std::ptr;
 use std::rc::Rc;
 use std::task::Waker;
+use std::thread::{self, ThreadId};
 use std::str::FromStr;
 use std::future::Future;
-use std::cell::UnsafeCell;
+use std::cell::{RefCell, UnsafeCell};
 use std::any::{Any, TypeId};
 use std::result::Result as GenResult;
 use std::io::{Error, Result, ErrorKind};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{Arc, OnceLock, atomic::{AtomicBool, Ordering}};
 use std::net::{SocketAddr, IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::AtomicUsize;
 
@@ -37,6 +38,10 @@ pub mod tls_connect;
 pub mod connect_pool;
 pub mod server;
 pub mod utils;
+
+#[cfg(test)]
+#[path = "context_binding_checks.rs"]
+mod context_binding_checks;
 
 use utils::{TlsConfig, SocketContext, Hibernate, Ready};
 
@@ -543,8 +548,14 @@ pub trait Socket: Sized + 'static {
     /// 获取连接唯一id
     fn get_uid(&self) -> Option<&usize>;
 
-    //获取连接上下文只读引用
-    fn get_context(&self) -> Rc<UnsafeCell<SocketContext>>;
+    /// 取得所属线程（owner thread）内的真实上下文（Context）持有。
+    ///
+    /// 返回Rc只可在该线程（thread）使用；未准备/已解除返回Unavailable，错误线程
+    /// （thread）返回WrongThread。取得不占业务许可（access permit），不代表连接（socket）
+    /// 仍活动；实现须满足SocketContextBinding的准备/解除及错误顺序合同。
+    /// 不等待任务（task）、不执行网络（network）操作；线程身份（thread identity）查询成本
+    /// 及耗时边界同SocketContextBinding::get_context。关联context_sequence及context_binding_checks。
+    fn get_context(&self) -> GenResult<Rc<SocketContext>, SocketContextGetError>;
 
     /// 设置连接的超时定时器，同时只允许设置一个定时器，新的定时器会覆盖未超时的旧定时器
     fn set_timeout(&self, timeout: usize, event: SocketEvent);
@@ -729,6 +740,142 @@ impl<S: Socket + Stream, A: SocketAdapter<Connect = S>> SocketDriver<S, A> {
     }
 }
 
+/// 上下文（Context）准备、取得或解除的结果错误（result error）。
+///
+/// 只携带结果数据（result data），不分配、不等待或改变原绑定（binding）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketContextGetError {
+    /// 已发布的所属线程（owner thread）与调用线程（calling thread）不同。
+    WrongThread,
+    /// 尚未准备或已经解除；同一绑定（binding）解除后不再重新准备。
+    Unavailable,
+}
+
+// D-LOCAL-04-SHARED/LAST-RELEASE：控制对象（control object）只发布一次。
+// 本地位置（local slot）始终保持有效Some/None，只能经下方方法（method）访问。
+// 不派生读取本地位置（local slot）的Debug/Clone/Eq，也没有自动清理（cleanup）。
+struct PreparedSocketContext {
+    owner: ThreadId,
+    local: mem::ManuallyDrop<RefCell<Option<Rc<SocketContext>>>>,
+}
+
+// 安全依据（safety rationale）：OnceLock在完整构造后同步发布（publish）本对象；
+// owner此后不可变，所有本地Rc/RefCell操作均先核验实际ThreadId。非所属线程
+// （owner thread）只观察固定身份（identity），不读取本地位置（local slot）。
+// 最后控制Arc可在任意线程（thread）归还，ManuallyDrop使其不操作未解除的Rc；
+// 唯一例外是尚未发布的set候选（candidate），它只在创建线程（thread）消费归还。
+// 该私有类型（private type）不向调用者导出，不赋予SocketContext跨线程能力。
+unsafe impl Send for PreparedSocketContext {}
+unsafe impl Sync for PreparedSocketContext {}
+
+/// 同一底层连接（socket）及其全部镜像（SocketImage）共享的不透明绑定（opaque binding）。
+///
+/// 构造和克隆（Clone）可跨线程（thread），只操作控制Arc；每个底层连接（socket）
+/// 应独立创建一份，不能为每个镜像（SocketImage）重建或让不同连接（socket）共用。
+/// 控制对象（control object）不持有连接（socket）、镜像（SocketImage）或运行时（runtime）。
+/// Context业务值与普通句柄（context handle）仍只在所属线程（owner thread）使用。
+///
+/// 准备/取得/解除只提供本地生命周期（local lifecycle）操作，不关闭网络（network）、
+/// 不等待任务（task）或缓存归还。正常结束必须显式解除；未完成解除时，即使最后控制Arc
+/// 在所属线程（owner thread）归还，也保留那份Rc及其可达资源，不自动执行用户析构（Drop）。
+/// 此保留边界不代表网络（network）收尾已经完成。关联context_binding_checks的BIND-U01～U09，
+/// 设计依据为docs/TCP_CONTEXT_REPAIR_ALIGNMENT_20261023.md第38节。
+pub struct SocketContextBinding(Arc<OnceLock<PreparedSocketContext>>);
+
+impl Clone for SocketContextBinding {
+    /// 克隆（clone）同一控制对象（control object），不读取或克隆本地Rc。
+    fn clone(&self) -> Self {
+        SocketContextBinding(self.0.clone())
+    }
+}
+
+impl SocketContextBinding {
+    /// 为一个新连接（socket）创建未准备绑定（binding）。
+    ///
+    /// 无入参，返回独立控制对象（control object）；O(1)时间/空间及一次固定分配
+    /// （allocation），不创建Context Rc、不发布所属线程（owner thread），不做网络I/O。
+    /// 分配（allocation）失败沿全局分配器（allocator）策略，没有锁（lock）等待或任务（task）。
+    /// 非幂等（idempotent）地创建新对象；需要共享时使用Clone。关联BIND-U01/U05。
+    pub fn new() -> Self {
+        SocketContextBinding(Arc::new(OnceLock::new()))
+    }
+
+    /// 在实际调用线程（calling thread）首次准备空上下文（Context），一次发布所属线程（owner thread）。
+    ///
+    /// 同一所属线程（owner thread）重复准备仍有绑定（binding）的对象返回Ok，不创建新Rc；
+    /// 已发布其它所属线程（owner thread）返回WrongThread，已经解除返回Unavailable。
+    /// 对第一次成功准备分配一个空Context Rc，O(1)管理/空间；并发冷准备（cold preparation）
+    /// 可能等待标准库（standard library）一次发布，不承诺固定时限，不进入逐消息路径。
+    /// 线程身份（thread identity）查询的标准库成本（standard-library cost）另计，见get_context。
+    /// 未发布候选（candidate）由创建线程（thread）归还；不执行用户业务、网络或异步（async）操作。
+    /// 关联BIND-U01/U02/U04～U06；不为同一已解除连接（socket）重新建立上下文（Context）。
+    pub fn prepare_context(&self) -> std::result::Result<(), SocketContextGetError> {
+        let owner = thread::current().id();
+        if self.0.get().is_none() {
+            let candidate = PreparedSocketContext {
+                owner,
+                local: mem::ManuallyDrop::new(RefCell::new(Some(Rc::new(SocketContext::empty())))),
+            };
+            if let Err(unpublished) = self.0.set(candidate) {
+                // 此候选（candidate）尚未发布，其Rc只属于当前创建线程（thread）。
+                // 消费完整有效的包装值（wrapped value），不提前销毁已发布位置（slot）。
+                drop(mem::ManuallyDrop::into_inner(unpublished.local).into_inner());
+            }
+        }
+        let prepared = self.0.get().expect("Context preparation must publish an owner");
+        if prepared.owner != owner {
+            return Err(SocketContextGetError::WrongThread);
+        }
+        let present = prepared.local.try_borrow().expect("Context binding access conflict").is_some();
+        if present { Ok(()) } else { Err(SocketContextGetError::Unavailable) }
+    }
+
+    /// 取得当前容器（container）的真实Rc持有，不取得业务数据许可（access permit）。
+    ///
+    /// 无额外入参；尚未发布身份（identity）返回Unavailable，发布后先核实际线程（thread），
+    /// 错误线程（thread）即使在解除后也返回WrongThread；所属线程（owner thread）解除后
+    /// 返回Unavailable。普通业务数据Busy不影响取得；不重新创建或准备，不经连接（socket）指针。
+    /// 本层管理O(1)时间/空间，一次非等待式发布检查，成功时一次本地Rc克隆（clone）；
+    /// 不克隆本绑定控制Arc（binding control Arc）、不分配Context Rc、不等待任务（task），
+    /// 不执行用户代码或网络（network）操作。返回Rc仍不可跨线程（thread）。
+    /// 线程身份（thread identity）查询另计：当前工具链（toolchain）的标准库（standard library）
+    /// 会克隆/归还线程句柄（thread handle）内的Arc；尚未初始化该句柄的外部线程（external thread）
+    /// 首次查询可能发生标准库分配（standard-library allocation），不承诺固定耗时。
+    /// 私有位置（slot）的非法重入（reentrancy）为诊断，不伪装成业务Busy。关联BIND-U01～U04。
+    pub fn get_context(&self) -> std::result::Result<Rc<SocketContext>, SocketContextGetError> {
+        let prepared = self.0.get().ok_or(SocketContextGetError::Unavailable)?;
+        if prepared.owner != thread::current().id() {
+            return Err(SocketContextGetError::WrongThread);
+        }
+        let context = {
+            let local = prepared.local.try_borrow().expect("Context binding access conflict");
+            local.clone()
+        };
+        context.ok_or(SocketContextGetError::Unavailable)
+    }
+
+    /// 由所属线程（owner thread）移出本绑定（binding）的Rc持有，返回后由调用方（caller）归还。
+    ///
+    /// 未准备Unavailable；已发布时先核实际线程（thread），错误线程（thread）WrongThread；
+    /// 所属线程（owner thread）首次返回Ok(Some(Rc))，重复解除Ok(None)。不移出业务T、
+    /// 不撤销缓存持有或等待数据许可（access permit），同一绑定（binding）不重新准备。
+    /// 本层移出O(1)时间/空间，不分配Context Rc、不等待任务（task）或执行用户代码；
+    /// 线程身份（thread identity）查询成本及耗时边界同get_context。本地借用（borrow）在返回前
+    /// 结束。调用方（caller）须再结束连接（socket）等其它内部借用（borrow），
+    /// 然后归还返回Rc，用户析构（Drop）可在该时刻执行。关联BIND-U03/U04/U07～U09。
+    pub fn detach_context(&self) -> std::result::Result<Option<Rc<SocketContext>>, SocketContextGetError> {
+        let prepared = self.0.get().ok_or(SocketContextGetError::Unavailable)?;
+        if prepared.owner != thread::current().id() {
+            return Err(SocketContextGetError::WrongThread);
+        }
+        let context = {
+            let mut local = prepared.local.try_borrow_mut().expect("Context binding access conflict");
+            local.take()
+        };
+        Ok(context)
+    }
+}
+
 ///
 /// Tcp连接句柄
 ///
@@ -807,11 +954,25 @@ impl<S: Socket> SocketHandle<S> {
         self.0.security
     }
 
-    /// 线程安全的获取Tcp连接上下文的只读引用
-    pub fn get_context(&self) -> Rc<UnsafeCell<SocketContext>> {
-        unsafe {
-            (&*self.0.inner.get()).get_context()
-        }
+    /// 取得所属线程（owner thread）的真实上下文（Context）持有，不先访问底层连接（socket）。
+    ///
+    /// 无额外入参；未准备/已解除返回Unavailable，已发布其它线程（thread）返回WrongThread。
+    /// 返回Rc不可跨线程（thread），合法缓存（cache）可跨本地异步等待（await）且不因解除
+    /// 而失效。业务许可（access permit）Busy不影响取得；本操作不隐式准备或关闭连接（socket）。
+    /// 本层直接转发绑定（binding），管理O(1)，成功时一次本地Rc克隆（clone），不分配Context Rc、
+    /// 不等待任务（task）或执行用户代码/网络I/O。线程身份（thread identity）查询成本及耗时
+    /// 边界、准确状态（state）与归还限制见SocketContextBinding。关联context_sequence及BIND-U01～U04。
+    pub fn get_context(&self) -> GenResult<Rc<SocketContext>, SocketContextGetError> {
+        self.0.context.get_context()
+    }
+
+    /// 为冷装配（cold assembly）克隆同一不透明绑定（opaque binding）。
+    ///
+    /// 无额外入参；只增加控制Arc持有，不读取S或本地Rc，不准备/解除，不改变业务状态
+    /// （state）。O(1)时间/空间，无分配（allocation）/等待/回调（callback）；返回控制对象
+    /// 可跨线程（thread），其本地操作仍受所属线程（owner thread）检查。关联BL-V03。
+    pub fn get_context_binding(&self) -> SocketContextBinding {
+        self.0.context.clone()
     }
 
     /// 线程安全的准备读
@@ -923,6 +1084,7 @@ pub struct SocketImage<S: Socket> {
     closed:         Arc<AtomicBool>,                                //Tcp连接关闭状态
     close_listener: Sender<(Token, Result<()>)>,                    //关闭事件监听器
     timer_listener: Sender<(Token, Option<(usize, SocketEvent)>)>,  //定时事件监听器
+    context:        SocketContextBinding,                           //与原连接（socket）共享的绑定（binding）
 }
 
 unsafe impl<S: Socket> Send for SocketImage<S> {}
@@ -941,7 +1103,15 @@ impl<S: Socket> Drop for SocketImage<S> {
 }
 
 impl<S: Socket> SocketImage<S> {
-    /// 构建Tcp连接镜像
+    /// 构建连接镜像（SocketImage），共享原连接（socket）的绑定（binding）。
+    ///
+    /// shared保活原连接（socket）；local/remote/token/uid/security及原监听器（listener）
+    /// 参数沿原装配合同。context必须来自该同一底层连接（socket），其全部镜像（SocketImage）
+    /// 及重复set_handle共用，不为每个镜像（SocketImage）新建；不检查外部错误配对。
+    /// 本方法（method）只保存传入绑定（binding），不准备/取得本地Rc。手工驱动者须在业务
+    /// 首次使用前由所属线程（owner thread）显式prepare_context，正常结束时显式detach_context，
+    /// 并在结束内部借用（borrow）后归还返回Rc；未完成解除沿已接受资源保留（resource retention）。
+    /// 原共享持有克隆（clone）O(1)，无新增等待或网络I/O。关联BL-V01～V06。
     pub fn new(shared: &Arc<UnsafeCell<S>>,
                local: SocketAddr,
                remote: SocketAddr,
@@ -950,7 +1120,8 @@ impl<S: Socket> SocketImage<S> {
                security: bool,
                closed: Arc<AtomicBool>,
                close_listener: Sender<(Token, Result<()>)>,
-               timer_listener: Sender<(Token, Option<(usize, SocketEvent)>)>
+               timer_listener: Sender<(Token, Option<(usize, SocketEvent)>)>,
+               context: SocketContextBinding
     ) -> Self {
         SocketImage {
             inner: shared.clone(),
@@ -962,6 +1133,7 @@ impl<S: Socket> SocketImage<S> {
             closed,
             close_listener,
             timer_listener,
+            context,
         }
     }
 }

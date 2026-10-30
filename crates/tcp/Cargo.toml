@@ -1,6 +1,6 @@
 [package]
 name = "pi_tcp"
-version = "0.8.6"
+version = "0.8.7"
 edition = "2021"
 description = "pi_tcp"
 repository = "https://github.com/GaiaWorld/pi_net/tree/crateio"
@@ -53,4 +53,8 @@ harness = false
 
 [[bench]]
 name = "write_queue_metrics"
+harness = false
+
+[[bench]]
+name = "context_lifetime"
 harness = false

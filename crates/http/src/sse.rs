@@ -2801,7 +2801,7 @@ mod tests {
             None
         }
 
-        fn get_context(&self) -> Rc<UnsafeCell<SocketContext>> {
+        fn get_context(&self) -> Result<Rc<SocketContext>, tcp::SocketContextGetError> {
             unimplemented!("unused by SSE tests")
         }
 
@@ -2893,6 +2893,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             close_sender,
             timer_sender,
+            tcp::SocketContextBinding::new(),
         );
 
         SocketHandle::new(image)

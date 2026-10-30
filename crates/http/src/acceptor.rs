@@ -201,7 +201,14 @@ impl<S: Socket> HttpAcceptor<S> {
 
         if let Some((mut connect, request)) = http_request_result {
             connect.run_service(request).await; //运行Http服务，在没有绑定前可以直接使用Http连接
-            unsafe { (&mut *handle.get_context().get()).set(connect); } //绑定Tcp连接上下文
+            // Context取得结果（result）可能因先前正常解除而不可用，不恢复旧绑定（binding）。
+            match handle.get_context() {
+                Ok(context) => { context.set(connect); },
+                Err(error) => {
+                    let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                        format!("Http context installation unavailable: {:?}", error))));
+                },
+            }
         }
     }
 }

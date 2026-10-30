@@ -43,11 +43,12 @@ impl Fixture {
         let mut socket = TcpSocket::new(&local, &remote, Some(mio::Token(1)), stream,
             16, 4096, 4096, TlsConfig::Empty);
         socket.set_poll(Rc::new(UnsafeCell::new(poll)));
+        let context = socket.get_context_binding();
         let shared = Arc::new(UnsafeCell::new(socket));
         let (close, _) = bounded(4);
         let (timer, _) = bounded(4);
         let image = SocketImage::new(&shared, local, remote, mio::Token(1), 1, false,
-            Arc::new(AtomicBool::new(false)), close, timer);
+            Arc::new(AtomicBool::new(false)), close, timer, context);
         Self { handle: SocketHandle::new(image), _client: client }
     }
 

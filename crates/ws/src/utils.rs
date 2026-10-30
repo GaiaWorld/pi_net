@@ -130,6 +130,18 @@ impl WsFrameType {
 ///
 /// Websocket会话
 ///
+/// 真实持有线程内上下文（Context），只在所属线程（owner thread）创建、访问、移动和归还。
+/// 普通句柄（context handle）可跨本地等待（await），访问许可（access permit）须在等待（await）前归还。
+/// 不能经外层会话（session）绕过本地Rc边界；关联主线第43节及context_protocol。
+/// ```compile_fail
+/// fn require_send<T: Send>() {}
+/// require_send::<pi_ws::utils::WsSession>();
+/// ```
+/// ```compile_fail
+/// fn require_sync<T: Sync>() {}
+/// require_sync::<pi_ws::utils::WsSession>();
+/// ```
+///
 pub struct WsSession {
     status:         WsStatus,           //当前连接状态
     r#type:         WsFrameType,        //帧类型
@@ -141,8 +153,8 @@ pub struct WsSession {
     context:        SocketContext,      //会话上下文
 }
 
-unsafe impl Send for WsSession {}
-unsafe impl Sync for WsSession {}
+// WsSession直接持有SocketContext，沿本地Rc边界只在所属线程（owner thread）
+// 创建、使用和归还，不以外层跨线程标记（Send/Sync）绕过该合同。关联主线第43节。
 
 impl Default for WsSession {
     fn default() -> Self {

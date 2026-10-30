@@ -456,7 +456,8 @@ async fn handle_accepted<S, A>(rt: &LocalTaskRuntime<()>,
             .get_interest()
             .expect(format!("Handle accepted falied, token: {:?}, reason: invalid inited interest",
                     token).as_str());
-        pool.map.insert(socket.get_remote().clone(), token);
+        let remote = socket.get_remote().clone();
+        pool.map.insert(remote, token);
         unsafe {
             if let Err(e) = (&mut *pool
                 .poll
@@ -494,6 +495,35 @@ async fn handle_accepted<S, A>(rt: &LocalTaskRuntime<()>,
                         (&mut *socket_arc.get()).get_handle()
                     }
                 };
+                // D-LOCAL-04-SHARED：先结束S借用（borrow），再在实际所属线程（owner thread）
+                // 准备同一绑定（binding）；成功后才发布活动项（active entry）及建连回调（connected callback）。
+                // 关联context_sequence、BIND-U05/U06及BL-V01～V06；不引入整体停止截断（admission cutoff）。
+                if let Err(error) = handle.get_context_binding().prepare_context() {
+                    warn!("Tcp context preparation rejected, token: {:?}, reason: {:?}", token, error);
+                    // 只撤销本次完整键（full key）占位及仍属于本次令牌（token）的映射（mapping）。
+                    // 原注册失败分支（registration failure branch）不因本次适配而重构。
+                    let reserved = { pool.sockets.lock().remove(id) };
+                    if pool.map.get(&remote) == Some(&token) {
+                        pool.map.remove(&remote);
+                    }
+                    let internal_handle = {
+                        let current = &mut *socket_arc.get();
+                        if let Err(error) = (&mut *pool.poll.get()).registry().deregister(current.get_stream_mut()) {
+                            warn!("Tcp unpublished socket deregistration failed, token: {:?}, reason: {:?}", token, error);
+                        }
+                        if let Err(error) = current.get_stream_ref().shutdown(Shutdown::Both) {
+                            warn!("Tcp unpublished socket shutdown failed, token: {:?}, reason: {:?}", token, error);
+                        }
+                        current.remove_handle()
+                    };
+                    // 所有表锁（table lock）和连接借用（socket borrow）结束后归还本地持有。
+                    // 已发布却未解除的其它绑定（binding）沿原保留合同，不在这里跨线程（thread）触碰Rc。
+                    drop(reserved);
+                    drop(internal_handle);
+                    drop(handle);
+                    drop(socket_arc);
+                    continue;
+                }
                 pool.sockets.lock()[id] = Some(socket_arc); //加入连接池上下文
 
                 //异步调用连接回调任务
@@ -733,8 +763,9 @@ async fn handle_close_event<S, A>(rt: &LocalTaskRuntime<()>,
             .sockets
             .lock()
             .contains_key(DefaultKey::from(KeyData::from_ffi(token.0 as u64))) {
-            //如果指定令牌的Tcp连接不存在，则忽略
-            return;
+            // 当前完整键（full key）已移出，只跳过本事件（event），保留同批后续连接（connection）。
+            // 关联context_close_sequence：A/A/B及旧完整令牌（full token）之后的新连接（connection）。
+            continue;
         }
         let socket = pool
             .sockets
@@ -769,6 +800,8 @@ async fn handle_close_event<S, A>(rt: &LocalTaskRuntime<()>,
 
         //异步执行已关闭回调
         let handle = unsafe { (&*socket.get()).get_handle() };
+        // 保留原对象（object）的绑定（binding），不在回调（callback）完成后按旧令牌（token）重新查表。
+        let context_binding = handle.get_context_binding();
         let closed = if let Err(e) = reason {
             //因为内部错误，关闭Tcp连接
             pool.driver
@@ -797,10 +830,16 @@ async fn handle_close_event<S, A>(rt: &LocalTaskRuntime<()>,
             //执行关闭回调
             closed.await;
 
-            //因为Tcp连接句柄握住了当前连接，所以需要移除当前连接绑定的Tcp连接句柄，以释放当前连接
-            unsafe {
-                (&mut *socket.get()).remove_handle();
-            }
+            // D-LOCAL-04-LAST-RELEASE：正常回调（callback）完整结束后先取出Context Rc，
+            // 再取出原S内部句柄（SocketHandle）；两个内部借用（borrow）均已结束才归还持有。
+            // 正常准备与本任务（task）均在同一所属线程（owner thread）；重复解除允许为空。
+            // 未完成回调（callback）沿原资源保留（resource retention），不增加取消或补投任务（task）。
+            // 关联BL-V01/V02/V04及context_sequence；用户析构（Drop）不得发生在内部借用（borrow）中。
+            let detached_context = context_binding.detach_context()
+                .expect("Pool context must remain on its owner thread");
+            let internal_handle = unsafe { (&mut *socket.get()).remove_handle() };
+            drop(internal_handle);
+            drop(detached_context);
         });
     }
 }

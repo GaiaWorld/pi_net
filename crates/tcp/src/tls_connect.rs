@@ -23,6 +23,7 @@ use pi_async_rt::{lock::spin_lock::SpinLock,
 use pi_async_buffer::async_pipeline::{AsyncReceiverExt, AsyncPipeLineExt, PipeSender, channel};
 
 use crate::{Stream, Socket, SocketEvent, SocketHandle, SocketImage, SocketContext,
+            SocketContextBinding, SocketContextGetError,
             utils::{TlsConfig, Hibernate, Ready}};
 
 /// 默认的读取块大小，单位字节
@@ -84,7 +85,7 @@ pub struct TlsSocket {
     hibernate_wakers:   SpinLock<VecDeque<Waker>>,                              //连接正在休眠时，其它休眠对象的唤醒器队列
     hibernated_queue:   Arc<SpinLock<VecDeque<LocalBoxFuture<'static, ()>>>>,   //连接休眠时任务队列
     handle:             Option<SocketHandle<Self>>,                             //连接句柄
-    context:            Rc<UnsafeCell<SocketContext>>,                          //连接上下文
+    context:            SocketContextBinding,                                  //同一连接（socket）及其镜像（SocketImage）的绑定（binding）
     write_listener:     Option<Sender<(Token, Vec<u8>)>>,                       //连接写事件监听器
     closed:             Arc<AtomicBool>,                                        //连接关闭状态
     close_listener:     Option<Sender<(Token, Result<()>)>>,                    //连接关闭事件监听器
@@ -160,7 +161,7 @@ impl Stream for TlsSocket {
         let hibernate = SpinLock::new(None);
         let hibernate_wakers = SpinLock::new(VecDeque::new());
         let hibernated_queue = Arc::new(SpinLock::new(VecDeque::new()));
-        let context = Rc::new(UnsafeCell::new(SocketContext::empty()));
+        let context = SocketContextBinding::new();
         let closed = Arc::new(AtomicBool::new(false));
 
         let mut result = TlsSocket {
@@ -220,7 +221,8 @@ impl Stream for TlsSocket {
                                                  self.is_security(),
                                                  self.closed.clone(),
                                                  close_listener.clone(),
-                                                 timer_listener.clone()
+                                                 timer_listener.clone(),
+                                                 self.context.clone()
                     );
                     self.handle = Some(SocketHandle::new(image));
                 }
@@ -429,8 +431,8 @@ impl Socket for TlsSocket {
         self.uid.as_ref()
     }
 
-    fn get_context(&self) -> Rc<UnsafeCell<SocketContext>> {
-        self.context.clone()
+    fn get_context(&self) -> GenResult<Rc<SocketContext>, SocketContextGetError> {
+        self.context.get_context()
     }
 
     fn set_timeout(&self, timeout: usize, event: SocketEvent) {
@@ -724,6 +726,15 @@ impl Socket for TlsSocket {
 }
 
 impl TlsSocket {
+    /// 克隆（clone）同一连接（socket）的不透明绑定（opaque binding），供冷装配（cold assembly）。
+    ///
+    /// 无额外入参，只增加控制Arc持有；不读取本地Rc或准备/解除。O(1)时间/空间、
+    /// 无分配（allocation）/等待/用户代码。手工驱动者沿SocketContextBinding的所属线程
+    /// （owner thread）生命周期（lifecycle）操作，不能为每个镜像（SocketImage）新建。关联BL-V03。
+    pub fn get_context_binding(&self) -> SocketContextBinding {
+        self.context.clone()
+    }
+
     // 根据Tls返回当前连接感兴趣的事件
     fn event_set(&self) -> Interest {
         match &self.tls_connect {

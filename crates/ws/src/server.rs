@@ -62,7 +62,16 @@ impl<S: Socket> AsyncService<S> for WebsocketListener<S> {
             }.boxed_local();
         }
 
-        if unsafe { (&*handle.get_context().get()).is_empty() } {
+        let context = match handle.get_context() {
+            Ok(context) => context,
+            Err(error) => return async move {
+                let _ = handle.close(Err(Error::new(ErrorKind::Other,
+                    format!("Websocket server context unavailable: {:?}", error))));
+            }.boxed_local(),
+        };
+        let empty = context.is_empty();
+        drop(context);
+        if empty {
             //当前Websocket连接还未握手，则开始Websocket连接握手
             let support_protocol = self.protocol.clone();
             let acceptor = self.acceptor.clone();

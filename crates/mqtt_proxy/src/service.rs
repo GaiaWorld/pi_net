@@ -13,7 +13,7 @@ use pi_gray::GrayVersion;
 use pi_handler::{Args, Handler};
 
 use tcp::{Socket,
-          utils::{ContextHandle, SocketContext, Hibernate, Ready}};
+          utils::{ContextHandle, ContextAccessError, SocketContext, Hibernate, Ready}};
 use mqtt::server::MqttBrokerProtocol;
 use mqtt::broker::{MQTT_RESPONSE_SYS_TOPIC, MqttBrokerListener, MqttBrokerService};
 use mqtt::session::{MqttSession, MqttConnect};
@@ -220,7 +220,7 @@ impl<S: Socket> MqttConnectHandle<S> {
         }
     }
 
-    /// 获取连接会话上下文的只读引用
+    /// 在所属线程（owner thread）取得普通会话句柄（context handle），访问边界沿MqttConnect::get_session。
     pub fn get_session(&self) -> Option<ContextHandle<BrokerSession>> {
         if self.is_closed.load(Ordering::Relaxed) {
             return None;
@@ -283,8 +283,13 @@ impl<S: Socket> MqttBrokerListener<S> for MqttProxyListener {
             let handler = handler.clone();
 
             async move {
-                if let Some(mut handle) = connect.get_session() {
-                    if let Some(session) = handle.as_mut() {
+                if let Some(handle) = connect.get_session() {
+                    {
+                        // 关联主线第43节：取得自有事件（owned event）后先归还许可（permit），再等待（await）。
+                        let view = handle.try_read().map_err(|error| Error::new(
+                            if error == ContextAccessError::Busy { ErrorKind::WouldBlock } else { ErrorKind::ConnectionAborted },
+                            format!("Mqtt proxy context access rejected: {:?}", error)))?;
+                        let session = view.as_ref();
                         let connect_handle = MqttConnectHandle {
                             gray: AtomicIsize::new(-1),
                             client_id: session.get_client_id().clone(),
@@ -301,6 +306,8 @@ impl<S: Socket> MqttBrokerListener<S> for MqttProxyListener {
                                                        session.is_clean_session(),
                                                        session.get_user().cloned(),
                                                        session.get_pwd().cloned());
+                        drop(view);
+                        drop(handle);
                         handler.handle(Arc::new(connect_handle),
                                        Atom::from(""),
                                        Args::OneArgs(event)).await;
@@ -432,8 +439,13 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
             let handler = handler.clone();
 
             async move {
-                if let Some(mut handle) = connect.get_session() {
-                    if let Some(session) = handle.as_mut() {
+                if let Some(handle) = connect.get_session() {
+                    {
+                        // 关联主线第43节：取得自有事件（owned event）后先归还许可（permit），再等待（await）。
+                        let view = handle.try_read().map_err(|error| Error::new(
+                            if error == ContextAccessError::Busy { ErrorKind::WouldBlock } else { ErrorKind::ConnectionAborted },
+                            format!("Mqtt proxy context access rejected: {:?}", error)))?;
+                        let session = view.as_ref();
                         let connect_handle = MqttConnectHandle {
                             gray: AtomicIsize::new(-1),
                             client_id: session.get_client_id().clone(),
@@ -447,6 +459,8 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
                                                    connect_handle.protocol.get_broker_name().to_string(),
                                                    session.get_client_id().clone(),
                                                    topics);
+                        drop(view);
+                        drop(handle);
                         handler.handle(Arc::new(connect_handle),
                                        Atom::from(""), Args::
                                        OneArgs(event)).await;
@@ -476,8 +490,17 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
             }.boxed_local();
         }
 
-        if let Some(mut handle) = connect.get_session() {
-            if let Some(session) = handle.as_mut() {
+        if let Some(handle) = connect.get_session() {
+            {
+                let view = match handle.try_read() {
+                    Ok(view) => view,
+                    Err(error) => return async move {
+                        Err(Error::new(
+                            if error == ContextAccessError::Busy { ErrorKind::WouldBlock } else { ErrorKind::ConnectionAborted },
+                            format!("Mqtt proxy context access rejected: {:?}", error)))
+                    }.boxed_local(),
+                };
+                let session = view.as_ref();
                 if let Some(handler) = &self.request_handler {
                     let connect_handle = MqttConnectHandle {
                         gray: AtomicIsize::new(-1),
@@ -493,6 +516,8 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
                                                  session.get_client_id().clone(),
                                                  topics);
 
+                    drop(view);
+                    drop(handle);
                     let handler = handler.clone();
                     return async move {
                         handler.handle(Arc::new(connect_handle),
@@ -524,8 +549,17 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
             }.boxed_local();
         }
 
-        if let Some(mut handle) = connect.get_session() {
-            if let Some(session) = handle.as_mut() {
+        if let Some(handle) = connect.get_session() {
+            {
+                let view = match handle.try_read() {
+                    Ok(view) => view,
+                    Err(error) => return async move {
+                        Err(Error::new(
+                            if error == ContextAccessError::Busy { ErrorKind::WouldBlock } else { ErrorKind::ConnectionAborted },
+                            format!("Mqtt proxy context access rejected: {:?}", error)))
+                    }.boxed_local(),
+                };
+                let session = view.as_ref();
                 if let Some(handler) = &self.request_handler {
                     let connect_handle = MqttConnectHandle {
                         gray: AtomicIsize::new(-1),
@@ -543,6 +577,8 @@ impl<S: Socket> MqttBrokerService<S> for MqttProxyService {
                                                    topic,
                                                    payload);
 
+                    drop(view);
+                    drop(handle);
                     let handler = handler.clone();
                     return async move {
                         handler.handle(Arc::new(connect_handle),

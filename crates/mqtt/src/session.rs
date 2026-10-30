@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::io::{Cursor, Result, Error, ErrorKind};
 
 use mqtt311::{MqttWrite, QoS, LastWill, Packet, Publish};
+use log::warn;
 
 use tcp::{Socket,
           utils::{ContextHandle, Hibernate, Ready}};
@@ -111,7 +112,11 @@ pub trait MqttConnect<S: Socket>: Debug + Send + Sync + 'static {
     /// 设置是否被动接收消息
     fn passive_receive(&self, b: bool);
 
-    /// 获取连接的代理会话
+    /// 在所属线程（owner thread）取得普通代理会话句柄（context handle）。
+    ///
+    /// 无入参；空值（None）沿原关闭/缺失边界，访问拒绝（access rejection）保留诊断。
+    /// 返回值只在该线程（thread）使用；内部短许可（access permit）在返回前归还。
+    /// 正常O(1)，无等待或网络I/O；错误日志器（logger）可有同步成本，无固定时限保证。
     fn get_session(&self) -> Option<ContextHandle<BrokerSession>>;
 
     /// 发送消息
@@ -355,7 +360,13 @@ impl<S: Socket> MqttConnect<S> for QosZeroSession<S> {
             }
 
             if let Some(session) = connect.get_session() {
-                return session.as_ref().get_context().get::<BrokerSession>();
+                return match session.try_read() {
+                    Ok(view) => view.as_ref().get_context().get::<BrokerSession>(),
+                    Err(error) => {
+                        warn!("Mqtt session context access rejected, token: {:?}, reason: {:?}", connect.get_token(), error);
+                        None
+                    },
+                };
             }
         }
 
