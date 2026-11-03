@@ -2,6 +2,14 @@
 
 `pi_net` 是一组基于 Rust 的网络协议库。工作区下 `crates/*` 中的每个 crate 都按独立库发布和验证；日常构建、测试和审计应聚焦到具体 crate，例如 `pi_http` 使用 `cargo check -p pi_http`，不要默认构建整个 workspace。
 
+<a id="context-migration"></a>
+
+## Socket与会话（Session）上下文（Context）迁移
+
+本轮上下文（Context）修复包含公开接口（public API）及使用语义（semantics）变更，涉及`pi_tcp`的TCP/TLS以及使用它的`pi_http`、`pi_ws`、`pi_mqtt`和`pi_mqtt_proxy`。详细签名（signature）、错误（error）、线程（thread）与归还边界（release boundary），以及简单示例（example），统一见[上下文（Context）迁移指南（migration guide）](crates/tcp/README.md#context-migration)。
+
+下游应按实际类型（type）和调用链（call chain）适配：Socket的`get_context()`现返回`Result<Rc<SocketContext>, SocketContextGetError>`；`WsSession`/`BrokerSession`的同名方法（method）仍返回`&SocketContext`。`ContextHandle<T>`改用`try_read`/`try_write`取得短访问许可（access permit）。不能把这些更改统一套到HTTP的`GatewayContext`、`std::task::Context`或UDP/QUIC的同名实现（implementation）。
+
 ## pi_http SSE 使用指南
 
 `pi_http` 通过 `pi_http::sse` 提供 HTTP/1.1 Server-Sent Events 支持。客户端发起 GET 请求，服务端返回 `Content-Type: text/event-stream` 后，可以在这条响应流上持续向客户端推送 UTF-8 文本事件。
